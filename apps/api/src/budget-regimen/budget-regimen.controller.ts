@@ -7,7 +7,9 @@ import { BudgetRegimenService } from './budget-regimen.service.js';
 
 @Controller('budget-regimen')
 export class BudgetRegimenController {
-  constructor(@Inject(BudgetRegimenService) private readonly budgetRegimenService: BudgetRegimenService) {}
+  constructor(
+    @Inject(BudgetRegimenService) private readonly budgetRegimenService: BudgetRegimenService,
+  ) {}
 
   @Post('calculate')
   @RequirePermissions(PERMISSIONS.SALES_BUDGET_REGIMEN_CALCULATE)

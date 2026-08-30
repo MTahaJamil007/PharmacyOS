@@ -1,4 +1,13 @@
-import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   expiryRiskQuerySchema,
   expiryWorkItemActionSchema,
@@ -14,7 +23,9 @@ import { IntelligenceService } from './intelligence.service.js';
 
 @Controller()
 export class IntelligenceController {
-  constructor(@Inject(IntelligenceService) private readonly intelligenceService: IntelligenceService) {}
+  constructor(
+    @Inject(IntelligenceService) private readonly intelligenceService: IntelligenceService,
+  ) {}
 
   @Get('inventory-intelligence/attention')
   @RequirePermissions(PERMISSIONS.INVENTORY_EXPIRY_READ)

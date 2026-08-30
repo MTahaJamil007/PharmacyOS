@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addCashMovement,
@@ -674,6 +674,7 @@ function BudgetCalculator(): React.JSX.Element {
 }
 
 function ReturnLookupScreen(): React.JSX.Element {
+  const receiptTokenInput = useRef<HTMLInputElement>(null);
   const session = usePharmacyStore((state) => state.session);
   const token = session?.accessToken ?? '';
   const [receiptToken, setReceiptToken] = useState('');
@@ -686,6 +687,11 @@ function ReturnLookupScreen(): React.JSX.Element {
   const [returnCommand, setReturnCommand] = useState<ReturnCommandResult | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    receiptTokenInput.current?.focus();
+  }, []);
+
   const lookup = async (): Promise<void> => {
     try {
       setError('');
@@ -766,7 +772,7 @@ function ReturnLookupScreen(): React.JSX.Element {
         <label>
           <span>Scan or paste receipt token</span>
           <input
-            autoFocus
+            ref={receiptTokenInput}
             value={receiptToken}
             onChange={(event) => setReceiptToken(event.target.value)}
             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

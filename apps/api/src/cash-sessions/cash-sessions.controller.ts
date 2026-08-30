@@ -14,7 +14,9 @@ import { CashSessionsService } from './cash-sessions.service.js';
 
 @Controller('cash-sessions')
 export class CashSessionsController {
-  constructor(@Inject(CashSessionsService) private readonly cashSessionsService: CashSessionsService) {}
+  constructor(
+    @Inject(CashSessionsService) private readonly cashSessionsService: CashSessionsService,
+  ) {}
 
   @Post('open')
   @RequirePermissions(PERMISSIONS.CASH_OPEN_SESSION)

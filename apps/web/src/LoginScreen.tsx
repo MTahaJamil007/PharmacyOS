@@ -1,15 +1,20 @@
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 
 import { login } from './api';
 import { usePharmacyStore } from './store';
 
 export function LoginScreen(): React.JSX.Element {
+  const usernameInput = useRef<HTMLInputElement>(null);
   const setSession = usePharmacyStore((state) => state.setSession);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [terminalCode, setTerminalCode] = useState('COUNTER-01');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    usernameInput.current?.focus();
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -70,7 +75,7 @@ export function LoginScreen(): React.JSX.Element {
           <label>
             Username
             <input
-              autoFocus
+              ref={usernameInput}
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}

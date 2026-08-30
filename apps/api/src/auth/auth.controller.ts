@@ -1,4 +1,12 @@
-import { BadRequestException, Body, Controller, Inject, Post, Req, SetMetadata } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Inject,
+  Post,
+  Req,
+  SetMetadata,
+} from '@nestjs/common';
 import { loginSchema } from '@pharmacy/shared';
 import type { FastifyRequest } from 'fastify';
 

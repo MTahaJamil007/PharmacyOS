@@ -1,4 +1,13 @@
-import { BadRequestException, Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   createPurchaseOrderSchema,
   createDraftPurchaseOrderSchema,
@@ -18,7 +27,9 @@ import { ProcurementService } from './procurement.service.js';
 
 @Controller()
 export class ProcurementController {
-  constructor(@Inject(ProcurementService) private readonly procurementService: ProcurementService) {}
+  constructor(
+    @Inject(ProcurementService) private readonly procurementService: ProcurementService,
+  ) {}
 
   @Post('supplier-quotes')
   @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)

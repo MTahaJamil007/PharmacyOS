@@ -30,23 +30,23 @@ This plan is therefore ordered: **make the work provable → make the pilot poss
 
 The published feature table is the target. This is what verification says about the rows that do not hold. Rows not listed here checked out as claimed.
 
-| Feature | Claimed | Verified reality |
-|---|---|---|
-| **Invoice control** — "prevents duplicate finalization if retried" | Implemented | **Broken under the exact case it exists for.** `pos.service.ts:314-348` reads the replay row *before* taking the cash-session `FOR UPDATE`. Two concurrent retries both see "no sale", both proceed → unique violation → with no `APP_FILTER` registered, raw **HTTP 500**. The client cannot tell "sale succeeded" from "sale failed". The loser also burned an invoice number → permanent gap in the fiscal sequence. Same pattern in returns, procurement ×3. |
-| **Cash sessions / cash controls** | Implemented | Server logic is correct — `cash-sessions.service.ts:52-58` is the *one* place idempotency is done right (locks the terminal row first). But the client crashes on `crypto.randomUUID()` before any of it is reached on a LAN terminal. Also: `returns.refund` accepts **any** open session in the branch (`returns.service.ts:170-176`) — a user can post refunds against another cashier's till. |
-| **Stock ledger** — "every sale, receipt, return, and adjustment leaves durable evidence" | Implemented | Append-only is real (DB trigger + no TRUNCATE grant). But **adjustments are never written at all** — `ADJUSTMENT_IN`, `ADJUSTMENT_OUT`, `SCRAP`, `QUARANTINE`, `TRANSFER` are declared and never used. And `quantity_after` is app-supplied with no DB check that it equals prior + delta. |
-| **Expiry work items** — "quarantine, resolve" | Implemented foundation | **Quarantine writes no ledger row and never decrements stock.** `intelligence.service.ts:227-232` flips `status` only. There is no scrap/write-off path anywhere. Expired stock keeps `current_qty > 0` forever, so value-at-risk never converts to a recorded loss and the same units resurface in every report indefinitely. The ledger no longer explains the stock state. |
-| **Returns** — "restock / quarantine / scrap disposition" | Implemented foundation | `returns.service.ts:204-210` sets `status = 'SELLABLE'` unconditionally on restock — **a `RECALLED` batch is silently returned to sale.** And `QUARANTINE` quarantines the *entire remaining batch*: returning 1 damaged tablet pulls all 500 out of stock. No batch-split mechanism. |
-| **Background worker** — "durable jobs" | Implemented | `EXPIRE_RESERVATIONS` is implemented and **has zero producers** — verified, one grep hit, the consumer. Reservations never expire, drafts stick in `RESERVED`, and the reorder engine counts them with no expiry filter (`worker.ts:430-433`) so reorder quantities inflate without bound. `REFRESH_DASHBOARD_METRICS` is a no-op that returns `COMPLETED`. A job stuck in `PROCESSING` (worker crash) is orphaned **forever** — no reaper, no visibility timeout. |
-| **Branches and terminals** — "prevents wrong-counter attribution" | Implemented | Terminal codes are unique per `(branch_id, code)`, **not globally**. `auth.service.ts:32-37` is `LIMIT 1` with **no `ORDER BY`** — for a user with roles at two branches both running `COUNTER-01`, the branch bound to the session is whatever the planner returns. That branch id then drives every tenancy check. |
-| **Receipts** — "reprintable" | Implemented | **Not reprintable.** `printReceipt` is set only at checkout and nulled on close. `getSaleReceipt` has exactly one caller. There is no find-sale→reprint path in the UI. Reprint is a several-times-daily counter operation. |
-| **Payments** — "cash and non-cash" | Implemented | Payment must equal the total *exactly* (`pos.service.ts:366-372`). **No tendered amount, no change due, no partial payment, no credit.** The cart total on screen is also computed in **floating point** — `PosWorkspace.tsx:154` `Number(salePrice) * quantity` — inside a codebase whose stated rule is that money never touches a float. |
-| **FBR boundary** | Implemented boundary | The outbox boundary is real and correctly non-blocking. The adapter is not: `SANDBOX` **fabricates** a fiscal number (`SANDBOX-<id>`) and marks the invoice `SUBMITTED` with no HTTP call; the three real modes return `RETRYABLE` until they dead-letter silently. `fbr_invoice_attempts` is written by nothing. `tax_total`/`tax_amount` are hardcoded `0`. The payload is four fields. No `FiscalInvoiceGateway` interface exists despite the architecture specifying it verbatim. |
-| **Owner AI assistant** | Implemented foundation | Design is genuinely good (no SQL, no writes, per-tool re-authorization). Three problems: the deterministic reports are reachable **only** through the AI endpoint — so with `AI_ENABLED=false` (the shipped default) **the owner has no reports at all**, which inverts the architecture's own "do not make the dashboard AI-dependent" rule. The rate limiter is racy and self-amplifying (rejections insert audit rows that extend the window). And `internal: true` on the compose network blocks the egress the provider needs. |
-| **Deployment foundation** | Implemented foundation | **`docker compose up` fails at parse time.** `POSTGRES_PASSWORD` is in neither `.env` nor `.env.example` (verified: 0 occurrences in both). `env_file` overrides image `ENV`, so production runs `NODE_ENV=development` — dev CORS, request logging, seed credentials in the container. No TLS. No migration step in compose. **No backup implementation of any kind** — no script, no cron, no `pg_dump`, no restore path — against an architecture doc that rates backups "Mandatory 10/10". |
-| **Development fixtures** | Implemented | Correct, and genuinely useful. |
+| Feature                                                                                  | Claimed                | Verified reality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Invoice control** — "prevents duplicate finalization if retried"                       | Implemented            | **Broken under the exact case it exists for.** `pos.service.ts:314-348` reads the replay row _before_ taking the cash-session `FOR UPDATE`. Two concurrent retries both see "no sale", both proceed → unique violation → with no `APP_FILTER` registered, raw **HTTP 500**. The client cannot tell "sale succeeded" from "sale failed". The loser also burned an invoice number → permanent gap in the fiscal sequence. Same pattern in returns, procurement ×3.                                                                    |
+| **Cash sessions / cash controls**                                                        | Implemented            | Server logic is correct — `cash-sessions.service.ts:52-58` is the _one_ place idempotency is done right (locks the terminal row first). But the client crashes on `crypto.randomUUID()` before any of it is reached on a LAN terminal. Also: `returns.refund` accepts **any** open session in the branch (`returns.service.ts:170-176`) — a user can post refunds against another cashier's till.                                                                                                                                   |
+| **Stock ledger** — "every sale, receipt, return, and adjustment leaves durable evidence" | Implemented            | Append-only is real (DB trigger + no TRUNCATE grant). But **adjustments are never written at all** — `ADJUSTMENT_IN`, `ADJUSTMENT_OUT`, `SCRAP`, `QUARANTINE`, `TRANSFER` are declared and never used. And `quantity_after` is app-supplied with no DB check that it equals prior + delta.                                                                                                                                                                                                                                          |
+| **Expiry work items** — "quarantine, resolve"                                            | Implemented foundation | **Quarantine writes no ledger row and never decrements stock.** `intelligence.service.ts:227-232` flips `status` only. There is no scrap/write-off path anywhere. Expired stock keeps `current_qty > 0` forever, so value-at-risk never converts to a recorded loss and the same units resurface in every report indefinitely. The ledger no longer explains the stock state.                                                                                                                                                       |
+| **Returns** — "restock / quarantine / scrap disposition"                                 | Implemented foundation | `returns.service.ts:204-210` sets `status = 'SELLABLE'` unconditionally on restock — **a `RECALLED` batch is silently returned to sale.** And `QUARANTINE` quarantines the _entire remaining batch_: returning 1 damaged tablet pulls all 500 out of stock. No batch-split mechanism.                                                                                                                                                                                                                                               |
+| **Background worker** — "durable jobs"                                                   | Implemented            | `EXPIRE_RESERVATIONS` is implemented and **has zero producers** — verified, one grep hit, the consumer. Reservations never expire, drafts stick in `RESERVED`, and the reorder engine counts them with no expiry filter (`worker.ts:430-433`) so reorder quantities inflate without bound. `REFRESH_DASHBOARD_METRICS` is a no-op that returns `COMPLETED`. A job stuck in `PROCESSING` (worker crash) is orphaned **forever** — no reaper, no visibility timeout.                                                                  |
+| **Branches and terminals** — "prevents wrong-counter attribution"                        | Implemented            | Terminal codes are unique per `(branch_id, code)`, **not globally**. `auth.service.ts:32-37` is `LIMIT 1` with **no `ORDER BY`** — for a user with roles at two branches both running `COUNTER-01`, the branch bound to the session is whatever the planner returns. That branch id then drives every tenancy check.                                                                                                                                                                                                                |
+| **Receipts** — "reprintable"                                                             | Implemented            | **Not reprintable.** `printReceipt` is set only at checkout and nulled on close. `getSaleReceipt` has exactly one caller. There is no find-sale→reprint path in the UI. Reprint is a several-times-daily counter operation.                                                                                                                                                                                                                                                                                                         |
+| **Payments** — "cash and non-cash"                                                       | Implemented            | Payment must equal the total _exactly_ (`pos.service.ts:366-372`). **No tendered amount, no change due, no partial payment, no credit.** The cart total on screen is also computed in **floating point** — `PosWorkspace.tsx:154` `Number(salePrice) * quantity` — inside a codebase whose stated rule is that money never touches a float.                                                                                                                                                                                         |
+| **FBR boundary**                                                                         | Implemented boundary   | The outbox boundary is real and correctly non-blocking. The adapter is not: `SANDBOX` **fabricates** a fiscal number (`SANDBOX-<id>`) and marks the invoice `SUBMITTED` with no HTTP call; the three real modes return `RETRYABLE` until they dead-letter silently. `fbr_invoice_attempts` is written by nothing. `tax_total`/`tax_amount` are hardcoded `0`. The payload is four fields. No `FiscalInvoiceGateway` interface exists despite the architecture specifying it verbatim.                                               |
+| **Owner AI assistant**                                                                   | Implemented foundation | Design is genuinely good (no SQL, no writes, per-tool re-authorization). Three problems: the deterministic reports are reachable **only** through the AI endpoint — so with `AI_ENABLED=false` (the shipped default) **the owner has no reports at all**, which inverts the architecture's own "do not make the dashboard AI-dependent" rule. The rate limiter is racy and self-amplifying (rejections insert audit rows that extend the window). And `internal: true` on the compose network blocks the egress the provider needs. |
+| **Deployment foundation**                                                                | Implemented foundation | **`docker compose up` fails at parse time.** `POSTGRES_PASSWORD` is in neither `.env` nor `.env.example` (verified: 0 occurrences in both). `env_file` overrides image `ENV`, so production runs `NODE_ENV=development` — dev CORS, request logging, seed credentials in the container. No TLS. No migration step in compose. **No backup implementation of any kind** — no script, no cron, no `pg_dump`, no restore path — against an architecture doc that rates backups "Mandatory 10/10".                                      |
+| **Development fixtures**                                                                 | Implemented            | Correct, and genuinely useful.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
-**Also silently missing from the MVP's own "included" list:** owner dashboard, discounts with role approval, stock adjustment. All three are in architecture §4 as *included*, all three have **no endpoint**, and none appears in any existing gap list. 13 of 36 seeded permissions have no route behind them.
+**Also silently missing from the MVP's own "included" list:** owner dashboard, discounts with role approval, stock adjustment. All three are in architecture §4 as _included_, all three have **no endpoint**, and none appears in any existing gap list. 13 of 36 seeded permissions have no route behind them.
 
 ---
 
@@ -56,43 +56,43 @@ Ranked. `P0` blocks pilot, `P1` blocks trust, `P2` blocks competitiveness.
 
 ### P0 — Pilot blockers
 
-| # | Defect | Location |
-|---|---|---|
-| B1 | `crypto.randomUUID()` on non-secure origin → every till/cash/return/sale write fails on LAN terminals | `apps/web/src/api.ts` ×6 |
-| B2 | No TLS; bearer token, passwords, invoices in cleartext over the shop LAN | `infra/docker/Caddyfile:1` |
-| B3 | No git repository, no CI, no review gate | repo root |
-| B4 | `npm run verify` exits 1 (10 `no-undef`) — the documented merge gate is red | `eslint.config.js`, `scripts/dev.mjs` |
-| B5 | Compose won't start — `POSTGRES_PASSWORD`, `HTTP_PORT` undefined | `compose.yaml:10,83`, `.env.example` |
-| B6 | Production runs `NODE_ENV=development` via `env_file` override | `compose.yaml:47,67` |
-| B7 | **No backups. None.** Only durable state is a named volume | `infra/` |
-| B8 | No migration step in compose — API can start against an empty schema | `compose.yaml` |
-| B9 | Orphaned `PROCESSING` jobs are permanent; unguarded throws kill the worker | `worker.ts:29,49,61` |
-| B10 | `EXPIRE_RESERVATIONS` never enqueued → phantom reservations accumulate forever | `worker.ts:180-185` |
+| #   | Defect                                                                                                | Location                              |
+| --- | ----------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| B1  | `crypto.randomUUID()` on non-secure origin → every till/cash/return/sale write fails on LAN terminals | `apps/web/src/api.ts` ×6              |
+| B2  | No TLS; bearer token, passwords, invoices in cleartext over the shop LAN                              | `infra/docker/Caddyfile:1`            |
+| B3  | No git repository, no CI, no review gate                                                              | repo root                             |
+| B4  | `npm run verify` exits 1 (10 `no-undef`) — the documented merge gate is red                           | `eslint.config.js`, `scripts/dev.mjs` |
+| B5  | Compose won't start — `POSTGRES_PASSWORD`, `HTTP_PORT` undefined                                      | `compose.yaml:10,83`, `.env.example`  |
+| B6  | Production runs `NODE_ENV=development` via `env_file` override                                        | `compose.yaml:47,67`                  |
+| B7  | **No backups. None.** Only durable state is a named volume                                            | `infra/`                              |
+| B8  | No migration step in compose — API can start against an empty schema                                  | `compose.yaml`                        |
+| B9  | Orphaned `PROCESSING` jobs are permanent; unguarded throws kill the worker                            | `worker.ts:29,49,61`                  |
+| B10 | `EXPIRE_RESERVATIONS` never enqueued → phantom reservations accumulate forever                        | `worker.ts:180-185`                   |
 
 ### P1 — Correctness & trust
 
-| # | Defect | Location |
-|---|---|---|
-| C1 | Idempotency read-then-insert race → 500 + invoice-sequence gap | `pos.service.ts:314`, `returns.service.ts:57`, `procurement.service.ts:219,392,505` |
-| C2 | FEFO over-reservation under READ COMMITTED; surfaces as a failed sale at the till | `pos.service.ts:226-249` |
-| C3 | Returns flip `RECALLED`→`SELLABLE`; one unit quarantines a whole batch | `returns.service.ts:204-210` |
-| C4 | Expiry quarantine writes no ledger row, never decrements stock; no scrap path | `intelligence.service.ts:227` |
-| C5 | Effective base-unit cost rounds to `0.00` for high-count packs → all margin/VAR figures wrong | `procurement.service.ts:568-571` |
-| C6 | Sale subtotal can disagree with the sum of its own line totals when FEFO splits a fractional line | `pos.service.ts:422,434` |
-| C7 | Two different rounding rules for the same computation (half-up vs ceiling) | `decimal.ts:27` vs `budget-regimen.ts:53` |
-| C8 | No logout, no revocation (`revoked_at` never written), no refresh; 30-min hard logout mid-shift | `auth.service.ts`, `auth.guard.ts` |
-| C9 | No rate limit on `/auth/login`; timing oracle; lockout never resets | `auth.service.ts:40,47-52` |
-| C10 | `returns.refund` accepts any cashier's open session | `returns.service.ts:170-176` |
-| C11 | Login can bind the session to the wrong branch | `auth.service.ts:32-37` |
-| C12 | Guard's INNER JOIN 401s a valid session whose role has zero permissions | `auth.guard.ts:60-63` |
-| C13 | Validation gaps turn 400s into 500s (`quantity: "0"`, no magnitude bounds); no global exception filter | `schemas.ts:6-11`, `app.module.ts` |
-| C14 | Attention dashboard silently reports `0` when no stock is near expiry | `intelligence.service.ts:43-63` |
-| C15 | Reorder engine leaks reservations across branches | `worker.ts:430-433` |
-| C16 | Three "idempotency" unique indexes on `(id, x)` constrain nothing | `004:18-23`, `005:4-6` |
-| C17 | Migration 006 grants are one-shot — **any future table will be unreadable by `pharmacy_app`** | `006_application_role_permissions.sql` |
-| C18 | Effectively zero test coverage; the only API test never imports the thing it names | all 6 test files |
-| C19 | Float money in the cart total shown to the customer | `PosWorkspace.tsx:154` |
-| C20 | Checkout is 4 sequential awaits, no rollback, regenerated `clientRequestId` on retry → double-ring risk | `PosWorkspace.tsx:164-188` |
+| #   | Defect                                                                                                  | Location                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| C1  | Idempotency read-then-insert race → 500 + invoice-sequence gap                                          | `pos.service.ts:314`, `returns.service.ts:57`, `procurement.service.ts:219,392,505` |
+| C2  | FEFO over-reservation under READ COMMITTED; surfaces as a failed sale at the till                       | `pos.service.ts:226-249`                                                            |
+| C3  | Returns flip `RECALLED`→`SELLABLE`; one unit quarantines a whole batch                                  | `returns.service.ts:204-210`                                                        |
+| C4  | Expiry quarantine writes no ledger row, never decrements stock; no scrap path                           | `intelligence.service.ts:227`                                                       |
+| C5  | Effective base-unit cost rounds to `0.00` for high-count packs → all margin/VAR figures wrong           | `procurement.service.ts:568-571`                                                    |
+| C6  | Sale subtotal can disagree with the sum of its own line totals when FEFO splits a fractional line       | `pos.service.ts:422,434`                                                            |
+| C7  | Two different rounding rules for the same computation (half-up vs ceiling)                              | `decimal.ts:27` vs `budget-regimen.ts:53`                                           |
+| C8  | No logout, no revocation (`revoked_at` never written), no refresh; 30-min hard logout mid-shift         | `auth.service.ts`, `auth.guard.ts`                                                  |
+| C9  | No rate limit on `/auth/login`; timing oracle; lockout never resets                                     | `auth.service.ts:40,47-52`                                                          |
+| C10 | `returns.refund` accepts any cashier's open session                                                     | `returns.service.ts:170-176`                                                        |
+| C11 | Login can bind the session to the wrong branch                                                          | `auth.service.ts:32-37`                                                             |
+| C12 | Guard's INNER JOIN 401s a valid session whose role has zero permissions                                 | `auth.guard.ts:60-63`                                                               |
+| C13 | Validation gaps turn 400s into 500s (`quantity: "0"`, no magnitude bounds); no global exception filter  | `schemas.ts:6-11`, `app.module.ts`                                                  |
+| C14 | Attention dashboard silently reports `0` when no stock is near expiry                                   | `intelligence.service.ts:43-63`                                                     |
+| C15 | Reorder engine leaks reservations across branches                                                       | `worker.ts:430-433`                                                                 |
+| C16 | Three "idempotency" unique indexes on `(id, x)` constrain nothing                                       | `004:18-23`, `005:4-6`                                                              |
+| C17 | Migration 006 grants are one-shot — **any future table will be unreadable by `pharmacy_app`**           | `006_application_role_permissions.sql`                                              |
+| C18 | Effectively zero test coverage; the only API test never imports the thing it names                      | all 6 test files                                                                    |
+| C19 | Float money in the cart total shown to the customer                                                     | `PosWorkspace.tsx:154`                                                              |
+| C20 | Checkout is 4 sequential awaits, no rollback, regenerated `clientRequestId` on retry → double-ring risk | `PosWorkspace.tsx:164-188`                                                          |
 
 ### P2 — Counter-grade gaps
 
@@ -107,6 +107,8 @@ Six phases. Each has an explicit exit gate; **no phase starts until the prior ga
 ---
 
 ### Phase 0 — Make the work provable · ~1 week
+
+> **Implementation status (2026-08-30):** locally complete. `npm run verify` exits `0`; the baseline is committed on `main`. The GitHub Actions clean-clone gate is configured and awaits the first push to a remote. See `docs/PHASE_0_EXECUTION.md` for evidence and dependency decisions.
 
 Nothing else is safe to build until changes are tracked and the gate is honest.
 
@@ -136,7 +138,7 @@ Change `Caddyfile:1` from `:80` to a hostname with Caddy's `tls internal` (local
 Add `POSTGRES_PASSWORD` and `HTTP_PORT` to `.env.example` with a note that Compose interpolates from a file **adjacent to `compose.yaml`**, not from `env_file`. Pin `NODE_ENV: production` in the `environment:` block for `api` and `worker` so it wins over `env_file`. Add a one-shot `migrate` service with `depends_on: postgres: service_healthy`, and make `api` depend on its successful completion. Add a healthcheck to `worker` (it has none). Add resource limits to all five services — there are none, so one runaway query OOM-kills the POS.
 
 **1.4 Backups (B7).**
-The largest operational hole in the repo. Build `infra/docker/Dockerfile.backup` + a `backup` service, per architecture §13: nightly encrypted `pg_dump`, retention 7 daily / 4 weekly / 3 monthly, daily copy to an external USB SSD, and **a weekly automated restore drill that writes its result to the existing, currently-unused `backup_runs` table.** Surface the last successful backup and last successful restore in the dashboard built in Phase 4. Target restore time < 15 min. *"A backup that has never been restored is not a backup"* — the architecture doc's own words.
+The largest operational hole in the repo. Build `infra/docker/Dockerfile.backup` + a `backup` service, per architecture §13: nightly encrypted `pg_dump`, retention 7 daily / 4 weekly / 3 monthly, daily copy to an external USB SSD, and **a weekly automated restore drill that writes its result to the existing, currently-unused `backup_runs` table.** Surface the last successful backup and last successful restore in the dashboard built in Phase 4. Target restore time < 15 min. _"A backup that has never been restored is not a backup"_ — the architecture doc's own words.
 
 **1.5 Worker reliability (B9, B10).**
 Enqueue `EXPIRE_RESERVATIONS` from the 60s scheduler alongside the other four job types. Add a stale-lock reaper: reclaim rows where `status='PROCESSING' AND locked_at < now() - interval '5 minutes'`. Wrap the `run()` loop body, the `job_attempts` insert, and `enqueueOperationalJobs()` in try/catch — all three currently throw out of the loop and kill the process. Add `expires_at > now()` to the `reserved_stock` subquery in `worker.ts:430-433` and scope it by branch. Give `FAILED` jobs a surface: an endpoint and a dashboard tile, since `last_error` is currently written and read by nothing.
@@ -153,6 +155,7 @@ Remove the "local-first" claim (there is no service worker, no IndexedDB, no off
 The most important phase. This is where "Implemented" becomes "proven".
 
 **2.1 Build the test harness first.** There is effectively none today — the one API test never imports `AuthGuard`, and the "database contract test" is `String.includes` on a `.sql` file. Nothing can be safely fixed without this.
+
 - Add a root `vitest.config.ts` (none exists; Vitest currently falls back to `apps/web/vite.config.ts` and defaults to the `node` environment).
 - **DB-backed integration harness**: testcontainers or a disposable Postgres, migrations applied per run, transactional rollback per test. This is the single highest-leverage investment in the plan.
 - **Concurrency harness**: parallel clients hitting one endpoint, asserting invariants. Needed for 2.2–2.4.
@@ -164,6 +167,7 @@ The most important phase. This is where "Implemented" becomes "proven".
 **2.3 Fix FEFO over-reservation (C2).** Either escalate `reserveDraft` to `REPEATABLE READ` with a bounded retry, or track `reserved_qty` as a column decremented under the existing row lock. Keep the ascending-`id` lock ordering at `pos.service.ts:247` — that part is correct and deliberate. Prove with a concurrency test: N terminals reserving the last unit → exactly one wins, no oversell.
 
 **2.4 Restore ledger integrity (C3, C4).**
+
 - Returns: preserve `RECALLED`/`QUARANTINE` instead of forcing `SELLABLE`; implement batch splitting so a partial quarantine doesn't withdraw the whole batch.
 - Expiry: write a `stock_movements` row for every quarantine, and build the missing **write-off/scrap path** that actually decrements `current_qty` — so value-at-risk converts into a recorded loss.
 - Add a DB trigger asserting `quantity_after = prior + delta` and that `quantity_delta`'s sign matches `movement_type`. Today both are app-trust.
@@ -175,7 +179,7 @@ The most important phase. This is where "Implemented" becomes "proven".
 
 **2.7 Validation (C13).** Bound every money/quantity schema; use `positiveQuantitySchema` where zero is invalid; add `useGlobalPipes` + the exception filter from 2.2.
 
-**Exit gate:** the P0 test set from the audit `.docx` — migrations, POS regression, return concurrency, shelf safety, expiry boundary, reorder math, budget safety, RBAC, AI isolation — all executed and green in CI, with recorded exit codes. *"Do not mark any gate passed merely because code exists."*
+**Exit gate:** the P0 test set from the audit `.docx` — migrations, POS regression, return concurrency, shelf safety, expiry boundary, reorder math, budget safety, RBAC, AI isolation — all executed and green in CI, with recorded exit codes. _"Do not mark any gate passed merely because code exists."_
 
 ---
 
@@ -207,6 +211,7 @@ The three chosen must-haves. These are what legacy systems have and PharmacyOS d
 
 **4.1 Customers + credit ledger (udhaar/khata) — the biggest competitive gap.**
 `sales` has **no customer reference of any kind** today. Build:
+
 - `customers` (name, phone, address, credit limit, opening balance) and `customer_ledger_entries` (append-only, like the stock ledger — sale, payment, adjustment, with running balance).
 - Optional customer attach at POS with fast phone-number lookup.
 - `CREDIT` as a payment method, gated by credit limit and a permission.
@@ -215,6 +220,7 @@ The three chosen must-haves. These are what legacy systems have and PharmacyOS d
 
 **4.2 Owner dashboard & reports (non-AI).**
 Today `OwnerToolsService` is injected into exactly one consumer, `OwnerAiService`, exposed only by `POST /owner-ai/chat`. **With `AI_ENABLED=false` — the shipped default — the owner sees nothing.** Fix the layering:
+
 - Extract the deterministic reports into a `reports` module with its own endpoints, behind the already-seeded `reports.view_basic` / `reports.view_financial` permissions.
 - Build a `dashboard` module for the 12 metrics the architecture specifies, and make `REFRESH_DASHBOARD_METRICS` write `dashboard_daily_metrics` instead of returning `COMPLETED` immediately.
 - Build the owner UI: daily sales, gross profit, top movers, dead stock, expiry value at risk, cash variance history, receivables, failed fiscal submissions, last backup + last restore drill.
@@ -223,6 +229,7 @@ Today `OwnerToolsService` is injected into exactly one consumer, `OwnerAiService
 
 **4.3 Discounts, pricing & stock adjustments.**
 All three were in the MVP's own "included" list and silently disappeared.
+
 - **Discounts:** line and invoice level, with the supervisor-approval threshold the roles already imply. `discount_total` / `discount_amount` columns exist and are always `0`; `sale.discount.basic` and `sale.discount.override` are seeded with no route.
 - **Pricing:** an MRP/sale-price management screen with price history — batch-level prices are currently only settable at goods receipt.
 - **Stock adjustments:** a counted-adjustment and scrap workflow writing the `ADJUSTMENT_IN`/`ADJUSTMENT_OUT`/`SCRAP` movement types that are declared and never used, behind the seeded `inventory.adjust` permission. Add physical stock take / cycle count — a monthly reality in every pharmacy and absent here.
@@ -251,16 +258,16 @@ All three were in the MVP's own "included" list and silently disappeared.
 
 The gap between "the mechanism exists" and "the mechanism is correct under concurrency and covered by a test" is where this codebase currently sits. Every phase above is gated on evidence, not on code existing.
 
-| Layer | Today | Target |
-|---|---|---|
-| Unit | 4 real files, ~26 assertions, all pure helpers | All money, FEFO, reorder, expiry-bucket, regimen, and credit-ledger math |
-| DB integration | 0 (the "contract test" is `String.includes` on SQL text) | Every migration applied and rolled back; every constraint and trigger asserted |
-| API integration | 0 | Every endpoint × every role × unauthorized × cross-branch |
-| **Concurrency** | 0 | The 8 named races: double finalize, oversell, double refund, cash close, invoice numbering, goods receipt, worker double-claim, reservation expiry |
-| Component | 0 (no jsdom, no testing-library) | POS cart, checkout, cash count, return flow |
-| E2E | 0 (no Playwright) | The 5 core workflows |
-| Performance | 0 | The four p95 targets at representative volume |
-| Restore drill | 0 | Weekly, automated, recorded in `backup_runs` |
+| Layer           | Today                                                    | Target                                                                                                                                             |
+| --------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit            | 4 real files, ~26 assertions, all pure helpers           | All money, FEFO, reorder, expiry-bucket, regimen, and credit-ledger math                                                                           |
+| DB integration  | 0 (the "contract test" is `String.includes` on SQL text) | Every migration applied and rolled back; every constraint and trigger asserted                                                                     |
+| API integration | 0                                                        | Every endpoint × every role × unauthorized × cross-branch                                                                                          |
+| **Concurrency** | 0                                                        | The 8 named races: double finalize, oversell, double refund, cash close, invoice numbering, goods receipt, worker double-claim, reservation expiry |
+| Component       | 0 (no jsdom, no testing-library)                         | POS cart, checkout, cash count, return flow                                                                                                        |
+| E2E             | 0 (no Playwright)                                        | The 5 core workflows                                                                                                                               |
+| Performance     | 0                                                        | The four p95 targets at representative volume                                                                                                      |
+| Restore drill   | 0                                                        | Weekly, automated, recorded in `backup_runs`                                                                                                       |
 
 **Standing rule for this project, from its own audit document:** record actual exit codes and outputs; never mark a gate passed because the code exists or the command is planned.
 
@@ -273,6 +280,7 @@ The gap between "the mechanism exists" and "the mechanism is correct under concu
 **Parallelizable once Phase 2 is green:** 3.x (frontend) and 4.x (backend domain) can run concurrently if a second developer joins. 5.1 (FBR) should start early — licensed-integrator engagement has external lead time measured in weeks.
 
 **Risks:**
+
 - **FBR certification is the longest external dependency.** Start the integrator conversation during Phase 1, not Phase 5.
 - **Phase 2 will surface more defects.** The estimate assumes the first real integration tests find issues the static review could not. Treat 4 weeks as a floor.
 - **Rewriting for offline later is expensive.** The LAN-resilient choice is right for the pilot, but if chains or unreliable-power sites become the target, revisit before Phase 4 — retrofitting sync after the customer ledger exists is materially harder.

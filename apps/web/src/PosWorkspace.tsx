@@ -126,6 +126,8 @@ export function PosWorkspace(): React.JSX.Element {
   const searchInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    searchInput.current?.focus();
+
     const focusSearch = (event: KeyboardEvent): void => {
       if (event.key === '/' && !(event.target instanceof HTMLInputElement)) {
         event.preventDefault();
@@ -238,7 +240,6 @@ export function PosWorkspace(): React.JSX.Element {
             <span aria-hidden="true">⌕</span>
             <input
               ref={searchInput}
-              autoFocus
               placeholder="Brand, generic, barcode or company"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
