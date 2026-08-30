@@ -1,0 +1,21 @@
+{
+  "name": "@pharmacy/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "types": "./src/index.ts",
+    "default": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "migrate": "tsx src/migrate.ts",
+    "seed": "tsx src/seed.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "17.4.2",
+    "postgres": "3.4.9"
+  }
+}

@@ -1,0 +1,40 @@
+import type { MedicineSearchResult } from './api';
+
+export const previewMedicines: readonly MedicineSearchResult[] = [
+  {
+    id: '101',
+    name: 'Panadol',
+    genericName: 'Paracetamol',
+    strength: '500 mg',
+    manufacturer: 'GSK',
+    barcode: '8964000123456',
+    shelf: 'A-03 / R2 / B1',
+    availableQuantity: '148.000',
+    nearestExpiry: '2027-02-28',
+    salePrice: '35.00',
+  },
+  {
+    id: '102',
+    name: 'Augmentin',
+    genericName: 'Co-amoxiclav',
+    strength: '625 mg',
+    manufacturer: 'GSK',
+    barcode: '8964000654321',
+    shelf: 'B-01 / R1 / B2',
+    availableQuantity: '26.000',
+    nearestExpiry: '2026-11-30',
+    salePrice: '1180.00',
+  },
+  {
+    id: '103',
+    name: 'Risek',
+    genericName: 'Omeprazole',
+    strength: '20 mg',
+    manufacturer: 'Getz Pharma',
+    barcode: '8964000789012',
+    shelf: 'C-07 / R3 / B1',
+    availableQuantity: '8.000',
+    nearestExpiry: '2026-09-15',
+    salePrice: '470.00',
+  },
+];

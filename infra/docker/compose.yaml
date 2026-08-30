@@ -1,0 +1,93 @@
+name: pharmacy-os
+
+services:
+  postgres:
+    image: postgres:18.4-alpine3.23
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pharmacy_os
+      POSTGRES_USER: pharmacy_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pharmacy_app -d pharmacy_os']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  redis:
+    image: redis:8.10.0-alpine3.23
+    restart: unless-stopped
+    command:
+      [
+        'redis-server',
+        '--save',
+        '',
+        '--appendonly',
+        'no',
+        '--maxmemory',
+        '128mb',
+        '--maxmemory-policy',
+        'allkeys-lru',
+      ]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    restart: unless-stopped
+    env_file: ../../.env
+    environment:
+      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_PASSWORD}@postgres:5432/pharmacy_os
+      REDIS_URL: redis://redis:6379
+      HOST: 0.0.0.0
+      API_PORT: 3000
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/api/v1/health/ready']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+    restart: unless-stopped
+    env_file: ../../.env
+    environment:
+      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_PASSWORD}@postgres:5432/pharmacy_os
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [backend]
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        VITE_API_URL: /api/v1
+    restart: unless-stopped
+    ports:
+      - '${HTTP_PORT:-8080}:80'
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [backend]
+
+volumes:
+  postgres-data:
+
+networks:
+  backend:
+    internal: true

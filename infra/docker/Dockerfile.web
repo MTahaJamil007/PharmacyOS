@@ -1,0 +1,10 @@
+FROM node:24.19.0-bookworm-slim AS build
+WORKDIR /app
+ARG VITE_API_URL=/api/v1
+ENV VITE_API_URL=$VITE_API_URL
+COPY . .
+RUN npm ci && npm run build --workspace @pharmacy/web
+
+FROM caddy:2.11.4-alpine
+COPY infra/docker/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/apps/web/dist /srv

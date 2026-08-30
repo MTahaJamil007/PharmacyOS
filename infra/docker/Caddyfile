@@ -1,0 +1,16 @@
+:80 {
+  encode zstd gzip
+  handle /api/* {
+    reverse_proxy api:3000
+  }
+  handle {
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+  }
+}

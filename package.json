@@ -1,0 +1,40 @@
+{
+  "name": "pharmacy-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first pharmacy operations platform for Pakistani pharmacies",
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.9.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build:packages && npm run build:apps",
+    "build:packages": "npm run build --workspace @pharmacy/config && npm run build --workspace @pharmacy/shared && npm run build --workspace @pharmacy/database",
+    "build:apps": "npm run build --workspace @pharmacy/api && npm run build --workspace @pharmacy/worker && npm run build --workspace @pharmacy/web",
+    "dev": "npm run build:packages && node scripts/dev.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:migrate": "npm run migrate --workspace @pharmacy/database",
+    "db:seed": "npm run seed --workspace @pharmacy/database",
+    "db:seed:development": "npm run seed:development --workspace @pharmacy/api",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.2.0",
+    "eslint": "10.8.1",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,519 @@
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type { Environment } from '@pharmacy/config';
+import type { Database } from '@pharmacy/database';
+import {
+  decimalToScaledInteger,
+  moneyToMinorUnits,
+  multiplyMoneyByQuantity,
+  scaledIntegerToDecimal,
+  sumMoney,
+  type CreateDraftRequest,
+  type FinalizeSaleRequest,
+} from '@pharmacy/shared';
+
+import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { DATABASE, ENVIRONMENT } from '../database.module.js';
+
+interface DraftRow {
+  readonly id: string;
+  readonly branch_id: string;
+  readonly terminal_id: string;
+  readonly status: string;
+  readonly subtotal: string;
+  readonly discount_total: string;
+  readonly total: string;
+  readonly reserved_until: Date | null;
+}
+
+interface DraftItemRow {
+  readonly id: string;
+  readonly medicine_id: string;
+  readonly quantity: string;
+  readonly unit_price: string;
+  readonly discount_amount: string;
+}
+
+interface BatchRow {
+  readonly batch_id: string;
+  readonly medicine_id: string;
+  readonly expiry_date: string;
+  readonly received_at: Date;
+  readonly cost_price: string;
+  readonly sale_price: string;
+  readonly available_qty: string;
+}
+
+interface ReservedLineRow {
+  readonly reservation_id: string;
+  readonly draft_item_id: string;
+  readonly inventory_batch_id: string;
+  readonly medicine_id: string;
+  readonly quantity: string;
+  readonly unit_price: string;
+  readonly cost_price: string;
+  readonly reservation_status: string;
+  readonly expires_at: Date;
+}
+
+@Injectable()
+export class PosService {
+  constructor(
+    @Inject(DATABASE) private readonly database: Database,
+    @Inject(ENVIRONMENT) private readonly environment: Environment,
+  ) {}
+
+  async getReceipt(user: AuthenticatedUser, saleId: bigint): Promise<Record<string, unknown>> {
+    const [sale] = await this.database<Array<Record<string, unknown>>>`
+      select sales.id::text, sales.invoice_number, sales.subtotal::text,
+        sales.discount_total::text, sales.tax_total::text, sales.total::text,
+        sales.created_at, branches.name as branch_name, branches.address as branch_address,
+        branches.phone as branch_phone, users.display_name as cashier_name,
+        return_lookup_tokens.token::text as return_lookup_token,
+        fbr_invoices.status as fiscal_status,
+        fbr_invoices.fiscal_invoice_number,
+        fbr_invoices.qr_payload as fiscal_qr_payload
+      from sales
+      join branches on branches.id = sales.branch_id
+      join users on users.id = sales.cashier_user_id
+      join return_lookup_tokens on return_lookup_tokens.sale_id = sales.id
+        and return_lookup_tokens.revoked_at is null
+      join fbr_invoices on fbr_invoices.sale_id = sales.id
+      where sales.id = ${saleId.toString()} and sales.branch_id = ${user.branchId}
+    `;
+    if (!sale) throw new NotFoundException('Sale receipt not found');
+    const items = await this.database<Array<Record<string, unknown>>>`
+      select sale_items.id::text, medicines.name, medicines.strength,
+        inventory_batches.batch_number, inventory_batches.expiry_date,
+        sale_items.quantity::text, sale_items.unit_price::text,
+        sale_items.discount_amount::text, sale_items.line_total::text
+      from sale_items
+      join medicines on medicines.id = sale_items.medicine_id
+      join inventory_batches on inventory_batches.id = sale_items.inventory_batch_id
+      where sale_items.sale_id = ${saleId.toString()} order by sale_items.id
+    `;
+    const payments = await this.database<Array<Record<string, unknown>>>`
+      select method, amount::text, reference from payments
+      where sale_id = ${saleId.toString()} and status = 'CAPTURED' order by id
+    `;
+    return {
+      sale,
+      items,
+      payments,
+      returnQrPayload: String(sale.return_lookup_token),
+      qrDataClassification: 'OPAQUE_RETURN_TOKEN_ONLY',
+    };
+  }
+
+  async createDraft(
+    user: AuthenticatedUser,
+    input: CreateDraftRequest,
+  ): Promise<Record<string, unknown>> {
+    if (input.terminalId.toString() !== user.terminalId) {
+      throw new ConflictException('Draft terminal must match the authenticated terminal');
+    }
+
+    const normalizedItems = new Map<string, bigint>();
+    for (const item of input.items) {
+      const medicineId = item.medicineId.toString();
+      const quantity = decimalToScaledInteger(item.quantity, 3);
+      normalizedItems.set(medicineId, (normalizedItems.get(medicineId) ?? 0n) + quantity);
+    }
+
+    return this.database.begin(async (transaction) => {
+      const medicineIds = [...normalizedItems.keys()];
+      const pricedMedicines = await transaction<
+        Array<{ medicine_id: string; sale_price: string | null }>
+      >`
+        select medicines.id::text as medicine_id, prices.sale_price::text
+        from medicines
+        left join lateral (
+          select inventory_batches.sale_price
+          from inventory_batches
+          where inventory_batches.branch_id = ${user.branchId}
+            and inventory_batches.medicine_id = medicines.id
+            and inventory_batches.status = 'SELLABLE'
+            and inventory_batches.deleted_at is null
+            and inventory_batches.current_qty > 0
+            and inventory_batches.expiry_date >= current_date
+          order by inventory_batches.expiry_date, inventory_batches.received_at, inventory_batches.id
+          limit 1
+        ) prices on true
+        where medicines.id in ${transaction(medicineIds)}
+          and medicines.is_active = true and medicines.deleted_at is null
+        order by medicines.id
+      `;
+      if (
+        pricedMedicines.length !== medicineIds.length ||
+        pricedMedicines.some((row) => row.sale_price === null)
+      ) {
+        throw new ConflictException('One or more medicines are unavailable for sale');
+      }
+
+      const lines = pricedMedicines.map((row) => {
+        const quantity = scaledIntegerToDecimal(normalizedItems.get(row.medicine_id) ?? 0n, 3);
+        const unitPrice = row.sale_price;
+        if (unitPrice === null) throw new ConflictException('Medicine has no active sale price');
+        return {
+          medicineId: row.medicine_id,
+          quantity,
+          unitPrice,
+          lineTotal: multiplyMoneyByQuantity(unitPrice, quantity),
+        };
+      });
+      const subtotal = sumMoney(lines.map((line) => line.lineTotal));
+      const [draft] = await transaction<Array<{ id: string }>>`
+        insert into sale_drafts (
+          branch_id, terminal_id, salesperson_user_id, status,
+          subtotal, discount_total, total
+        ) values (
+          ${user.branchId}, ${user.terminalId}, ${user.id}, 'DRAFT',
+          ${subtotal}, 0, ${subtotal}
+        )
+        returning id::text
+      `;
+      if (!draft) throw new Error('Draft creation did not return an identifier');
+
+      for (const line of lines) {
+        await transaction`
+          insert into sale_draft_items (
+            sale_draft_id, medicine_id, quantity, unit_price, discount_amount, line_total
+          ) values (
+            ${draft.id}, ${line.medicineId}, ${line.quantity}, ${line.unitPrice}, 0, ${line.lineTotal}
+          )
+        `;
+      }
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId},
+          'POS.DRAFT_CREATED', 'sale_draft', ${draft.id}
+        )
+      `;
+
+      return { id: draft.id, status: 'DRAFT', subtotal, total: subtotal, itemCount: lines.length };
+    });
+  }
+
+  async reserveDraft(user: AuthenticatedUser, draftId: bigint): Promise<Record<string, unknown>> {
+    const draftIdText = draftId.toString();
+    return this.database.begin(async (transaction) => {
+      const [draft] = await transaction<DraftRow[]>`
+        select id::text, branch_id::text, terminal_id::text, status,
+          subtotal::text, discount_total::text, total::text, reserved_until
+        from sale_drafts where id = ${draftIdText} for update
+      `;
+      if (!draft || draft.branch_id !== user.branchId)
+        throw new NotFoundException('Draft not found');
+      if (!['DRAFT', 'SENT_TO_CASHIER', 'RESERVED', 'EXPIRED'].includes(draft.status)) {
+        throw new ConflictException(`Draft cannot be reserved from ${draft.status}`);
+      }
+
+      await transaction`
+        update stock_reservations set status = 'RELEASED', released_at = now()
+        where sale_draft_item_id in (select id from sale_draft_items where sale_draft_id = ${draft.id})
+          and status = 'ACTIVE'
+      `;
+      const items = await transaction<DraftItemRow[]>`
+        select id::text, medicine_id::text, quantity::text, unit_price::text, discount_amount::text
+        from sale_draft_items where sale_draft_id = ${draft.id} order by medicine_id, id
+      `;
+      if (items.length === 0) throw new ConflictException('Draft has no items');
+
+      const expiresAt = new Date(Date.now() + this.environment.RESERVATION_TTL_MINUTES * 60_000);
+      let reservationCount = 0;
+      for (const item of items) {
+        const lockedBatches = await transaction<BatchRow[]>`
+          select inventory_batches.id::text as batch_id,
+            inventory_batches.medicine_id::text as medicine_id,
+            inventory_batches.expiry_date::text,
+            inventory_batches.received_at,
+            inventory_batches.cost_price::text,
+            inventory_batches.sale_price::text,
+            (inventory_batches.current_qty - coalesce((
+              select sum(stock_reservations.quantity)
+              from stock_reservations
+              where stock_reservations.inventory_batch_id = inventory_batches.id
+                and stock_reservations.status = 'ACTIVE'
+                and stock_reservations.expires_at > now()
+            ), 0))::text as available_qty
+          from inventory_batches
+          where inventory_batches.branch_id = ${user.branchId}
+            and inventory_batches.medicine_id = ${item.medicine_id}
+            and inventory_batches.status = 'SELLABLE'
+            and inventory_batches.deleted_at is null
+            and inventory_batches.current_qty > 0
+            and inventory_batches.expiry_date >= current_date
+          order by inventory_batches.id
+          for update of inventory_batches
+        `;
+        lockedBatches.sort((left, right) => {
+          const dateOrder = left.expiry_date.localeCompare(right.expiry_date);
+          if (dateOrder !== 0) return dateOrder;
+          const receivedOrder = left.received_at.getTime() - right.received_at.getTime();
+          if (receivedOrder !== 0) return receivedOrder;
+          const leftId = BigInt(left.batch_id);
+          const rightId = BigInt(right.batch_id);
+          return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+        });
+
+        let required = decimalToScaledInteger(item.quantity, 3);
+        for (const batch of lockedBatches) {
+          if (required === 0n) break;
+          const available = decimalToScaledInteger(batch.available_qty, 3);
+          if (available <= 0n) continue;
+          const allocated = available < required ? available : required;
+          const quantity = scaledIntegerToDecimal(allocated, 3);
+          await transaction`
+            insert into stock_reservations (
+              sale_draft_item_id, inventory_batch_id, quantity, status, expires_at
+            ) values (${item.id}, ${batch.batch_id}, ${quantity}, 'ACTIVE', ${expiresAt})
+          `;
+          reservationCount += 1;
+          required -= allocated;
+        }
+        if (required > 0n) {
+          throw new ConflictException({
+            message: 'Insufficient stock for reservation',
+            medicineId: item.medicine_id,
+            shortage: scaledIntegerToDecimal(required, 3),
+          });
+        }
+      }
+
+      await transaction`
+        update sale_drafts
+        set status = 'RESERVED', sent_at = coalesce(sent_at, now()), reserved_until = ${expiresAt}
+        where id = ${draft.id}
+      `;
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id, metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId},
+          'POS.DRAFT_RESERVED', 'sale_draft', ${draft.id},
+          ${transaction.json({ reservationCount, expiresAt: expiresAt.toISOString() })}
+        )
+      `;
+      return {
+        id: draft.id,
+        status: 'RESERVED',
+        reservationCount,
+        reservedUntil: expiresAt.toISOString(),
+      };
+    });
+  }
+
+  async finalizeSale(
+    user: AuthenticatedUser,
+    input: FinalizeSaleRequest,
+  ): Promise<Record<string, unknown>> {
+    const cashSessionId = input.cashSessionId.toString();
+    const draftId = input.draftId.toString();
+    return this.database.begin(async (transaction) => {
+      const [existingSale] = await transaction<
+        Array<{
+          id: string;
+          invoice_number: string;
+          total: string;
+          return_lookup_token: string | null;
+        }>
+      >`
+        select sales.id::text, sales.invoice_number, sales.total::text,
+          return_lookup_tokens.token::text as return_lookup_token
+        from sales
+        left join return_lookup_tokens on return_lookup_tokens.sale_id = sales.id
+        where sales.terminal_id = ${user.terminalId}
+          and sales.cash_session_id = ${cashSessionId}
+          and sales.client_request_id = ${input.clientRequestId}
+      `;
+      if (existingSale) {
+        return {
+          id: existingSale.id,
+          invoiceNumber: existingSale.invoice_number,
+          total: existingSale.total,
+          returnLookupToken: existingSale.return_lookup_token,
+          idempotentReplay: true,
+        };
+      }
+
+      const [cashSession] = await transaction<Array<{ id: string }>>`
+        select id::text from cash_sessions
+        where id = ${cashSessionId}
+          and branch_id = ${user.branchId}
+          and terminal_id = ${user.terminalId}
+          and cashier_user_id = ${user.id}
+          and status = 'OPEN'
+        for update
+      `;
+      if (!cashSession) throw new ConflictException('An open cash session is required');
+
+      const [draft] = await transaction<DraftRow[]>`
+        select id::text, branch_id::text, terminal_id::text, status,
+          subtotal::text, discount_total::text, total::text, reserved_until
+        from sale_drafts where id = ${draftId} for update
+      `;
+      if (!draft || draft.branch_id !== user.branchId)
+        throw new NotFoundException('Draft not found');
+      if (
+        draft.status !== 'RESERVED' ||
+        !draft.reserved_until ||
+        draft.reserved_until <= new Date()
+      ) {
+        throw new ConflictException('Draft reservation is missing or expired');
+      }
+
+      const paymentTotal = sumMoney(input.payments.map((payment) => payment.amount));
+      if (moneyToMinorUnits(paymentTotal) !== moneyToMinorUnits(draft.total)) {
+        throw new ConflictException({
+          message: 'Payment total must equal sale total',
+          expected: draft.total,
+        });
+      }
+
+      const reservedLines = await transaction<ReservedLineRow[]>`
+        select stock_reservations.id::text as reservation_id,
+          sale_draft_items.id::text as draft_item_id,
+          inventory_batches.id::text as inventory_batch_id,
+          sale_draft_items.medicine_id::text as medicine_id,
+          stock_reservations.quantity::text,
+          sale_draft_items.unit_price::text,
+          inventory_batches.cost_price::text,
+          stock_reservations.status as reservation_status,
+          stock_reservations.expires_at
+        from stock_reservations
+        join sale_draft_items on sale_draft_items.id = stock_reservations.sale_draft_item_id
+        join inventory_batches on inventory_batches.id = stock_reservations.inventory_batch_id
+        where sale_draft_items.sale_draft_id = ${draft.id}
+          and stock_reservations.status = 'ACTIVE'
+        order by inventory_batches.id, stock_reservations.id
+        for update of inventory_batches, stock_reservations
+      `;
+      if (
+        reservedLines.length === 0 ||
+        reservedLines.some((line) => line.expires_at <= new Date())
+      ) {
+        throw new ConflictException('Active stock reservations are required');
+      }
+
+      const expectedByItem = await transaction<Array<{ id: string; quantity: string }>>`
+        select id::text, quantity::text from sale_draft_items where sale_draft_id = ${draft.id}
+      `;
+      for (const expected of expectedByItem) {
+        const reserved = reservedLines
+          .filter((line) => line.draft_item_id === expected.id)
+          .reduce((total, line) => total + decimalToScaledInteger(line.quantity, 3), 0n);
+        if (reserved !== decimalToScaledInteger(expected.quantity, 3)) {
+          throw new ConflictException('Reserved quantity no longer matches the draft');
+        }
+      }
+
+      const [invoice] = await transaction<Array<{ invoice_number: string }>>`
+        select next_invoice_number(${user.branchId}) as invoice_number
+      `;
+      if (!invoice) throw new Error('Invoice number generation failed');
+      const [sale] = await transaction<Array<{ id: string }>>`
+        insert into sales (
+          branch_id, terminal_id, cashier_user_id, cash_session_id, sale_draft_id,
+          invoice_number, client_request_id, status, subtotal, discount_total, tax_total, total
+        ) values (
+          ${user.branchId}, ${user.terminalId}, ${user.id}, ${cashSessionId}, ${draft.id},
+          ${invoice.invoice_number}, ${input.clientRequestId}, 'PAID',
+          ${draft.subtotal}, ${draft.discount_total}, 0, ${draft.total}
+        )
+        returning id::text
+      `;
+      if (!sale) throw new Error('Sale creation did not return an identifier');
+      const [returnLookup] = await transaction<Array<{ token: string }>>`
+        insert into return_lookup_tokens (sale_id) values (${sale.id})
+        returning token::text
+      `;
+      if (!returnLookup) throw new Error('Receipt return lookup token creation failed');
+
+      for (const line of reservedLines) {
+        const lineTotal = multiplyMoneyByQuantity(line.unit_price, line.quantity);
+        const [saleItem] = await transaction<Array<{ id: string }>>`
+          insert into sale_items (
+            sale_id, medicine_id, inventory_batch_id, quantity,
+            unit_price, unit_cost, discount_amount, tax_amount, line_total
+          ) values (
+            ${sale.id}, ${line.medicine_id}, ${line.inventory_batch_id}, ${line.quantity},
+            ${line.unit_price}, ${line.cost_price}, 0, 0, ${lineTotal}
+          )
+          returning id::text
+        `;
+        if (!saleItem) throw new Error('Sale item creation failed');
+        const [batch] = await transaction<Array<{ quantity_after: string }>>`
+          update inventory_batches
+          set current_qty = current_qty - ${line.quantity},
+              status = case when current_qty - ${line.quantity} = 0 then 'DEPLETED' else status end
+          where id = ${line.inventory_batch_id} and current_qty >= ${line.quantity}
+          returning current_qty::text as quantity_after
+        `;
+        if (!batch) throw new ConflictException('Stock changed before sale finalization');
+        await transaction`
+          insert into stock_movements (
+            branch_id, inventory_batch_id, movement_type, quantity_delta,
+            quantity_after, sale_item_id, performed_by_user_id
+          ) values (
+            ${user.branchId}, ${line.inventory_batch_id}, 'SALE', -${line.quantity},
+            ${batch.quantity_after}, ${saleItem.id}, ${user.id}
+          )
+        `;
+      }
+
+      for (const payment of input.payments) {
+        await transaction`
+          insert into payments (sale_id, cash_session_id, method, amount, reference)
+          values (${sale.id}, ${cashSessionId}, ${payment.method}, ${payment.amount}, ${payment.reference ?? null})
+        `;
+      }
+      await transaction`
+        update stock_reservations set status = 'CONSUMED', consumed_at = now()
+        where id in ${transaction(reservedLines.map((line) => line.reservation_id))}
+      `;
+      await transaction`update sale_drafts set status = 'PAID' where id = ${draft.id}`;
+
+      const fiscalStatus = this.environment.FBR_MODE === 'DISABLED' ? 'NOT_REQUIRED' : 'PENDING';
+      const [fbrInvoice] = await transaction<Array<{ id: string }>>`
+        insert into fbr_invoices (sale_id, mode, status, payload)
+        values (
+          ${sale.id}, ${this.environment.FBR_MODE}, ${fiscalStatus},
+          ${transaction.json({ saleId: sale.id, invoiceNumber: invoice.invoice_number, total: draft.total, currency: 'PKR' })}
+        )
+        returning id::text
+      `;
+      if (!fbrInvoice) throw new Error('Fiscal record creation failed');
+      if (fiscalStatus === 'PENDING') {
+        await transaction`
+          insert into outbox_jobs (job_type, deduplication_key, payload)
+          values (
+            'FBR_SUBMIT', ${`sale:${sale.id}`},
+            ${transaction.json({ fbrInvoiceId: fbrInvoice.id, saleId: sale.id })}
+          )
+          on conflict (job_type, deduplication_key) where deduplication_key is not null do nothing
+        `;
+      }
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id,
+          request_id, metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId},
+          'SALE.FINALIZED', 'sale', ${sale.id}, ${input.clientRequestId},
+          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: draft.total, paymentTotal })}
+        )
+      `;
+
+      return {
+        id: sale.id,
+        invoiceNumber: invoice.invoice_number,
+        total: draft.total,
+        fiscalStatus,
+        returnLookupToken: returnLookup.token,
+        returnLookupPath: `/returns/${returnLookup.token}`,
+        idempotentReplay: false,
+      };
+    });
+  }
+}
