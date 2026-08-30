@@ -108,7 +108,7 @@ Six phases. Each has an explicit exit gate; **no phase starts until the prior ga
 
 ### Phase 0 — Make the work provable · ~1 week
 
-> **Implementation status (2026-08-30):** locally complete. `npm run verify` exits `0`; the baseline is committed on `main`. The GitHub Actions clean-clone gate is configured and awaits the first push to a remote. See `docs/PHASE_0_EXECUTION.md` for evidence and dependency decisions.
+> **Implementation status (2026-08-30):** locally complete. `npm run verify` exits `0`; the baseline is committed on `main`, and a local clean clone passes `npm ci && npm run verify`. The GitHub Actions gate is configured and awaits the first push to a remote. See `docs/PHASE_0_EXECUTION.md` for evidence and dependency decisions.
 
 Nothing else is safe to build until changes are tracked and the gate is honest.
 

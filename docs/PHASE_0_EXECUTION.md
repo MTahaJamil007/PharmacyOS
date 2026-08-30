@@ -40,13 +40,14 @@ The development plan assumed the React accessibility plugin could be added to th
 
 ## Verification evidence
 
-| Command                                    |  Exit code | Result                                         |
-| ------------------------------------------ | ---------: | ---------------------------------------------- |
-| `npm run verify` before implementation     |          1 | Failed at formatting in six files              |
-| `npm audit` during dependency installation |          0 | No known vulnerabilities                       |
-| `npm run verify` after implementation      |          0 | Format, lint, types, 10 tests, and builds pass |
-| `npm ci` in a clean checkout               | Pending CI | Enforced by GitHub Actions on the first push   |
+| Command                                    | Exit code | Result                                         |
+| ------------------------------------------ | --------: | ---------------------------------------------- |
+| `npm run verify` before implementation     |         1 | Failed at formatting in six files              |
+| `npm audit` during dependency installation |         0 | No known vulnerabilities                       |
+| `npm run verify` after implementation      |         0 | Format, lint, types, 10 tests, and builds pass |
+| First clean Windows clone gate             |         1 | Exposed missing LF rules for HTML and CSS      |
+| Repeated clean-clone gate after the fix    |         0 | Locked install and full verification passed    |
 
 ## Exit-gate interpretation
 
-Phase 0 is locally complete: `npm run verify` exited `0`. The build emitted the existing Vite advisory that the main web bundle exceeds 500 kB; code splitting is already planned for Phase 3, and the advisory is not a failed gate. The clean-clone portion remains an external CI assertion until the repository is pushed to a GitHub remote. A green local run is necessary but does not substitute for that CI evidence.
+Phase 0 is locally complete: `npm run verify` and the repeated local clean-clone gate exited `0`. The first clean clone exposed that `.gitattributes` did not force LF for HTML and CSS under Windows `core.autocrlf=true`; those rules are now explicit. The build emits the existing Vite advisory that the main web bundle exceeds 500 kB; code splitting is already planned for Phase 3, and the advisory is not a failed gate. The hosted GitHub Actions run remains external evidence until the repository is pushed to a remote.
