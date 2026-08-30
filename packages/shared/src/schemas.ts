@@ -238,6 +238,10 @@ export const approveCashVarianceSchema = z.object({
   clientRequestId: clientRequestIdSchema,
 });
 
+export const failedJobsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export type LoginRequest = z.infer<typeof loginSchema>;
 export type CreateDraftRequest = z.infer<typeof createDraftSchema>;
 export type FinalizeSaleRequest = z.infer<typeof finalizeSaleSchema>;

@@ -1,3 +1,5 @@
+import { createClientRequestId } from '@pharmacy/shared';
+
 export interface LoginResponse {
   readonly accessToken: string;
   readonly expiresAt: string;
@@ -20,6 +22,24 @@ export interface MedicineSearchResult {
   readonly availableQuantity: string;
   readonly nearestExpiry: string | null;
   readonly salePrice: string | null;
+}
+
+export interface FailedJobsResponse {
+  readonly summary: {
+    readonly failed: number;
+    readonly retryable: number;
+    readonly processing: number;
+    readonly staleProcessing: number;
+  };
+  readonly jobs: ReadonlyArray<{
+    readonly id: string;
+    readonly jobType: string;
+    readonly attempts: number;
+    readonly maxAttempts: number;
+    readonly lastError: string | null;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  }>;
 }
 
 const runtimeEnvironment = import.meta.env as unknown as { readonly VITE_API_URL?: string };
@@ -93,6 +113,10 @@ export interface ReorderSuggestion {
 
 export function getInventoryAttention(token: string): Promise<Record<string, string>> {
   return authenticatedRequest(token, '/inventory-intelligence/attention');
+}
+
+export function getFailedJobs(token: string, limit = 20): Promise<FailedJobsResponse> {
+  return authenticatedRequest(token, `/operations/jobs/failed?limit=${limit}`);
 }
 
 export async function getExpiryRisk(token: string): Promise<ExpiryRiskItem[]> {
@@ -217,7 +241,7 @@ export function requestReturn(
     `/returns/lookup/${encodeURIComponent(receiptToken)}/request`,
     {
       method: 'POST',
-      body: JSON.stringify({ ...input, clientRequestId: crypto.randomUUID() }),
+      body: JSON.stringify({ ...input, clientRequestId: createClientRequestId() }),
     },
   );
 }
@@ -301,7 +325,7 @@ export async function getPendingCashVariances(token: string): Promise<CashSessio
 export function openCashSession(token: string, openingFloat: string): Promise<CashSessionSummary> {
   return authenticatedRequest(token, '/cash-sessions/open', {
     method: 'POST',
-    body: JSON.stringify({ openingFloat, clientRequestId: crypto.randomUUID() }),
+    body: JSON.stringify({ openingFloat, clientRequestId: createClientRequestId() }),
   });
 }
 
@@ -316,7 +340,7 @@ export function addCashMovement(
 ): Promise<{ readonly session: CashSessionSummary }> {
   return authenticatedRequest(token, `/cash-sessions/${sessionId}/movements`, {
     method: 'POST',
-    body: JSON.stringify({ ...input, clientRequestId: crypto.randomUUID() }),
+    body: JSON.stringify({ ...input, clientRequestId: createClientRequestId() }),
   });
 }
 
@@ -328,7 +352,7 @@ export function closeCashSession(
 ): Promise<CashSessionSummary> {
   return authenticatedRequest(token, `/cash-sessions/${sessionId}/close`, {
     method: 'POST',
-    body: JSON.stringify({ countedCash, closingNotes, clientRequestId: crypto.randomUUID() }),
+    body: JSON.stringify({ countedCash, closingNotes, clientRequestId: createClientRequestId() }),
   });
 }
 
@@ -339,7 +363,7 @@ export function approveCashVariance(
 ): Promise<CashSessionSummary> {
   return authenticatedRequest(token, `/cash-sessions/${sessionId}/approve-variance`, {
     method: 'POST',
-    body: JSON.stringify({ notes, clientRequestId: crypto.randomUUID() }),
+    body: JSON.stringify({ notes, clientRequestId: createClientRequestId() }),
   });
 }
 
@@ -430,7 +454,7 @@ export function finalizeCashSale(
     body: JSON.stringify({
       cashSessionId,
       draftId,
-      clientRequestId: crypto.randomUUID(),
+      clientRequestId: createClientRequestId(),
       payments: [{ method: 'CASH', amount }],
     }),
   });

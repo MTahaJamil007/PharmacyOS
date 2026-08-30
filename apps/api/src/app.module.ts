@@ -10,6 +10,7 @@ import { PosModule } from './pos/pos.module.js';
 import { BudgetRegimenModule } from './budget-regimen/budget-regimen.module.js';
 import { IntelligenceModule } from './intelligence/intelligence.module.js';
 import { OwnerAiModule } from './owner-ai/owner-ai.module.js';
+import { JobsModule } from './operations/jobs.module.js';
 import { ProcurementModule } from './procurement/procurement.module.js';
 import { ReturnsModule } from './returns/returns.module.js';
 import { CashSessionsModule } from './cash-sessions/cash-sessions.module.js';
@@ -26,6 +27,7 @@ import { CashSessionsModule } from './cash-sessions/cash-sessions.module.js';
     BudgetRegimenModule,
     ReturnsModule,
     OwnerAiModule,
+    JobsModule,
     CashSessionsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],

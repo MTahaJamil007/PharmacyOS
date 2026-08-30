@@ -1,10 +1,12 @@
 FROM node:24.19.0-bookworm-slim AS build
+ENV HUSKY=0
 WORKDIR /app
 COPY . .
 RUN npm ci && npm run build:packages && npm run build --workspace @pharmacy/worker
 
 FROM node:24.19.0-bookworm-slim AS runtime
 ENV NODE_ENV=production
+ENV HUSKY=0
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/worker/package.json apps/worker/package.json

@@ -1,0 +1,12 @@
+FROM postgres:18.4-alpine3.23
+
+RUN apk add --no-cache age su-exec tzdata util-linux \
+  && addgroup -S -g 10001 backup \
+  && adduser -S -D -H -u 10001 -G backup backup
+
+COPY infra/docker/backup-entrypoint.sh /usr/local/bin/backup-entrypoint
+COPY infra/docker/backup-service.sh /usr/local/bin/backup-service
+RUN chmod 0555 /usr/local/bin/backup-entrypoint /usr/local/bin/backup-service
+
+ENTRYPOINT ["/usr/local/bin/backup-entrypoint"]
+CMD ["daemon"]

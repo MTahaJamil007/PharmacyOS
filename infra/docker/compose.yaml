@@ -6,15 +6,22 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: pharmacy_os
-      POSTGRES_USER: pharmacy_app
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the Compose environment file}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in the Compose environment file}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U pharmacy_app -d pharmacy_os']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d pharmacy_os']
       interval: 5s
       timeout: 3s
       retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { cpus: '1.50', memory: 2G }
+    pids_limit: 256
     networks: [backend]
 
   redis:
@@ -37,6 +44,29 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits: { cpus: '0.25', memory: 192M }
+    pids_limit: 128
+    networks: [backend]
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    restart: 'no'
+    env_file: ../../.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_APP_PASSWORD}@postgres:5432/pharmacy_os
+      DATABASE_ADMIN_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/pharmacy_os
+    command: ['node', 'packages/database/dist/migrate.js']
+    depends_on:
+      postgres: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: '1.00', memory: 512M }
+    pids_limit: 128
     networks: [backend]
 
   api:
@@ -46,17 +76,32 @@ services:
     restart: unless-stopped
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_PASSWORD}@postgres:5432/pharmacy_os
+      NODE_ENV: production
+      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_APP_PASSWORD}@postgres:5432/pharmacy_os
+      DATABASE_ADMIN_URL: postgres://pharmacy_app:${POSTGRES_APP_PASSWORD}@postgres:5432/pharmacy_os
       REDIS_URL: redis://redis:6379
       HOST: 0.0.0.0
       API_PORT: 3000
+      WEB_ORIGIN: https://${PHARMACY_HOSTNAME:?Set PHARMACY_HOSTNAME in the Compose environment file}
+      TRUST_PROXY: 'true'
     depends_on:
-      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/api/v1/health/ready']
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: '1.00', memory: 768M }
+    pids_limit: 256
     networks: [backend]
 
   worker:
@@ -66,10 +111,69 @@ services:
     restart: unless-stopped
     env_file: ../../.env
     environment:
-      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_PASSWORD}@postgres:5432/pharmacy_os
+      NODE_ENV: production
+      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_APP_PASSWORD}@postgres:5432/pharmacy_os
+      DATABASE_ADMIN_URL: postgres://pharmacy_app:${POSTGRES_APP_PASSWORD}@postgres:5432/pharmacy_os
       REDIS_URL: redis://redis:6379
+      WORKER_HEALTH_FILE: /tmp/pharmacy-worker-health
     depends_on:
-      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('node:fs');try{const age=Date.now()-fs.statSync('/tmp/pharmacy-worker-health').mtimeMs;process.exit(age<120000?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: '1.00', memory: 1G }
+    pids_limit: 256
+    networks: [backend]
+
+  backup:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.backup
+    restart: unless-stopped
+    environment:
+      DATABASE_ADMIN_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/pharmacy_os
+      DATABASE_URL: postgres://pharmacy_app:${POSTGRES_APP_PASSWORD}@postgres:5432/pharmacy_os
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?Set BACKUP_AGE_RECIPIENT in the Compose environment file}
+      BACKUP_AGE_IDENTITY_FILE: /run/secrets/backup_age_identity
+      BACKUP_SCHEDULE_HOUR: ${BACKUP_SCHEDULE_HOUR:-1}
+      BACKUP_TIMEZONE: ${BACKUP_TIMEZONE:-Asia/Karachi}
+      BACKUP_RUN_ON_START: ${BACKUP_RUN_ON_START:-true}
+      RESTORE_DRILL_DAY: ${RESTORE_DRILL_DAY:-0}
+      RESTORE_DRILL_DATABASE: pharmacy_os_restore_drill
+    secrets:
+      - backup_age_identity
+    volumes:
+      - backup-data:/backups
+      - type: bind
+        source: ${BACKUP_EXTERNAL_PATH:?Set BACKUP_EXTERNAL_PATH in the Compose environment file}
+        target: /external-backups
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'test -f /tmp/pharmacy-backup-health && test $$(($$(date +%s) - $$(stat -c %Y /tmp/pharmacy-backup-health))) -lt 1200',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: '0.50', memory: 512M }
+    pids_limit: 128
     networks: [backend]
 
   web:
@@ -79,14 +183,38 @@ services:
       args:
         VITE_API_URL: /api/v1
     restart: unless-stopped
+    environment:
+      PHARMACY_HOSTNAME: ${PHARMACY_HOSTNAME:?Set PHARMACY_HOSTNAME in the Compose environment file}
     ports:
-      - '${HTTP_PORT:-8080}:80'
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
     depends_on:
       api: { condition: service_healthy }
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'wget -qO- --header="Host: $${PHARMACY_HOSTNAME}" http://127.0.0.1/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: '0.25', memory: 128M }
+    pids_limit: 128
     networks: [backend]
 
 volumes:
+  backup-data:
+  caddy-config:
+  caddy-data:
   postgres-data:
+
+secrets:
+  backup_age_identity:
+    file: ${BACKUP_AGE_IDENTITY_FILE:?Set BACKUP_AGE_IDENTITY_FILE in the Compose environment file}
 
 networks:
   backend:

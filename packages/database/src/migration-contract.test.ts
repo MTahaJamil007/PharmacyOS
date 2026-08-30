@@ -16,6 +16,12 @@ const posMigrationPath = join(
   'migrations',
   '002_pos_transaction_foundation.sql',
 );
+const workerReliabilityMigrationPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'migrations',
+  '007_phase1_worker_reliability.sql',
+);
 
 describe('initial migration contract', () => {
   it('encodes the non-negotiable database invariants', async () => {
@@ -35,5 +41,13 @@ describe('initial migration contract', () => {
     expect(sql).toContain('on conflict (branch_id, business_date)');
     expect(sql).toContain('last_value = invoice_counters.last_value + 1');
     expect(sql).toContain('next_invoice_number');
+  });
+
+  it('indexes stale and failed outbox-job operational queries', async () => {
+    const sql = (await readFile(workerReliabilityMigrationPath, 'utf8')).toLowerCase();
+    expect(sql).toContain('outbox_jobs_stale_processing_idx');
+    expect(sql).toContain("where status = 'processing'");
+    expect(sql).toContain('outbox_jobs_failed_created_idx');
+    expect(sql).toContain("where status = 'failed'");
   });
 });

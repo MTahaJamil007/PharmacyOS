@@ -22,6 +22,7 @@ const environmentSchema = z.object({
   SESSION_TTL_MINUTES: z.coerce.number().int().min(5).max(720).default(30),
   RESERVATION_TTL_MINUTES: z.coerce.number().int().min(1).max(30).default(8),
   WORKER_ID: z.string().min(1).default('worker-local-1'),
+  WORKER_HEALTH_FILE: z.string().default(''),
   FBR_MODE: z
     .enum(['DISABLED', 'SANDBOX', 'PRAL_DI_API', 'LICENSED_INTEGRATOR_API', 'WINDOWS_IMS_BRIDGE'])
     .default('DISABLED'),

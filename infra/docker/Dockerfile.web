@@ -1,4 +1,5 @@
 FROM node:24.19.0-bookworm-slim AS build
+ENV HUSKY=0
 WORKDIR /app
 ARG VITE_API_URL=/api/v1
 ENV VITE_API_URL=$VITE_API_URL

@@ -5,6 +5,7 @@
 .git
 .env
 .env.*
+infra/docker/secrets
 .npm-cache*
 backups
 *.log

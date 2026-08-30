@@ -2,6 +2,7 @@ import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
 
 import { retryDelaySeconds } from './backoff.js';
+import { WorkerHeartbeat } from './heartbeat.js';
 
 interface OutboxJob {
   readonly id: string;
@@ -20,17 +21,23 @@ export class DurableWorker {
   constructor(
     private readonly database: Database,
     private readonly environment: Environment,
+    private readonly heartbeat = new WorkerHeartbeat(environment.WORKER_HEALTH_FILE),
   ) {}
 
   async run(signal: AbortSignal): Promise<void> {
     process.stdout.write(`Worker ${this.environment.WORKER_ID} started\n`);
     while (!signal.aborted) {
-      if (Date.now() - this.lastScheduleCheckAt >= 60_000) {
-        await this.enqueueOperationalJobs();
-        this.lastScheduleCheckAt = Date.now();
+      try {
+        if (Date.now() - this.lastScheduleCheckAt >= 60_000) {
+          await this.runMaintenance();
+        }
+        const processed = await this.processNext();
+        await this.heartbeat.touch(this.lastScheduleCheckAt === 0);
+        if (!processed) await this.pause(750, signal);
+      } catch (error) {
+        this.reportError('worker loop', error);
+        await this.pause(2_000, signal);
       }
-      const processed = await this.processNext();
-      if (!processed) await this.pause(750, signal);
     }
   }
 
@@ -41,12 +48,21 @@ export class DurableWorker {
     `;
     if (!job) return false;
 
-    const [attempt] = await this.database<Array<{ id: string }>>`
-      insert into job_attempts (outbox_job_id, worker_id, attempt_number)
-      values (${job.id}, ${this.environment.WORKER_ID}, ${job.attempts})
-      returning id::text
-    `;
-    if (!attempt) throw new Error(`Could not record attempt for outbox job ${job.id}`);
+    let attempt: { readonly id: string };
+    try {
+      const [recordedAttempt] = await this.database<Array<{ id: string }>>`
+        insert into job_attempts (outbox_job_id, worker_id, attempt_number)
+        values (${job.id}, ${this.environment.WORKER_ID}, ${job.attempts})
+        returning id::text
+      `;
+      if (!recordedAttempt) throw new Error(`Could not record attempt for outbox job ${job.id}`);
+      attempt = recordedAttempt;
+    } catch (error) {
+      await this.releaseClaimAfterAttemptFailure(job, error).catch((releaseError: unknown) => {
+        this.reportError(`release outbox job ${job.id} after attempt-record failure`, releaseError);
+      });
+      throw error;
+    }
 
     let outcome: JobOutcome;
     try {
@@ -54,11 +70,12 @@ export class DurableWorker {
     } catch (error) {
       outcome = {
         status: 'RETRYABLE',
-        error: error instanceof Error ? error.message : 'Unknown worker failure',
+        error: this.errorMessage(error),
       };
     }
 
     await this.database.begin(async (transaction) => {
+      const exhausted = job.attempts >= job.max_attempts;
       if (outcome.status === 'COMPLETED') {
         await transaction`
           update outbox_jobs
@@ -66,7 +83,6 @@ export class DurableWorker {
           where id = ${job.id} and locked_by = ${this.environment.WORKER_ID}
         `;
       } else {
-        const exhausted = job.attempts >= job.max_attempts;
         const delay = retryDelaySeconds(job.attempts);
         await transaction`
           update outbox_jobs
@@ -78,7 +94,7 @@ export class DurableWorker {
       }
       await transaction`
         update job_attempts
-        set finished_at = now(), outcome = ${outcome.status},
+        set finished_at = now(), outcome = ${outcome.status === 'COMPLETED' ? 'COMPLETED' : exhausted ? 'FAILED' : 'RETRYABLE'},
             error_message = ${outcome.status === 'RETRYABLE' ? outcome.error : null}
         where id = ${attempt.id}
       `;
@@ -170,6 +186,13 @@ export class DurableWorker {
   }
 
   private async enqueueOperationalJobs(): Promise<void> {
+    const minute = new Date().toISOString().slice(0, 16);
+    await this.database`
+      insert into outbox_jobs (job_type, deduplication_key, payload, priority)
+      values ('EXPIRE_RESERVATIONS', ${`reservation-expiry:${minute}`}, '{}'::jsonb, 20)
+      on conflict (job_type, deduplication_key) where deduplication_key is not null do nothing
+    `;
+
     const branches = await this.database<Array<{ id: string; local_date: string }>>`
       select id::text, (now() at time zone timezone)::date::text as local_date
       from branches where is_active = true order by id
@@ -430,7 +453,10 @@ export class DurableWorker {
               (select coalesce(sum(reservations.quantity), 0)
                 from stock_reservations reservations join sale_draft_items draft_items
                   on draft_items.id = reservations.sale_draft_item_id
-                where draft_items.medicine_id = policies.medicine_id and reservations.status = 'ACTIVE') reserved_stock
+                join sale_drafts drafts on drafts.id = draft_items.sale_draft_id
+                where drafts.branch_id = policies.branch_id
+                  and draft_items.medicine_id = policies.medicine_id
+                  and reservations.status = 'ACTIVE' and reservations.expires_at > now()) reserved_stock
             from inventory_batches where branch_id = policies.branch_id
               and medicine_id = policies.medicine_id and deleted_at is null
           ) stock on true
@@ -508,6 +534,79 @@ export class DurableWorker {
         `;
       }
     });
+  }
+
+  private async runMaintenance(): Promise<void> {
+    try {
+      const reclaimed = await this.reclaimStaleJobs();
+      if (reclaimed > 0) {
+        process.stderr.write(`Reclaimed ${reclaimed} stale outbox job(s)\n`);
+      }
+    } catch (error) {
+      this.reportError('stale outbox-job reaper', error);
+    }
+
+    try {
+      await this.enqueueOperationalJobs();
+    } catch (error) {
+      this.reportError('operational job scheduler', error);
+    } finally {
+      this.lastScheduleCheckAt = Date.now();
+    }
+  }
+
+  private async reclaimStaleJobs(): Promise<number> {
+    return this.database.begin(async (transaction) => {
+      const staleJobs = await transaction<Array<{ id: string }>>`
+        select id::text
+        from outbox_jobs
+        where status = 'PROCESSING' and locked_at < now() - interval '5 minutes'
+        order by locked_at, id
+        limit 100
+        for update skip locked
+      `;
+      if (staleJobs.length === 0) return 0;
+
+      const jobIds = staleJobs.map((job) => job.id);
+      await transaction`
+        update outbox_jobs
+        set status = case when attempts >= max_attempts then 'FAILED' else 'RETRYABLE' end,
+            available_at = now(), locked_at = null, locked_by = null,
+            last_error = concat_ws(E'\n', nullif(last_error, ''), 'Worker lock expired after 5 minutes')
+        where id in ${transaction(jobIds)}
+      `;
+      await transaction`
+        update job_attempts attempts
+        set finished_at = now(),
+            outcome = case when jobs.attempts >= jobs.max_attempts then 'FAILED' else 'RETRYABLE' end,
+            error_message = 'Worker lock expired after 5 minutes'
+        from outbox_jobs jobs
+        where attempts.outbox_job_id = jobs.id
+          and attempts.outbox_job_id in ${transaction(jobIds)}
+          and attempts.finished_at is null
+      `;
+      return staleJobs.length;
+    });
+  }
+
+  private async releaseClaimAfterAttemptFailure(job: OutboxJob, error: unknown): Promise<void> {
+    const exhausted = job.attempts >= job.max_attempts;
+    await this.database`
+      update outbox_jobs
+      set status = ${exhausted ? 'FAILED' : 'RETRYABLE'}, available_at = now(),
+          locked_at = null, locked_by = null,
+          last_error = ${`Could not record worker attempt: ${this.errorMessage(error)}`}
+      where id = ${job.id} and status = 'PROCESSING'
+        and locked_by = ${this.environment.WORKER_ID}
+    `;
+  }
+
+  private errorMessage(error: unknown): string {
+    return (error instanceof Error ? error.message : 'Unknown worker failure').slice(0, 4_000);
+  }
+
+  private reportError(context: string, error: unknown): void {
+    process.stderr.write(`[worker] ${context} failed: ${this.errorMessage(error)}\n`);
   }
 
   private pause(milliseconds: number, signal: AbortSignal): Promise<void> {

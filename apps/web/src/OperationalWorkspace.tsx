@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PERMISSIONS } from '@pharmacy/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
@@ -9,6 +10,7 @@ import {
   calculateBudgetRegimen,
   closeCashSession,
   getExpiryRisk,
+  getFailedJobs,
   getInventoryAttention,
   getCurrentCashSession,
   getPendingCashVariances,
@@ -885,11 +887,20 @@ function ReturnLookupScreen(): React.JSX.Element {
 }
 
 function OwnerAssistant(): React.JSX.Element {
-  const token = usePharmacyStore((state) => state.session?.accessToken ?? '');
+  const session = usePharmacyStore((state) => state.session);
+  const token = session?.accessToken ?? '';
+  const canViewSystemHealth =
+    session?.user.permissions.includes(PERMISSIONS.SETTINGS_MANAGE_SYSTEM) ?? false;
   const [selected, setSelected] = useState(0);
   const [answer, setAnswer] = useState<OwnerAnswer | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const failedJobs = useQuery({
+    queryKey: ['operations', 'failed-jobs'],
+    queryFn: () => getFailedJobs(token),
+    enabled: canViewSystemHealth && Boolean(token),
+    refetchInterval: 60_000,
+  });
   const current = ownerQuestions[selected] ?? ownerQuestions[0];
   const ask = async (): Promise<void> => {
     if (!current) return;
@@ -916,6 +927,48 @@ function OwnerAssistant(): React.JSX.Element {
           </p>
         </div>
       </section>
+      {canViewSystemHealth ? (
+        <section className="job-health-panel" aria-label="Background job health">
+          <div className="attention-ledger">
+            <article
+              className={
+                failedJobs.data?.summary.failed ? 'attention-cell critical' : 'attention-cell'
+              }
+            >
+              <span>Failed jobs</span>
+              <strong>{failedJobs.data?.summary.failed ?? '—'}</strong>
+            </article>
+            <article className="attention-cell warning">
+              <span>Retrying</span>
+              <strong>{failedJobs.data?.summary.retryable ?? '—'}</strong>
+            </article>
+            <article className="attention-cell">
+              <span>Processing</span>
+              <strong>{failedJobs.data?.summary.processing ?? '—'}</strong>
+            </article>
+            <article
+              className={
+                failedJobs.data?.summary.staleProcessing
+                  ? 'attention-cell critical'
+                  : 'attention-cell'
+              }
+            >
+              <span>Stale locks</span>
+              <strong>{failedJobs.data?.summary.staleProcessing ?? '—'}</strong>
+            </article>
+          </div>
+          {failedJobs.error ? (
+            <p className="inline-error">Background job status is unavailable.</p>
+          ) : failedJobs.data?.jobs[0] ? (
+            <p className="job-health-latest">
+              Latest failure: <strong>{failedJobs.data.jobs[0].jobType}</strong> ·{' '}
+              {failedJobs.data.jobs[0].lastError ?? 'No error detail was recorded'}
+            </p>
+          ) : (
+            <p className="job-health-latest">No failed background jobs require review.</p>
+          )}
+        </section>
+      ) : null}
       <section className="assistant-layout">
         <aside className="question-rail">
           <p className="eyebrow">Suggested questions</p>

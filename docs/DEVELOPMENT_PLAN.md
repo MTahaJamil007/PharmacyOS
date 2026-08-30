@@ -126,6 +126,8 @@ Nothing else is safe to build until changes are tracked and the gate is honest.
 
 ### Phase 1 — Make the pilot possible · ~2 weeks
 
+> **Execution status (2026-08-30):** implementation and repository verification are complete. The operational exit gate remains open pending a clean Docker host, trusted second LAN terminal, sale/receipt hardware check, and a live encrypted restore drill. See `PHASE_1_EXECUTION.md`.
+
 Everything here is a hard blocker. None of it is feature work.
 
 **1.1 The LAN crypto crash (B1) — do this first.**

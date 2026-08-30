@@ -10,4 +10,6 @@ coverage/
 .DS_Store
 Thumbs.db
 backups/
+infra/docker/secrets/*
+!infra/docker/secrets/.gitkeep
 apps/web/.vite/
