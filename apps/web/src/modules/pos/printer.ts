@@ -35,7 +35,7 @@ function qrCommand(functionNumber: number, data: readonly number[]): number[] {
   ];
 }
 
-function receiptBytes(receipt: SaleReceipt, kickDrawer: boolean): Uint8Array {
+export function buildEscPosReceipt(receipt: SaleReceipt, kickDrawer: boolean): Uint8Array {
   const bytes: number[] = [0x1b, 0x40, 0x1b, 0x61, 0x01];
   bytes.push(...text(`${receipt.sale.branch_name}\n${receipt.sale.invoice_number}\n`));
   bytes.push(0x1b, 0x61, 0x00);
@@ -80,7 +80,7 @@ export async function printEscPosReceipt(
     throw new Error('The selected printer is not writable');
   }
   try {
-    await writer.write(receiptBytes(receipt, options.kickDrawer));
+    await writer.write(buildEscPosReceipt(receipt, options.kickDrawer));
   } finally {
     writer.releaseLock();
     await port.close();

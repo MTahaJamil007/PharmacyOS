@@ -3,7 +3,7 @@
 - **Roadmap source:** `docs/DEVELOPMENT_PLAN.md`
 - **Started:** 2026-09-01
 - **Branch:** `development`
-- **Status:** software implementation and automated gate passed locally and in hosted CI; hardware usability gate pending
+- **Status:** software and digital-simulation gates passed; physical hardware certification explicitly deferred by the user to the pilot gate
 - **Entry evidence:** Phase 2 passed in GitHub Actions run `33427582589` on commit `4f549af7fe38e0ccf4ad46402871578e18290261`.
 - **Phase 1 exception:** the user is deferring the second-LAN-terminal, printer/scanner, and external restore checks. This does not mark the Phase 1 operational gate passed.
 
@@ -41,16 +41,18 @@
 
 ## Verification evidence
 
-| Date       | Command                              | Exit | Evidence                                                                                                                                                  |
-| ---------- | ------------------------------------ | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-09-01 | `npm run verify`                     | 0    | Format, lint, all workspace type-checks, 67 unit tests, 53 PostgreSQL-backed integration tests, 7 Playwright workflows, and all production builds passed. |
-| 2026-09-01 | `npm run test:e2e`                   | 0    | 7/7 core browser workflows passed, including scanner-to-split-tender-to-reprint, persisted cart/all four F-keys, and 401 re-authentication.               |
-| 2026-09-01 | `npm test --workspace @pharmacy/web` | 0    | 7 files / 12 tests passed, including scanner timing, exact payment/change, stable checkout ID, and render recovery.                                       |
-| 2026-09-01 | GitHub Actions `Quality gate`        | 0    | Clean Ubuntu clone passed on Phase 3 commit `e6552ead8ee81157041223f036df7e65fb737f6c`; run `33439305020`.                                                |
+| Date       | Command                                                                       | Exit | Evidence                                                                                                                                                     |
+| ---------- | ----------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-09-01 | `npm run verify`                                                              | 0    | Format, lint, all workspace type-checks, 67 unit tests, 53 PostgreSQL-backed integration tests, 7 Playwright workflows, and all production builds passed.    |
+| 2026-09-01 | `npm run test:e2e`                                                            | 0    | 7/7 core browser workflows passed, including scanner-to-split-tender-to-reprint, persisted cart/all four F-keys, and 401 re-authentication.                  |
+| 2026-09-01 | `npm test --workspace @pharmacy/web`                                          | 0    | 7 files / 12 tests passed, including scanner timing, exact payment/change, stable checkout ID, and render recovery.                                          |
+| 2026-09-01 | GitHub Actions `Quality gate`                                                 | 0    | Clean Ubuntu clone passed on Phase 3 commit `e6552ead8ee81157041223f036df7e65fb737f6c`; run `33439305020`.                                                   |
+| 2026-09-01 | `npm run test:e2e -- --grep "digital gate"`                                   | 0    | 20/20 consecutive scanner-event and keyboard-only sales passed in 19.7 seconds with unique request IDs/invoices, browser print, receipt search, and reprint. |
+| 2026-09-01 | `npm test --workspace @pharmacy/web -- --run src/modules/pos/printer.test.ts` | 0    | Web Serial transport wrote ESC/POS receipt, QR data, contiguous drawer pulse, and paper-cut commands to a deterministic simulated port.                      |
 
 The production build emitted separate POS, cash, inventory, returns, budget, owner, and QR/browser chunks. Vite also reported its advisory 500 kB main-chunk warning; this is not a failed gate, and the owner and QR paths are no longer part of the POS route chunk.
 
-## Remaining objective exit evidence
+## Deferred physical evidence
 
 - Run 20 consecutive sales on the actual counter using only the selected physical scanner and keyboard.
 - Print the sale and a searched reprint on the selected 80 mm printer; confirm the configured serial baud rate and drawer pulse with the real printer/drawer combination.
@@ -59,4 +61,4 @@ The production build emitted separate POS, cash, inventory, returns, budget, own
 
 ## Exit gate
 
-The automated implementation gate passed locally and in [GitHub Actions run 33439305020](https://github.com/MTahaJamil007/PharmacyOS/actions/runs/33439305020). The roadmap's final usability gate remains an on-counter human test: a pharmacist completes 20 consecutive keyboard-and-scanner-only sales with printing and reprint working, then confirms the workflow is faster than the current system. Hardware results must be recorded here; code existence alone does not pass that gate.
+The automated implementation gate passed locally and in [GitHub Actions run 33439305020](https://github.com/MTahaJamil007/PharmacyOS/actions/runs/33439305020). On 2026-09-01, the user stated that no scanner, receipt printer, cash drawer, or pharmacist tester is available and explicitly authorized digital substitution so Phase 4 can proceed. The deterministic digital gate passed, but it does **not** prove physical device compatibility or human speed. Those checks are carried forward as mandatory Phase 5 pilot risks rather than falsely marked complete.

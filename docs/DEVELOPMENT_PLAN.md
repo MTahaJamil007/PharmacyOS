@@ -189,7 +189,7 @@ The most important phase. This is where "Implemented" becomes "proven".
 
 ### Phase 3 — Counter-grade POS · ~4 weeks
 
-> **Implementation status (2026-09-01):** software workstreams 3.1–3.7 are complete on `development`; `npm run verify` passed locally with 67 unit tests, 53 PostgreSQL-backed integration tests, 7 browser workflows, and all production builds, then GitHub Actions run `33439305020` passed from a clean clone. The roadmap exit gate remains open until the deferred counter-hardware exercise records 20 consecutive keyboard-and-scanner-only sales with printing and reprint.
+> **Implementation status (2026-09-01):** software workstreams 3.1–3.7 are complete on `development`; local and hosted gates passed, followed by a deterministic 20-sale digital scanner/keyboard/print/reprint simulation. The user has no access to the required hardware or pharmacist tester and explicitly authorized Phase 4 to proceed. Physical compatibility and human-speed validation remain unpassed and are carried to the Phase 5 pilot gate; the digital result is not represented as hardware evidence.
 
 This is where the product starts to feel better than what it replaces. A pharmacist judges a POS in the first ten minutes at the counter.
 
@@ -212,6 +212,8 @@ This is where the product starts to feel better than what it replaces. A pharmac
 ---
 
 ### Phase 4 — Beat the incumbents · ~5 weeks
+
+> **Execution status (2026-09-01):** started on `development` under the explicit Phase 3 physical-hardware waiver recorded in `PHASE_3_EXECUTION.md`. Implementation follows the dependency order: customer credit ledger → deterministic reports/dashboard → discounts/pricing/stock adjustments → administration CRUD.
 
 The three chosen must-haves. These are what legacy systems have and PharmacyOS does not.
 
