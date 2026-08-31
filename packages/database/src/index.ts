@@ -25,3 +25,5 @@ export function createDatabase(connectionString: string, options: DatabaseOption
 export async function checkDatabase(database: Database): Promise<void> {
   await database`select 1 as healthy`;
 }
+
+export { runMigrations, type MigrationRunOptions } from './migrations.js';

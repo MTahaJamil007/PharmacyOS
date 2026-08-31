@@ -15,7 +15,7 @@ PharmacyOS is a single-shop, on-premise pharmacy operations platform for Pakista
 
 ## Prerequisites
 
-- Node.js 22.12 or newer for development; the containers use the pinned Node 24 LTS image.
+- Node.js 22.22.2 or newer for development; CI and the containers use pinned Node 24.19.0.
 - npm 10.9 or newer.
 - PostgreSQL 18 with `pg_trgm`, `unaccent`, and `pgcrypto` for non-container development.
 - Docker Engine with Docker Compose for the production workflow.
