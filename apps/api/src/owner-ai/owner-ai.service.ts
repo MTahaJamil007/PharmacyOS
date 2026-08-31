@@ -16,6 +16,32 @@ import type { AiProvider } from './ai-provider.js';
 import { GeminiProvider } from './gemini.provider.js';
 import { OwnerToolsService } from './owner-tools.service.js';
 
+function normalizeNumericToken(token: string): string {
+  const negative = token.startsWith('-');
+  const unsigned = negative ? token.slice(1) : token;
+  const [integerPart = '0', fractionalPart = ''] = unsigned.split('.');
+  const integer = integerPart.replace(/^0+(?=\d)/, '') || '0';
+  const fractional = fractionalPart.replace(/0+$/, '');
+  const normalized = fractional.length > 0 ? `${integer}.${fractional}` : integer;
+  return negative && normalized !== '0' ? `-${normalized}` : normalized;
+}
+
+function numericTokens(value: string): Set<string> {
+  return new Set(
+    [...value.matchAll(/-?\d+(?:\.\d+)?/g)].map((match) => normalizeNumericToken(match[0])),
+  );
+}
+
+function assertNumericClaimsAreGrounded(
+  explanation: string,
+  facts: unknown,
+  dataBasis: string,
+): void {
+  const permitted = numericTokens(`${JSON.stringify(facts)}\n${dataBasis}`);
+  const unsupported = [...numericTokens(explanation)].filter((token) => !permitted.has(token));
+  if (unsupported.length > 0) throw new Error('AI_UNSUPPORTED_NUMERIC_CLAIM');
+}
+
 @Injectable()
 export class OwnerAiService {
   constructor(
@@ -42,7 +68,16 @@ export class OwnerAiService {
     }
 
     const started = Date.now();
-    const toolResult = await this.tools.execute(user, request);
+    let toolResult: Awaited<ReturnType<OwnerToolsService['execute']>>;
+    try {
+      toolResult = await this.tools.execute(user, request);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      await this.audit(user, request, 'FAILED', Date.now() - started, {}, 'AI_TOOL_FAILED');
+      throw new ServiceUnavailableException(
+        'Owner report is temporarily unavailable; point-of-sale remains available',
+      );
+    }
     if (!this.environment.AI_ENABLED || this.environment.AI_PROVIDER === 'disabled') {
       await this.audit(user, request, 'DISABLED', Date.now() - started, {}, null);
       return {
@@ -62,6 +97,7 @@ export class OwnerAiService {
         dataBasis: toolResult.dataBasis,
         facts: toolResult.facts,
       });
+      assertNumericClaimsAreGrounded(response.text, toolResult.facts, toolResult.dataBasis);
       await this.audit(user, request, 'SUCCEEDED', Date.now() - started, response.usage, null);
       return {
         facts: toolResult.facts,
@@ -73,8 +109,20 @@ export class OwnerAiService {
         reportPath: toolResult.reportPath,
       };
     } catch (error) {
-      const code = error instanceof Error ? error.message : 'AI_PROVIDER_FAILED';
       const status = error instanceof Error && error.name === 'AbortError' ? 'TIMED_OUT' : 'FAILED';
+      const knownCodes = new Set([
+        'AI_MALFORMED_RESPONSE',
+        'AI_PROVIDER_FAILED',
+        'AI_PROVIDER_NOT_CONFIGURED',
+        'AI_RATE_LIMITED',
+        'AI_UNSUPPORTED_NUMERIC_CLAIM',
+      ]);
+      const code =
+        status === 'TIMED_OUT'
+          ? 'AI_PROVIDER_TIMED_OUT'
+          : error instanceof Error && knownCodes.has(error.message)
+            ? error.message
+            : 'AI_PROVIDER_FAILED';
       await this.audit(user, request, status, Date.now() - started, {}, code);
       throw new ServiceUnavailableException(
         'Owner assistant explanation is unavailable; deterministic reports remain available',

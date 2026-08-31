@@ -136,7 +136,9 @@ export class PosService {
             and inventory_batches.status = 'SELLABLE'
             and inventory_batches.deleted_at is null
             and inventory_batches.current_qty > 0
-            and inventory_batches.expiry_date >= current_date
+            and inventory_batches.expiry_date >= (now() at time zone (
+              select timezone from branches where id = ${user.branchId}
+            ))::date
           order by inventory_batches.expiry_date, inventory_batches.received_at, inventory_batches.id
           limit 1
         ) prices on true
@@ -240,7 +242,9 @@ export class PosService {
             and inventory_batches.status = 'SELLABLE'
             and inventory_batches.deleted_at is null
             and inventory_batches.current_qty > 0
-            and inventory_batches.expiry_date >= current_date
+            and inventory_batches.expiry_date >= (now() at time zone (
+              select timezone from branches where id = ${user.branchId}
+            ))::date
           order by inventory_batches.id
           for update of inventory_batches
         `;

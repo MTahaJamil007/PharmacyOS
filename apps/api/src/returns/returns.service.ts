@@ -85,7 +85,9 @@ export class ReturnsService {
           branch_id, sale_id, requested_by_user_id, return_number, status, reason, client_request_id
         ) values (
           ${user.branchId}, ${sale.id}, ${user.id},
-          concat('RET-', to_char(now() at time zone 'Asia/Karachi', 'YYYYMMDD'), '-',
+          concat('RET-', to_char(now() at time zone (
+            select timezone from branches where id = ${user.branchId}
+          ), 'YYYYMMDD'), '-',
             upper(substr(encode(digest(${input.clientRequestId}, 'sha256'), 'hex'), 1, 10))),
           'REQUESTED', ${input.reason}, ${input.clientRequestId}
         ) returning id::text, return_number
@@ -200,7 +202,9 @@ export class ReturnsService {
         select return_items.id::text as return_item_id, sale_items.id::text as sale_item_id,
           sale_items.inventory_batch_id::text, return_items.quantity::text,
           return_items.disposition, return_items.refund_amount::text,
-          inventory_batches.expiry_date >= (now() at time zone 'Asia/Karachi')::date as sellable_by_date,
+          inventory_batches.expiry_date >= (now() at time zone (
+            select timezone from branches where id = ${user.branchId}
+          ))::date as sellable_by_date,
           inventory_batches.medicine_id::text, inventory_batches.purchase_order_item_id::text,
           inventory_batches.batch_number, inventory_batches.expiry_date::text,
           inventory_batches.received_at, inventory_batches.cost_price::text,

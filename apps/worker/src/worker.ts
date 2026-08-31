@@ -324,9 +324,11 @@ export class DurableWorker {
           and not exists (
             select 1 from inventory_batches join operational_intelligence_policies policies
               on policies.branch_id = inventory_batches.branch_id
+            join branches on branches.id = inventory_batches.branch_id
             where inventory_batches.id = expiry_work_items.inventory_batch_id
               and inventory_batches.current_qty > 0 and inventory_batches.deleted_at is null
-              and inventory_batches.expiry_date <= current_date + policies.expiry_moderate_days
+              and inventory_batches.expiry_date <=
+                (now() at time zone branches.timezone)::date + policies.expiry_moderate_days
           ) returning id::text
       `;
       return { workItemsRefreshed: rows.length, workItemsResolved: resolved.length };
@@ -347,9 +349,12 @@ export class DurableWorker {
             sum(sale_items.quantity) as units_sold,
             count(distinct sale_items.id) * 0.6 + sum(sale_items.quantity) * 0.4 as demand_score
           from sale_items join sales on sales.id = sale_items.sale_id
+          join branches on branches.id = sales.branch_id
           join operational_intelligence_policies policies on policies.branch_id = sales.branch_id
           where sales.branch_id = ${branchId} and sales.status <> 'VOIDED'
-            and sales.created_at >= current_date - policies.shelf_lookback_days
+            and sales.created_at >= (
+              (now() at time zone branches.timezone)::date - policies.shelf_lookback_days
+            )::timestamp at time zone branches.timezone
           group by sale_items.medicine_id
         ), ranked as (
           select demand.*, percent_rank() over (order by demand_score desc) percentile
@@ -394,7 +399,9 @@ export class DurableWorker {
             'unitsSold', units_sold, 'storageClass', storage_class,
             'securedStorageRequired', requires_secured_storage,
             'currentPriority', current_priority, 'suggestedPriority', suggested_priority
-          ), current_date
+          ), (now() at time zone (
+            select timezone from branches where id = ${branchId}
+          ))::date
         from candidates
         where current_shelf_id is null
           or current_priority - suggested_priority >= shelf_minimum_rank_improvement
@@ -414,7 +421,9 @@ export class DurableWorker {
         from sale_items join sales on sales.id = sale_items.sale_id
         join branches on branches.id = sales.branch_id
         where sales.branch_id = ${branchId} and sales.status <> 'VOIDED'
-          and sales.created_at >= current_date - 366
+          and sales.created_at >= (
+            (now() at time zone branches.timezone)::date - 366
+          )::timestamp at time zone branches.timezone
         group by sales.branch_id, sale_items.medicine_id,
           (sales.created_at at time zone branches.timezone)::date
         on conflict (branch_id, medicine_id, sales_date) do update
@@ -426,7 +435,7 @@ export class DurableWorker {
       `;
       const rows = await transaction<Array<{ id: string }>>`
         with inputs as (
-          select policies.*,
+          select policies.*, branches.timezone as branch_timezone,
             greatest(policies.lookback_days - coalesce(availability.stockout_days, 0), 1) as eligible_days,
             coalesce(availability.stockout_days, 0) as stockout_days,
             coalesce(demand.fulfilled_units, 0) as fulfilled_units,
@@ -436,20 +445,30 @@ export class DurableWorker {
             coalesce(observed.observed_lead_time_days, policies.lead_time_days) as effective_lead_time,
             coalesce(stock.near_expiry_stock, 0) as near_expiry_stock
           from reorder_policies policies
+          join branches on branches.id = policies.branch_id
           left join lateral (
             select count(*) filter (where not had_sellable_stock)::int stockout_days
             from inventory_availability_daily
             where branch_id = policies.branch_id and medicine_id = policies.medicine_id
-              and availability_date >= current_date - policies.lookback_days
+              and availability_date >=
+                (now() at time zone branches.timezone)::date - policies.lookback_days
           ) availability on true
           left join lateral (
             select sum(quantity_sold) fulfilled_units from sales_velocity_daily
             where branch_id = policies.branch_id and medicine_id = policies.medicine_id
-              and sales_date >= current_date - policies.lookback_days
+              and sales_date >=
+                (now() at time zone branches.timezone)::date - policies.lookback_days
           ) demand on true
           left join lateral (
-            select sum(current_qty) filter (where status = 'SELLABLE' and expiry_date >= current_date) sellable_stock,
-              sum(current_qty) filter (where status = 'SELLABLE' and expiry_date between current_date and current_date + 90) near_expiry_stock,
+            select sum(current_qty) filter (
+                where status = 'SELLABLE'
+                  and expiry_date >= (now() at time zone branches.timezone)::date
+              ) sellable_stock,
+              sum(current_qty) filter (
+                where status = 'SELLABLE' and expiry_date between
+                  (now() at time zone branches.timezone)::date
+                  and (now() at time zone branches.timezone)::date + 90
+              ) near_expiry_stock,
               (select coalesce(sum(reservations.quantity), 0)
                 from stock_reservations reservations join sale_draft_items draft_items
                   on draft_items.id = reservations.sale_draft_item_id
@@ -472,10 +491,16 @@ export class DurableWorker {
           select inputs.*,
             fulfilled_units / eligible_days as average_daily,
             (fulfilled_units / eligible_days) * safety_days as safety_stock,
-            (fulfilled_units / eligible_days) * effective_lead_time
-              + (fulfilled_units / eligible_days) * safety_days as calculated_reorder_point,
-            (fulfilled_units / eligible_days) * target_coverage_days
-              + (fulfilled_units / eligible_days) * safety_days as calculated_target
+            greatest(
+              (fulfilled_units / eligible_days) * effective_lead_time
+                + (fulfilled_units / eligible_days) * safety_days,
+              minimum_stock
+            ) as calculated_reorder_point,
+            greatest(
+              (fulfilled_units / eligible_days) * target_coverage_days
+                + (fulfilled_units / eligible_days) * safety_days,
+              minimum_stock
+            ) as calculated_target
           from inputs
         ), quantities as (
           select calculated.*,
@@ -499,10 +524,12 @@ export class DurableWorker {
             'safetyDays', safety_days, 'targetCoverageDays', target_coverage_days,
             'netAvailableUnits', greatest(sellable_stock - reserved_stock, 0),
             'nearExpiryStock', near_expiry_stock
-          ), current_date + 2, eligible_days, stockout_days, observed_lead_time_days,
+          ), (now() at time zone branch_timezone)::date + 2,
+          eligible_days, stockout_days, observed_lead_time_days,
           effective_lead_time, round(safety_stock, 3), round(calculated_target, 3),
           minimum_order_qty, order_multiple,
-          case when eligible_days < 14 or stockout_days > lookback_days / 3 then 'LOW'
+          case when fulfilled_units = 0 or eligible_days < 14
+              or stockout_days > lookback_days / 3 then 'LOW'
             when eligible_days >= 60 and stockout_days = 0 then 'HIGH' else 'MEDIUM' end,
           near_expiry_stock > calculated_reorder_point
         from quantities where raw_qty > 0

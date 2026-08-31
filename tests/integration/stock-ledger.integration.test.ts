@@ -399,4 +399,120 @@ describe('stock ledger integrity', () => {
     `;
     expect(counts).toEqual({ refund_count: '1', restock_movement_count: '2' });
   });
+
+  it('allows only one request for the final returnable unit and replays approval and refund', async () => {
+    const medicineId = await createMedicine(database, 'Final Returnable Unit');
+    const [batch] = await database.admin<{ id: string }[]>`
+      insert into inventory_batches (
+        branch_id, medicine_id, batch_number, expiry_date,
+        cost_price, sale_price, current_qty, status
+      ) values (
+        ${fixture.branchId}, ${medicineId}, 'FINAL-RETURNABLE', current_date + 365,
+        10, 20, 0, 'DEPLETED'
+      ) returning id::text
+    `;
+    if (!batch) throw new Error('Failed to create depleted sale batch fixture');
+    const [returnTerminal] = await database.admin<{ id: string }[]>`
+      insert into terminals (branch_id, code, name, terminal_type)
+      values (${fixture.branchId}, 'RETURN-RACE', 'Return Race', 'CASHIER') returning id::text
+    `;
+    if (!returnTerminal) throw new Error('Failed to create return-race terminal');
+    const saleFixture = await database.admin.begin(async (transaction) => {
+      const [cashSession] = await transaction<{ id: string }[]>`
+        insert into cash_sessions (branch_id, terminal_id, cashier_user_id, opening_float)
+        values (${fixture.branchId}, ${returnTerminal.id}, ${fixture.user.id}, 0)
+        returning id::text
+      `;
+      const [draft] = await transaction<{ id: string }[]>`
+        insert into sale_drafts (
+          branch_id, terminal_id, salesperson_user_id, status, subtotal, total
+        ) values (${fixture.branchId}, ${returnTerminal.id}, ${fixture.user.id}, 'PAID', 20, 20)
+        returning id::text
+      `;
+      if (!cashSession || !draft) throw new Error('Failed to create return-race transaction');
+      const [sale] = await transaction<{ id: string }[]>`
+        insert into sales (
+          branch_id, terminal_id, cashier_user_id, cash_session_id, sale_draft_id,
+          invoice_number, client_request_id, subtotal, total
+        ) values (
+          ${fixture.branchId}, ${returnTerminal.id}, ${fixture.user.id}, ${cashSession.id},
+          ${draft.id}, 'RETURN-RACE-000001', 'return-race-sale', 20, 20
+        ) returning id::text
+      `;
+      if (!sale) throw new Error('Failed to create return-race sale');
+      const [saleItem] = await transaction<{ id: string }[]>`
+        insert into sale_items (
+          sale_id, medicine_id, inventory_batch_id, quantity,
+          unit_price, unit_cost, line_total
+        ) values (${sale.id}, ${medicineId}, ${batch.id}, 1, 20, 10, 20)
+        returning id::text
+      `;
+      const [token] = await transaction<{ token: string }[]>`
+        insert into return_lookup_tokens (sale_id) values (${sale.id}) returning token::text
+      `;
+      if (!saleItem || !token) throw new Error('Failed to create return-race item and token');
+      return { saleId: sale.id, saleItemId: saleItem.id, token: token.token };
+    });
+
+    const service = new ReturnsService(database.application);
+    const requests = await runConcurrently(2, (clientIndex) =>
+      service.requestReturn(fixture.user, saleFixture.token, {
+        clientRequestId: `return-final-unit-${clientIndex}`,
+        items: [
+          {
+            disposition: 'RESTOCK_SELLABLE',
+            quantity: '1',
+            saleItemId: BigInt(saleFixture.saleItemId),
+          },
+        ],
+        reason: 'Final eligible unit race',
+      }),
+    );
+    const successful = requests.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : [],
+    );
+    expect(successful).toHaveLength(1);
+    expect(requests.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const returnId = String(successful[0]?.id);
+
+    const lookup = await service.lookup(fixture.branchId, saleFixture.token);
+    expect(lookup.items).toEqual([
+      expect.objectContaining({ eligible_quantity: '0.000', returned_quantity: '1.000' }),
+    ]);
+    await expect(service.approve(fixture.user, BigInt(returnId))).resolves.toMatchObject({
+      idempotentReplay: false,
+      status: 'APPROVED',
+    });
+    await expect(service.approve(fixture.user, BigInt(returnId))).resolves.toMatchObject({
+      idempotentReplay: true,
+      status: 'APPROVED',
+    });
+    await expect(
+      service.refund(fixture.user, BigInt(returnId), { method: 'CARD', reference: 'P0-RACE' }),
+    ).resolves.toMatchObject({ idempotentReplay: false, status: 'REFUNDED' });
+    await expect(
+      service.refund(fixture.user, BigInt(returnId), { method: 'CARD', reference: 'P0-RACE' }),
+    ).resolves.toMatchObject({ idempotentReplay: true, status: 'REFUNDED' });
+
+    const [evidence] = await database.admin<
+      Array<{
+        refund_count: string;
+        return_count: string;
+        sale_item_count: string;
+        sold_quantity: string;
+      }>
+    >`
+      select
+        (select count(*) from returns where sale_id = ${saleFixture.saleId})::text as return_count,
+        (select count(*) from refunds where return_id = ${returnId})::text as refund_count,
+        (select count(*) from sale_items where sale_id = ${saleFixture.saleId})::text as sale_item_count,
+        (select quantity::text from sale_items where id = ${saleFixture.saleItemId}) as sold_quantity
+    `;
+    expect(evidence).toEqual({
+      refund_count: '1',
+      return_count: '1',
+      sale_item_count: '1',
+      sold_quantity: '1.000',
+    });
+  });
 });

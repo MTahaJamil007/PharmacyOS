@@ -58,13 +58,22 @@ export class CatalogService {
           order by medicine_shelf_locations.is_primary desc, shelves.id limit 1) as shelf,
         coalesce((select sum(current_qty) from inventory_batches
           where medicine_id = medicines.id and branch_id = ${branchId} and current_qty > 0
-            and status = 'SELLABLE' and deleted_at is null and expiry_date >= current_date), 0)::text as "availableQuantity",
+            and status = 'SELLABLE' and deleted_at is null
+            and expiry_date >= (now() at time zone (
+              select timezone from branches where id = ${branchId}
+            ))::date), 0)::text as "availableQuantity",
         (select min(expiry_date)::text from inventory_batches
           where medicine_id = medicines.id and branch_id = ${branchId} and current_qty > 0
-            and status = 'SELLABLE' and deleted_at is null and expiry_date >= current_date) as "nearestExpiry",
+            and status = 'SELLABLE' and deleted_at is null
+            and expiry_date >= (now() at time zone (
+              select timezone from branches where id = ${branchId}
+            ))::date) as "nearestExpiry",
         (select sale_price::text from inventory_batches
           where medicine_id = medicines.id and branch_id = ${branchId} and current_qty > 0
-            and status = 'SELLABLE' and deleted_at is null and expiry_date >= current_date
+            and status = 'SELLABLE' and deleted_at is null
+            and expiry_date >= (now() at time zone (
+              select timezone from branches where id = ${branchId}
+            ))::date
           order by expiry_date, received_at, id limit 1) as "salePrice"
       from matched
       join medicines on medicines.id = matched.id

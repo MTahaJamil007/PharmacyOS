@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { appendFile, cp, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,6 +44,23 @@ describe('database-backed integration harness', () => {
 
     expect([...actual]).toEqual(expected);
     await expect(runMigrations(testDatabase.url)).resolves.toEqual([]);
+  });
+
+  it('rejects a modified migration that was already applied', async () => {
+    const temporaryDirectory = await mkdtemp(resolve(tmpdir(), 'pharmacy-migrations-'));
+    try {
+      await cp(migrationDirectory, temporaryDirectory, { recursive: true });
+      await appendFile(
+        resolve(temporaryDirectory, '001_initial_schema.sql'),
+        '\n-- deliberate checksum mismatch in disposable test copy\n',
+      );
+
+      await expect(
+        runMigrations(testDatabase.url, { directory: temporaryDirectory }),
+      ).rejects.toThrow('Applied migration 001_initial_schema.sql has been modified');
+    } finally {
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
   });
 
   it('connects with the application role but denies schema ownership', async () => {

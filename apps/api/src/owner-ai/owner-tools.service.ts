@@ -103,12 +103,15 @@ export class OwnerToolsService {
         case when coalesce(velocity.average_daily, 0) > 0
           then round(coalesce(stock.quantity, 0) / velocity.average_daily, 1)::text else null end as days_of_stock
       from reorder_policies policies join medicines on medicines.id = policies.medicine_id
+      join branches on branches.id = policies.branch_id
       left join lateral (select sum(current_qty) quantity from inventory_batches
         where branch_id = policies.branch_id and medicine_id = policies.medicine_id
-          and status = 'SELLABLE' and deleted_at is null and expiry_date >= current_date) stock on true
+          and status = 'SELLABLE' and deleted_at is null
+          and expiry_date >= (now() at time zone branches.timezone)::date) stock on true
       left join lateral (select avg(quantity_sold) average_daily from sales_velocity_daily
         where branch_id = policies.branch_id and medicine_id = policies.medicine_id
-          and sales_date >= current_date - policies.lookback_days) velocity on true
+          and sales_date >=
+            (now() at time zone branches.timezone)::date - policies.lookback_days) velocity on true
       where policies.branch_id = ${branchId} and policies.is_active
         and coalesce(stock.quantity, 0) <= policies.minimum_stock
       order by coalesce(stock.quantity, 0), medicines.name limit ${limit}
@@ -122,13 +125,15 @@ export class OwnerToolsService {
 
   private async expiryRisk(branchId: string): Promise<ToolResult> {
     const facts = await this.database<Array<Record<string, unknown>>>`
-      select case when expiry_date < current_date then 'EXPIRED'
-          when expiry_date <= current_date + 30 then 'DAYS_0_30'
-          when expiry_date <= current_date + 60 then 'DAYS_31_60'
-          when expiry_date <= current_date + 90 then 'DAYS_61_90' end as bucket,
+      select case when expiry_date < local_date then 'EXPIRED'
+          when expiry_date <= local_date + 30 then 'DAYS_0_30'
+          when expiry_date <= local_date + 60 then 'DAYS_31_60'
+          when expiry_date <= local_date + 90 then 'DAYS_61_90' end as bucket,
         count(*)::text as batch_count, coalesce(sum(current_qty * cost_price), 0)::text as value_at_risk
-      from inventory_batches where branch_id = ${branchId} and current_qty > 0 and deleted_at is null
-        and expiry_date <= current_date + 90 group by bucket order by bucket
+      from inventory_batches join branches on branches.id = inventory_batches.branch_id
+      cross join lateral (select (now() at time zone branches.timezone)::date local_date) dates
+      where inventory_batches.branch_id = ${branchId} and current_qty > 0 and deleted_at is null
+        and expiry_date <= local_date + 90 group by bucket order by bucket
     `;
     return {
       facts,
