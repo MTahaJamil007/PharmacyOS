@@ -31,7 +31,7 @@ jobs:
         run: npm ci
 
       - name: Install Chromium
-        run: npm exec playwright install --with-deps chromium
+        run: npm exec -- playwright install --with-deps chromium
 
       - name: Run quality gate
         run: npm run verify
