@@ -183,14 +183,20 @@ export class AuthService {
         display_name: string;
         password_hash: string;
         branch_id: string;
+        branch_timezone: string;
         terminal_id: string;
+        terminal_code: string;
+        terminal_name: string;
         locked_until: Date | null;
       }>
     >`
       select users.id::text as user_id, users.username, users.display_name, users.password_hash,
-        terminals.branch_id::text as branch_id, terminals.id::text as terminal_id, users.locked_until
+        terminals.branch_id::text as branch_id, branches.timezone as branch_timezone,
+        terminals.id::text as terminal_id, terminals.code as terminal_code,
+        terminals.name as terminal_name, users.locked_until
       from users
       join terminals on lower(terminals.code) = lower(${input.terminalCode}) and terminals.is_active = true
+      join branches on branches.id = terminals.branch_id and branches.is_active = true
       where lower(users.username) = lower(${input.username})
         and users.is_active = true and users.deleted_at is null
         and exists (
@@ -269,7 +275,10 @@ export class AuthService {
         username: account.username,
         displayName: account.display_name,
         branchId: account.branch_id,
+        branchTimezone: account.branch_timezone,
         terminalId: account.terminal_id,
+        terminalCode: account.terminal_code,
+        terminalName: account.terminal_name,
         permissions: permissionRows.map((permission) => permission.code),
       },
     };

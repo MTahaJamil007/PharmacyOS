@@ -64,6 +64,42 @@ export class PosService {
     @Inject(ENVIRONMENT) private readonly environment: Environment,
   ) {}
 
+  async findSales(user: AuthenticatedUser, query: string): Promise<Record<string, unknown>> {
+    const match = `%${query}%`;
+    const data = await this.database<Array<Record<string, unknown>>>`
+      select sales.id::text, sales.invoice_number, sales.total::text, sales.created_at,
+        users.display_name as cashier_name
+      from sales
+      join users on users.id = sales.cashier_user_id
+      where sales.branch_id = ${user.branchId}
+        and (${query} = '' or sales.invoice_number ilike ${match})
+      order by sales.created_at desc, sales.id desc
+      limit 20
+    `;
+    return { data };
+  }
+
+  async reprintReceipt(user: AuthenticatedUser, saleId: bigint): Promise<Record<string, unknown>> {
+    const saleIdText = saleId.toString();
+    await this.database.begin(async (transaction) => {
+      const [sale] = await transaction<Array<{ id: string }>>`
+        select id::text from sales
+        where id = ${saleIdText} and branch_id = ${user.branchId}
+      `;
+      if (!sale) throw new NotFoundException('Sale receipt not found');
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id, metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId},
+          'RECEIPT.REPRINTED', 'sale', ${sale.id},
+          ${transaction.json({ source: 'POS_RECEIPT_SEARCH' })}
+        )
+      `;
+    });
+    return this.getReceipt(user, saleId);
+  }
+
   async getReceipt(user: AuthenticatedUser, saleId: bigint): Promise<Record<string, unknown>> {
     const [sale] = await this.database<Array<Record<string, unknown>>>`
       select sales.id::text, sales.invoice_number, sales.subtotal::text,
@@ -94,7 +130,7 @@ export class PosService {
       where sale_items.sale_id = ${saleId.toString()} order by sale_items.id
     `;
     const payments = await this.database<Array<Record<string, unknown>>>`
-      select method, amount::text, reference from payments
+      select method, amount::text, tendered_amount::text, change_amount::text, reference from payments
       where sale_id = ${saleId.toString()} and status = 'CAPTURED' order by id
     `;
     return {
@@ -515,9 +551,21 @@ export class PosService {
       }
 
       for (const payment of input.payments) {
+        const tenderedAmount =
+          payment.method === 'CASH' ? (payment.tenderedAmount ?? payment.amount) : null;
+        const changeAmount =
+          tenderedAmount === null
+            ? null
+            : minorUnitsToMoney(
+                moneyToMinorUnits(tenderedAmount) - moneyToMinorUnits(payment.amount),
+              );
         await transaction`
-          insert into payments (sale_id, cash_session_id, method, amount, reference)
-          values (${sale.id}, ${cashSessionId}, ${payment.method}, ${payment.amount}, ${payment.reference ?? null})
+          insert into payments (
+            sale_id, cash_session_id, method, amount, tendered_amount, change_amount, reference
+          ) values (
+            ${sale.id}, ${cashSessionId}, ${payment.method}, ${payment.amount},
+            ${tenderedAmount}, ${changeAmount}, ${payment.reference ?? null}
+          )
         `;
       }
       await transaction`

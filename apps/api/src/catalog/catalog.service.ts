@@ -13,6 +13,7 @@ export interface MedicineSearchResult {
   readonly shelf: string | null;
   readonly availableQuantity: string;
   readonly nearestExpiry: string | null;
+  readonly daysToExpiry: number | null;
   readonly salePrice: string | null;
 }
 
@@ -68,6 +69,14 @@ export class CatalogService {
             and expiry_date >= (now() at time zone (
               select timezone from branches where id = ${branchId}
             ))::date) as "nearestExpiry",
+        (select (min(expiry_date) - (now() at time zone (
+            select timezone from branches where id = ${branchId}
+          ))::date)::integer from inventory_batches
+          where medicine_id = medicines.id and branch_id = ${branchId} and current_qty > 0
+            and status = 'SELLABLE' and deleted_at is null
+            and expiry_date >= (now() at time zone (
+              select timezone from branches where id = ${branchId}
+            ))::date) as "daysToExpiry",
         (select sale_price::text from inventory_batches
           where medicine_id = medicines.id and branch_id = ${branchId} and current_qty > 0
             and status = 'SELLABLE' and deleted_at is null

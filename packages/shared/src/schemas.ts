@@ -63,14 +63,40 @@ export const finalizeSaleSchema = z.object({
   clientRequestId: clientRequestIdSchema,
   payments: z
     .array(
-      z.object({
-        method: z.enum(PAYMENT_METHODS),
-        amount: positiveMoneySchema,
-        reference: z.string().trim().max(120).optional(),
-      }),
+      z
+        .object({
+          method: z.enum(PAYMENT_METHODS),
+          amount: positiveMoneySchema,
+          tenderedAmount: positiveMoneySchema.optional(),
+          reference: z.string().trim().max(120).optional(),
+        })
+        .superRefine((payment, context) => {
+          if (payment.method !== 'CASH' && payment.tenderedAmount !== undefined) {
+            context.addIssue({
+              code: 'custom',
+              message: 'Tendered amount is valid only for cash payments',
+              path: ['tenderedAmount'],
+            });
+          }
+          if (
+            payment.method === 'CASH' &&
+            payment.tenderedAmount !== undefined &&
+            moneyToMinorUnits(payment.tenderedAmount) < moneyToMinorUnits(payment.amount)
+          ) {
+            context.addIssue({
+              code: 'custom',
+              message: 'Cash tendered cannot be less than the allocated cash amount',
+              path: ['tenderedAmount'],
+            });
+          }
+        }),
     )
     .min(1)
     .max(5),
+});
+
+export const saleReceiptSearchSchema = z.object({
+  query: z.string().trim().max(64).default(''),
 });
 
 export const paginationSchema = z.object({

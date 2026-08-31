@@ -1,5 +1,20 @@
-import { BadRequestException, Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
-import { createDraftSchema, finalizeSaleSchema, idSchema, PERMISSIONS } from '@pharmacy/shared';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
+import {
+  createDraftSchema,
+  finalizeSaleSchema,
+  idSchema,
+  PERMISSIONS,
+  saleReceiptSearchSchema,
+} from '@pharmacy/shared';
 
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
@@ -8,6 +23,17 @@ import { PosService } from './pos.service.js';
 @Controller('pos')
 export class PosController {
   constructor(@Inject(PosService) private readonly posService: PosService) {}
+
+  @Get('sales')
+  @RequirePermissions(PERMISSIONS.SALE_FINALIZE_PAYMENT)
+  async sales(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: unknown,
+  ): Promise<Record<string, unknown>> {
+    const input = saleReceiptSearchSchema.safeParse(query);
+    if (!input.success) throw new BadRequestException(input.error.flatten());
+    return this.posService.findSales(user, input.data.query);
+  }
 
   @Get('sales/:saleId/receipt')
   @RequirePermissions(PERMISSIONS.SALE_FINALIZE_PAYMENT)
@@ -18,6 +44,17 @@ export class PosController {
     const id = idSchema.safeParse(saleId);
     if (!id.success) throw new BadRequestException('Invalid sale id');
     return this.posService.getReceipt(user, id.data);
+  }
+
+  @Post('sales/:saleId/reprint')
+  @RequirePermissions(PERMISSIONS.SALE_FINALIZE_PAYMENT)
+  async reprintReceipt(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('saleId') saleId: string,
+  ): Promise<Record<string, unknown>> {
+    const id = idSchema.safeParse(saleId);
+    if (!id.success) throw new BadRequestException('Invalid sale id');
+    return this.posService.reprintReceipt(user, id.data);
   }
 
   @Post('drafts')

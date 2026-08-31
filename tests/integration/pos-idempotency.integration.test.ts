@@ -350,4 +350,89 @@ describe('POS endpoint idempotency', () => {
       total: '0.02',
     });
   });
+
+  it('persists exact split tenders and audits receipt reprints', async () => {
+    const draftResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: {
+        items: [{ medicineId: fixture.medicineId, quantity: '1' }],
+        terminalId: fixture.terminalId,
+      },
+      url: '/api/v1/pos/drafts',
+    });
+    expect(draftResponse.statusCode).toBe(201);
+    const draftId = requiredString(recordBody(draftResponse.body), 'id');
+    const reserveResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      url: `/api/v1/pos/drafts/${draftId}/reserve`,
+    });
+    expect(reserveResponse.statusCode).toBe(201);
+
+    const finalizeResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: {
+        cashSessionId: fixture.cashSessionId,
+        clientRequestId: 'phase3-split-tender-sale',
+        draftId,
+        payments: [
+          { amount: '40.00', method: 'CASH', tenderedAmount: '50.00' },
+          { amount: '60.00', method: 'CARD', reference: 'CARD-AUTH-1' },
+        ],
+      },
+      url: '/api/v1/pos/sales/finalize',
+    });
+    expect(finalizeResponse.statusCode).toBe(201);
+    const saleId = requiredString(recordBody(finalizeResponse.body), 'id');
+
+    const searchResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'GET',
+      url: '/api/v1/pos/sales?query=000',
+    });
+    expect(searchResponse.statusCode).toBe(200);
+    const searchData = recordBody(searchResponse.body).data;
+    expect(Array.isArray(searchData)).toBe(true);
+    expect(searchData).toEqual(expect.arrayContaining([expect.objectContaining({ id: saleId })]));
+
+    const reprintResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      url: `/api/v1/pos/sales/${saleId}/reprint`,
+    });
+    expect(reprintResponse.statusCode).toBe(201);
+    const reprint = recordBody(reprintResponse.body);
+    expect(reprint.payments).toEqual([
+      expect.objectContaining({
+        amount: '40.00',
+        change_amount: '10.00',
+        method: 'CASH',
+        tendered_amount: '50.00',
+      }),
+      expect.objectContaining({
+        amount: '60.00',
+        change_amount: null,
+        method: 'CARD',
+        tendered_amount: null,
+      }),
+    ]);
+
+    const [evidence] = await database.admin<
+      Array<{ audit_count: string; captured_total: string; change_total: string }>
+    >`
+      select
+        (select count(*) from audit_events
+          where event_type = 'RECEIPT.REPRINTED' and entity_id = ${saleId})::text as audit_count,
+        sum(amount)::text as captured_total,
+        coalesce(sum(change_amount), 0)::text as change_total
+      from payments where sale_id = ${saleId}
+    `;
+    expect(evidence).toEqual({
+      audit_count: '1',
+      captured_total: '100.00',
+      change_total: '10.00',
+    });
+  });
 });

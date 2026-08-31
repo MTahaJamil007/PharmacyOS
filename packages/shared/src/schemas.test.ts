@@ -53,4 +53,26 @@ describe('shared request magnitude boundaries', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('validates cash tendering without allowing tender metadata on non-cash payments', () => {
+    const base = { cashSessionId: '1', clientRequestId: 'phase3-payment', draftId: '1' };
+    expect(
+      finalizeSaleSchema.safeParse({
+        ...base,
+        payments: [{ amount: '40.00', method: 'CASH', tenderedAmount: '50.00' }],
+      }).success,
+    ).toBe(true);
+    expect(
+      finalizeSaleSchema.safeParse({
+        ...base,
+        payments: [{ amount: '40.00', method: 'CASH', tenderedAmount: '39.99' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      finalizeSaleSchema.safeParse({
+        ...base,
+        payments: [{ amount: '40.00', method: 'CARD', tenderedAmount: '40.00' }],
+      }).success,
+    ).toBe(false);
+  });
 });
