@@ -24,11 +24,16 @@ export function scaledIntegerToDecimal(value: bigint, scale: number): string {
   return `${negative ? '-' : ''}${whole.toString()}.${fraction}`;
 }
 
+function roundQuotientHalfAwayFromZero(numerator: bigint, denominator: bigint): bigint {
+  if (denominator <= 0n) throw new Error('Rounding denominator must be positive');
+  const half = denominator / 2n;
+  return numerator >= 0n ? (numerator + half) / denominator : (numerator - half) / denominator;
+}
+
 export function multiplyMoneyByQuantity(money: string, quantity: string): string {
   const minorUnits = decimalToScaledInteger(money, 2);
   const milliUnits = decimalToScaledInteger(quantity, 3);
   const numerator = minorUnits * milliUnits;
-  const roundedMinorUnits =
-    numerator >= 0n ? (numerator + 500n) / 1000n : (numerator - 500n) / 1000n;
+  const roundedMinorUnits = roundQuotientHalfAwayFromZero(numerator, 1000n);
   return scaledIntegerToDecimal(roundedMinorUnits, 2);
 }

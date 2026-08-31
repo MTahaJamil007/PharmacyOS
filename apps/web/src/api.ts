@@ -384,6 +384,12 @@ export interface SaleDraftResult {
   readonly total: string;
 }
 
+export interface ReservedSaleDraft extends SaleDraftResult {
+  readonly reservationCount: number;
+  readonly reservedUntil: string;
+  readonly subtotal: string;
+}
+
 export interface FinalizedSale {
   readonly id: string;
   readonly invoiceNumber: string;
@@ -439,7 +445,7 @@ export function createSaleDraft(
   });
 }
 
-export function reserveSaleDraft(token: string, draftId: string): Promise<Record<string, unknown>> {
+export function reserveSaleDraft(token: string, draftId: string): Promise<ReservedSaleDraft> {
   return authenticatedRequest(token, `/pos/drafts/${draftId}/reserve`, { method: 'POST' });
 }
 

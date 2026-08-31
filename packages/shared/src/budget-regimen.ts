@@ -1,4 +1,8 @@
-import { decimalToScaledInteger, scaledIntegerToDecimal } from './decimal.js';
+import {
+  decimalToScaledInteger,
+  multiplyMoneyByQuantity,
+  scaledIntegerToDecimal,
+} from './decimal.js';
 import { minorUnitsToMoney, moneyToMinorUnits } from './money.js';
 
 export interface PricedRegimenItem {
@@ -50,13 +54,14 @@ function calculateAtDays(
       throw new Error('Regimen quantities must be positive');
     const required = dailyQuantity * BigInt(days);
     const sellable = ceilDivide(required, increment) * increment;
-    const lineCost = ceilDivide(moneyToMinorUnits(item.unitPrice) * sellable, 1000n);
+    const requiredQuantity = scaledIntegerToDecimal(sellable, 3);
+    const lineCost = multiplyMoneyByQuantity(item.unitPrice, requiredQuantity);
     return {
       medicineId: item.medicineId,
       medicineName: item.medicineName,
-      requiredQuantity: scaledIntegerToDecimal(sellable, 3),
+      requiredQuantity,
       unitPrice: item.unitPrice,
-      lineCost: minorUnitsToMoney(lineCost),
+      lineCost,
       priceVersion: item.priceVersion,
     };
   });

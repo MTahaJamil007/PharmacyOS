@@ -265,4 +265,86 @@ describe('POS endpoint idempotency', () => {
     expect(statuses.filter((status) => status === 409)).toHaveLength(7);
     expect(evidence).toEqual({ active_quantity: '1.000', current_qty: '1.000' });
   });
+
+  it('derives the persisted subtotal from separately rounded FEFO sale lines', async () => {
+    const [medicine] = await database.admin<{ id: string }[]>`
+      insert into medicines (name, pack_size, unit_name)
+      values ('Fractional Split Medicine', 1, 'unit') returning id::text
+    `;
+    if (!medicine) throw new Error('Failed to create fractional medicine');
+    await database.admin.begin(async (transaction) => {
+      for (const batchNumber of ['FRACTION-A', 'FRACTION-B']) {
+        const [batch] = await transaction<{ id: string }[]>`
+          insert into inventory_batches (
+            branch_id, medicine_id, batch_number, expiry_date,
+            cost_price, sale_price, current_qty, status
+          ) values (
+            ${fixture.branchId}, ${medicine.id}, ${batchNumber}, current_date + 365,
+            0.001, 0.01, 0.500, 'SELLABLE'
+          ) returning id::text
+        `;
+        if (!batch) throw new Error('Failed to create fractional batch');
+        await transaction`
+          insert into stock_movements (
+            branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after, reason
+          ) values (
+            ${fixture.branchId}, ${batch.id}, 'ADJUSTMENT_IN', 0.500, 0.500,
+            'Fractional integration fixture'
+          )
+        `;
+      }
+    });
+
+    const draftResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: {
+        items: [{ medicineId: medicine.id, quantity: '1' }],
+        terminalId: fixture.terminalId,
+      },
+      url: '/api/v1/pos/drafts',
+    });
+    expect(draftResponse.statusCode).toBe(201);
+    const draftBody = recordBody(draftResponse.body);
+    expect(draftBody.total).toBe('0.01');
+    const draftId = requiredString(draftBody, 'id');
+
+    const reserveResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      url: `/api/v1/pos/drafts/${draftId}/reserve`,
+    });
+    expect(reserveResponse.statusCode).toBe(201);
+    expect(recordBody(reserveResponse.body).total).toBe('0.02');
+
+    const finalizeResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: {
+        cashSessionId: fixture.cashSessionId,
+        clientRequestId: 'phase2-fractional-split-sale',
+        draftId,
+        payments: [{ amount: '0.02', method: 'CASH' }],
+      },
+      url: '/api/v1/pos/sales/finalize',
+    });
+    expect(finalizeResponse.statusCode).toBe(201);
+    expect(recordBody(finalizeResponse.body).total).toBe('0.02');
+
+    const [evidence] = await database.admin<
+      Array<{ line_count: string; line_subtotal: string; subtotal: string; total: string }>
+    >`
+      select sales.subtotal::text, sales.total::text, count(sale_items.id)::text as line_count,
+        sum(sale_items.line_total)::text as line_subtotal
+      from sales join sale_items on sale_items.sale_id = sales.id
+      where sales.client_request_id = 'phase2-fractional-split-sale'
+      group by sales.id
+    `;
+    expect(evidence).toEqual({
+      line_count: '2',
+      line_subtotal: '0.02',
+      subtotal: '0.02',
+      total: '0.02',
+    });
+  });
 });

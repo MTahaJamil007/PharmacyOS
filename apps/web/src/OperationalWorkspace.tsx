@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { PERMISSIONS } from '@pharmacy/shared';
+import { decimalToScaledInteger, PERMISSIONS } from '@pharmacy/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
@@ -29,15 +29,10 @@ import {
   type ReturnLookup,
   type ReturnCommandResult,
 } from './api';
+import { formatPkrMoney } from './money';
 import { usePharmacyStore } from './store';
 
 export type OperationalView = 'cash' | 'inventory' | 'budget' | 'returns' | 'owner';
-
-const currency = new Intl.NumberFormat('en-PK', {
-  style: 'currency',
-  currency: 'PKR',
-  minimumFractionDigits: 0,
-});
 
 const ownerQuestions: ReadonlyArray<{ readonly question: string; readonly tool: OwnerTool }> = [
   { question: 'What is most likely to run out soon?', tool: 'get_purchase_suggestions' },
@@ -48,6 +43,14 @@ const ownerQuestions: ReadonlyArray<{ readonly question: string; readonly tool: 
     tool: 'get_shelf_recommendations',
   },
 ];
+
+function isPositiveQuantity(value: string): boolean {
+  try {
+    return decimalToScaledInteger(value, 3) > 0n;
+  } catch {
+    return false;
+  }
+}
 
 function WorkspaceHeader({ view }: { readonly view: OperationalView }): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
@@ -86,7 +89,7 @@ function MoneyCell({ label, value }: { readonly label: string; readonly value: s
   return (
     <div>
       <dt>{label}</dt>
-      <dd>{currency.format(Number(value))}</dd>
+      <dd>{formatPkrMoney(value)}</dd>
     </div>
   );
 }
@@ -196,8 +199,8 @@ function CashSessionScreen(): React.JSX.Element {
             </dl>
             {cashSession.status === 'CLOSING' ? (
               <p className="variance-alert">
-                Counted {currency.format(Number(cashSession.countedCash))}; variance{' '}
-                {currency.format(Number(cashSession.variance))}. Independent approval is required.
+                Counted {formatPkrMoney(cashSession.countedCash)}; variance{' '}
+                {formatPkrMoney(cashSession.variance)}. Independent approval is required.
               </p>
             ) : null}
           </article>
@@ -299,7 +302,7 @@ function CashSessionScreen(): React.JSX.Element {
                 </button>
                 <small>
                   Variance approval threshold:{' '}
-                  {currency.format(Number(cashSession.varianceApprovalThreshold))}
+                  {formatPkrMoney(cashSession.varianceApprovalThreshold)}
                 </small>
               </article>
             </div>
@@ -322,10 +325,10 @@ function CashSessionScreen(): React.JSX.Element {
                 <div>
                   <strong>{item.cashierName}</strong>
                   <small>
-                    Expected {currency.format(Number(item.expectedCash))} · counted{' '}
-                    {currency.format(Number(item.countedCash))}
+                    Expected {formatPkrMoney(item.expectedCash)} · counted{' '}
+                    {formatPkrMoney(item.countedCash)}
                   </small>
-                  <p>Variance: {currency.format(Number(item.variance))}</p>
+                  <p>Variance: {formatPkrMoney(item.variance)}</p>
                 </div>
                 <label>
                   Approval note
@@ -454,7 +457,7 @@ function InventoryIntelligence(): React.JSX.Element {
                 </div>
                 <div>
                   <small>{item.quantity} units</small>
-                  <b>{currency.format(Number(item.value_at_risk))}</b>
+                  <b>{formatPkrMoney(item.value_at_risk)}</b>
                 </div>
               </div>
             ))}
@@ -594,7 +597,7 @@ function BudgetCalculator(): React.JSX.Element {
                   <strong>{line.medicine.name}</strong>
                   <small>
                     {line.medicine.strength} · current unit price{' '}
-                    {currency.format(Number(line.medicine.salePrice ?? 0))}
+                    {formatPkrMoney(line.medicine.salePrice ?? '0.00')}
                   </small>
                 </div>
                 <label>
@@ -646,17 +649,17 @@ function BudgetCalculator(): React.JSX.Element {
           {result?.completeDays === 0 ? (
             <p>
               Budget is below one complete day. One complete day costs{' '}
-              {currency.format(Number(result.oneDayCost))}.
+              {formatPkrMoney(result.oneDayCost)}.
             </p>
           ) : null}
           <dl>
             <div>
               <dt>Total</dt>
-              <dd>{result ? currency.format(Number(result.totalCost)) : '—'}</dd>
+              <dd>{result ? formatPkrMoney(result.totalCost) : '—'}</dd>
             </div>
             <div>
               <dt>Budget left</dt>
-              <dd>{result ? currency.format(Number(result.remainder)) : '—'}</dd>
+              <dd>{result ? formatPkrMoney(result.remainder) : '—'}</dd>
             </div>
           </dl>
           {(result?.lines ?? []).map((line) => (
@@ -709,7 +712,7 @@ function ReturnLookupScreen(): React.JSX.Element {
   const submitRequest = async (): Promise<void> => {
     if (!result) return;
     const items = result.items
-      .filter((item) => Number(quantities[item.id] ?? 0) > 0)
+      .filter((item) => isPositiveQuantity(quantities[item.id] ?? '0'))
       .map((item) => ({
         saleItemId: item.id,
         quantity: quantities[item.id] ?? '0',
@@ -792,7 +795,7 @@ function ReturnLookupScreen(): React.JSX.Element {
               <p className="eyebrow">Original finalized sale</p>
               <h2>{result.sale.invoice_number}</h2>
             </div>
-            <strong>{currency.format(Number(result.sale.total))}</strong>
+            <strong>{formatPkrMoney(result.sale.total)}</strong>
           </header>
           <div className="data-list">
             {result.items.map((item) => (
@@ -853,7 +856,7 @@ function ReturnLookupScreen(): React.JSX.Element {
               <div className="return-status-actions">
                 <strong>Status: {returnCommand.status}</strong>
                 {returnCommand.refundAmount ? (
-                  <span>Refunded {currency.format(Number(returnCommand.refundAmount))}</span>
+                  <span>Refunded {formatPkrMoney(returnCommand.refundAmount)}</span>
                 ) : null}
                 {returnCommand.status === 'REQUESTED' && canApprove ? (
                   <button

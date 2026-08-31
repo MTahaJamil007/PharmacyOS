@@ -3,6 +3,7 @@ import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
 import {
   decimalToScaledInteger,
+  minorUnitsToMoney,
   moneyToMinorUnits,
   multiplyMoneyByQuantity,
   scaledIntegerToDecimal,
@@ -223,6 +224,7 @@ export class PosService {
 
       const expiresAt = new Date(Date.now() + this.environment.RESERVATION_TTL_MINUTES * 60_000);
       let reservationCount = 0;
+      const reservationLineTotals: string[] = [];
       for (const item of items) {
         const lockedBatches = await transaction<BatchRow[]>`
           select inventory_batches.id::text as batch_id,
@@ -285,6 +287,7 @@ export class PosService {
             ) values (${item.id}, ${batch.batch_id}, ${quantity}, 'ACTIVE', ${expiresAt})
           `;
           reservationCount += 1;
+          reservationLineTotals.push(multiplyMoneyByQuantity(item.unit_price, quantity));
           required -= allocated;
         }
         if (required > 0n) {
@@ -296,9 +299,18 @@ export class PosService {
         }
       }
 
+      const reservedSubtotal = sumMoney(reservationLineTotals);
+      const reservedTotalMinor =
+        moneyToMinorUnits(reservedSubtotal) - moneyToMinorUnits(draft.discount_total);
+      if (reservedTotalMinor < 0n) {
+        throw new ConflictException('Sale discount cannot exceed the reserved subtotal');
+      }
+      const reservedTotal = minorUnitsToMoney(reservedTotalMinor);
+
       await transaction`
         update sale_drafts
-        set status = 'RESERVED', sent_at = coalesce(sent_at, now()), reserved_until = ${expiresAt}
+        set status = 'RESERVED', sent_at = coalesce(sent_at, now()), reserved_until = ${expiresAt},
+          subtotal = ${reservedSubtotal}, total = ${reservedTotal}
         where id = ${draft.id}
       `;
       await transaction`
@@ -315,6 +327,8 @@ export class PosService {
         status: 'RESERVED',
         reservationCount,
         reservedUntil: expiresAt.toISOString(),
+        subtotal: reservedSubtotal,
+        total: reservedTotal,
       };
     });
   }
@@ -384,14 +398,6 @@ export class PosService {
         throw new ConflictException('Draft reservation is missing or expired');
       }
 
-      const paymentTotal = sumMoney(input.payments.map((payment) => payment.amount));
-      if (moneyToMinorUnits(paymentTotal) !== moneyToMinorUnits(draft.total)) {
-        throw new ConflictException({
-          message: 'Payment total must equal sale total',
-          expected: draft.total,
-        });
-      }
-
       const reservedLines = await transaction<ReservedLineRow[]>`
         select stock_reservations.id::text as reservation_id,
           sale_draft_items.id::text as draft_item_id,
@@ -429,6 +435,25 @@ export class PosService {
         }
       }
 
+      const finalizedLines = reservedLines.map((line) => ({
+        ...line,
+        lineTotal: multiplyMoneyByQuantity(line.unit_price, line.quantity),
+      }));
+      const finalizedSubtotal = sumMoney(finalizedLines.map((line) => line.lineTotal));
+      const finalizedTotalMinor =
+        moneyToMinorUnits(finalizedSubtotal) - moneyToMinorUnits(draft.discount_total);
+      if (finalizedTotalMinor < 0n) {
+        throw new ConflictException('Sale discount cannot exceed the finalized subtotal');
+      }
+      const finalizedTotal = minorUnitsToMoney(finalizedTotalMinor);
+      const paymentTotal = sumMoney(input.payments.map((payment) => payment.amount));
+      if (moneyToMinorUnits(paymentTotal) !== finalizedTotalMinor) {
+        throw new ConflictException({
+          message: 'Payment total must equal sale total',
+          expected: finalizedTotal,
+        });
+      }
+
       const [invoice] = await transaction<Array<{ invoice_number: string }>>`
         select next_invoice_number(${user.branchId}) as invoice_number
       `;
@@ -440,7 +465,7 @@ export class PosService {
         ) values (
           ${user.branchId}, ${user.terminalId}, ${user.id}, ${cashSessionId}, ${draft.id},
           ${invoice.invoice_number}, ${input.clientRequestId}, 'PAID',
-          ${draft.subtotal}, ${draft.discount_total}, 0, ${draft.total}
+          ${finalizedSubtotal}, ${draft.discount_total}, 0, ${finalizedTotal}
         )
         returning id::text
       `;
@@ -451,15 +476,14 @@ export class PosService {
       `;
       if (!returnLookup) throw new Error('Receipt return lookup token creation failed');
 
-      for (const line of reservedLines) {
-        const lineTotal = multiplyMoneyByQuantity(line.unit_price, line.quantity);
+      for (const line of finalizedLines) {
         const [saleItem] = await transaction<Array<{ id: string }>>`
           insert into sale_items (
             sale_id, medicine_id, inventory_batch_id, quantity,
             unit_price, unit_cost, discount_amount, tax_amount, line_total
           ) values (
             ${sale.id}, ${line.medicine_id}, ${line.inventory_batch_id}, ${line.quantity},
-            ${line.unit_price}, ${line.cost_price}, 0, 0, ${lineTotal}
+            ${line.unit_price}, ${line.cost_price}, 0, 0, ${line.lineTotal}
           )
           returning id::text
         `;
@@ -496,14 +520,18 @@ export class PosService {
         update stock_reservations set status = 'CONSUMED', consumed_at = now()
         where id in ${transaction(reservedLines.map((line) => line.reservation_id))}
       `;
-      await transaction`update sale_drafts set status = 'PAID' where id = ${draft.id}`;
+      await transaction`
+        update sale_drafts set status = 'PAID', subtotal = ${finalizedSubtotal},
+          total = ${finalizedTotal}
+        where id = ${draft.id}
+      `;
 
       const fiscalStatus = this.environment.FBR_MODE === 'DISABLED' ? 'NOT_REQUIRED' : 'PENDING';
       const [fbrInvoice] = await transaction<Array<{ id: string }>>`
         insert into fbr_invoices (sale_id, mode, status, payload)
         values (
           ${sale.id}, ${this.environment.FBR_MODE}, ${fiscalStatus},
-          ${transaction.json({ saleId: sale.id, invoiceNumber: invoice.invoice_number, total: draft.total, currency: 'PKR' })}
+          ${transaction.json({ saleId: sale.id, invoiceNumber: invoice.invoice_number, total: finalizedTotal, currency: 'PKR' })}
         )
         returning id::text
       `;
@@ -525,14 +553,14 @@ export class PosService {
         ) values (
           ${user.branchId}, ${user.id}, ${user.terminalId},
           'SALE.FINALIZED', 'sale', ${sale.id}, ${input.clientRequestId},
-          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: draft.total, paymentTotal })}
+          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: finalizedTotal, paymentTotal })}
         )
       `;
 
       return {
         id: sale.id,
         invoiceNumber: invoice.invoice_number,
-        total: draft.total,
+        total: finalizedTotal,
         fiscalStatus,
         returnLookupToken: returnLookup.token,
         returnLookupPath: `/returns/${returnLookup.token}`,

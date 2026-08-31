@@ -97,7 +97,7 @@ export class ProcurementService {
                 * purchase_order_items.base_units_per_order_unit,
                 0
               ),
-            2
+            8
           ) as effective_unit_cost,
           purchase_orders.received_at as observed_at,
           purchase_orders.id::text as source_id,
@@ -114,7 +114,7 @@ export class ProcurementService {
         select distinct on (supplier_quotes.supplier_id)
           supplier_quotes.supplier_id,
           suppliers.name as supplier_name,
-          round(supplier_quotes.quoted_unit_cost / supplier_quotes.base_units_per_quote_unit, 2) as effective_unit_cost,
+          round(supplier_quotes.quoted_unit_cost / supplier_quotes.base_units_per_quote_unit, 8) as effective_unit_cost,
           supplier_quotes.created_at as observed_at,
           supplier_quotes.id::text as source_id,
           'CURRENT_QUOTE'::text as source_type,
@@ -255,7 +255,7 @@ export class ProcurementService {
 
       const [cost] = await transaction<Array<{ unit_cost: string }>>`
         with candidates as (
-          select round(quoted_unit_cost / base_units_per_quote_unit, 2) as unit_cost, created_at
+          select round(quoted_unit_cost / base_units_per_quote_unit, 8) as unit_cost, created_at
           from supplier_quotes
           where branch_id = ${user.branchId} and supplier_id = ${supplierId}
             and medicine_id = ${suggestion.medicine_id}
@@ -263,7 +263,7 @@ export class ProcurementService {
           union all
           select round(
               greatest(items.ordered_qty * items.unit_cost - items.line_discount, 0)
-              / nullif((items.ordered_qty + items.bonus_qty) * items.base_units_per_order_unit, 0), 2
+              / nullif((items.ordered_qty + items.bonus_qty) * items.base_units_per_order_unit, 0), 8
             ), orders.received_at
           from purchase_order_items items
           join purchase_orders orders on orders.id = items.purchase_order_id
@@ -592,7 +592,7 @@ export class ProcurementService {
               * base_units_per_order_unit)::text as received_base_qty,
             round(
               greatest(ordered_qty * unit_cost - line_discount, 0)
-              / nullif((ordered_qty + bonus_qty) * base_units_per_order_unit, 0), 2
+              / nullif((ordered_qty + bonus_qty) * base_units_per_order_unit, 0), 8
             )::text as effective_cost,
             base_units_per_order_unit::text
         `;

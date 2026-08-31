@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { decimalToScaledInteger } from '@pharmacy/shared';
 
 import { previewMedicines } from './preview-data';
 
@@ -9,7 +10,8 @@ describe('preview catalog', () => {
     );
     expect(
       previewMedicines.every(
-        (medicine) => medicine.shelf !== null && Number(medicine.availableQuantity) > 0,
+        (medicine) =>
+          medicine.shelf !== null && decimalToScaledInteger(medicine.availableQuantity, 3) > 0n,
       ),
     ).toBe(true);
   });

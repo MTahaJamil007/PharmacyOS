@@ -155,7 +155,7 @@ export class OwnerToolsService {
   private async supplierPrices(branchId: string, medicineId?: string): Promise<ToolResult> {
     if (!medicineId) throw new Error('MEDICINE_ID_REQUIRED');
     const facts = await this.database<Array<Record<string, unknown>>>`
-      select suppliers.name, round(quotes.quoted_unit_cost / quotes.base_units_per_quote_unit, 2)::text as effective_unit_cost,
+      select suppliers.name, round(quotes.quoted_unit_cost / quotes.base_units_per_quote_unit, 8)::text as effective_unit_cost,
         quotes.valid_from::text, quotes.valid_until::text, quotes.source
       from supplier_quotes quotes join suppliers on suppliers.id = quotes.supplier_id
       where quotes.branch_id = ${branchId} and quotes.medicine_id = ${medicineId}

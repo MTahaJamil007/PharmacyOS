@@ -12,16 +12,11 @@ import {
   type FinalizedSale,
   type SaleReceipt,
 } from './api';
+import { calculateCartLineTotal, calculateCartTotal, formatPkrMoney } from './money';
 import { previewMedicines } from './preview-data';
 import { usePharmacyStore } from './store';
 
 const previewMode = import.meta.env.VITE_PREVIEW_MODE === 'true';
-const currency = new Intl.NumberFormat('en-PK', {
-  style: 'currency',
-  currency: 'PKR',
-  minimumFractionDigits: 0,
-});
-
 function PrintableReceipt({
   receipt,
   onClose,
@@ -68,7 +63,7 @@ function PrintableReceipt({
                   </small>
                 </td>
                 <td>{item.quantity}</td>
-                <td>{currency.format(Number(item.line_total))}</td>
+                <td>{formatPkrMoney(item.line_total)}</td>
               </tr>
             ))}
           </tbody>
@@ -76,15 +71,15 @@ function PrintableReceipt({
         <dl>
           <div>
             <dt>Subtotal</dt>
-            <dd>{currency.format(Number(receipt.sale.subtotal))}</dd>
+            <dd>{formatPkrMoney(receipt.sale.subtotal)}</dd>
           </div>
           <div>
             <dt>Discount</dt>
-            <dd>{currency.format(Number(receipt.sale.discount_total))}</dd>
+            <dd>{formatPkrMoney(receipt.sale.discount_total)}</dd>
           </div>
           <div>
             <dt>Total</dt>
-            <dd>{currency.format(Number(receipt.sale.total))}</dd>
+            <dd>{formatPkrMoney(receipt.sale.total)}</dd>
           </div>
         </dl>
         <div className="receipt-qr">
@@ -153,7 +148,13 @@ export function PosWorkspace(): React.JSX.Element {
       )
     : (search.data ?? []);
   const total = useMemo(
-    () => cart.reduce((sum, line) => sum + Number(line.medicine.salePrice ?? 0) * line.quantity, 0),
+    () =>
+      calculateCartTotal(
+        cart.map((line) => ({
+          quantity: line.quantity,
+          unitPrice: line.medicine.salePrice,
+        })),
+      ),
     [cart],
   );
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
@@ -175,12 +176,12 @@ export function PosWorkspace(): React.JSX.Element {
           quantity: line.quantity.toString(),
         })),
       );
-      await reserveSaleDraft(session.accessToken, draft.id);
+      const reservation = await reserveSaleDraft(session.accessToken, draft.id);
       const finalized = await finalizeCashSale(
         session.accessToken,
         cashSession.id,
         draft.id,
-        draft.total,
+        reservation.total,
       );
       setReceipt(finalized);
       setPrintReceipt(await getSaleReceipt(session.accessToken, finalized.id));
@@ -286,7 +287,7 @@ export function PosWorkspace(): React.JSX.Element {
                     <em>{medicine.nearestExpiry ?? 'No stock'}</em>
                   </span>
                   <span className="result-price">
-                    {currency.format(Number(medicine.salePrice ?? 0))}
+                    {formatPkrMoney(medicine.salePrice ?? '0.00')}
                     <small>Space to add</small>
                   </span>
                 </button>
@@ -337,8 +338,7 @@ export function PosWorkspace(): React.JSX.Element {
                   <div>
                     <strong>{line.medicine.name}</strong>
                     <small>
-                      {line.medicine.strength} ·{' '}
-                      {currency.format(Number(line.medicine.salePrice ?? 0))}
+                      {line.medicine.strength} · {formatPkrMoney(line.medicine.salePrice ?? '0.00')}
                     </small>
                   </div>
                   <div className="quantity-control">
@@ -356,7 +356,14 @@ export function PosWorkspace(): React.JSX.Element {
                       +
                     </button>
                   </div>
-                  <b>{currency.format(Number(line.medicine.salePrice ?? 0) * line.quantity)}</b>
+                  <b>
+                    {formatPkrMoney(
+                      calculateCartLineTotal({
+                        quantity: line.quantity,
+                        unitPrice: line.medicine.salePrice,
+                      }),
+                    )}
+                  </b>
                 </div>
               ))
             )}
@@ -364,7 +371,7 @@ export function PosWorkspace(): React.JSX.Element {
           <div className="cart-summary">
             <div>
               <span>Subtotal</span>
-              <strong>{currency.format(total)}</strong>
+              <strong>{formatPkrMoney(total)}</strong>
             </div>
             <div>
               <span>Discount</span>
@@ -372,7 +379,7 @@ export function PosWorkspace(): React.JSX.Element {
             </div>
             <div className="grand-total">
               <span>Estimated total</span>
-              <strong>{currency.format(total)}</strong>
+              <strong>{formatPkrMoney(total)}</strong>
             </div>
             <p>Final price and FEFO batches are confirmed by the server.</p>
           </div>
@@ -387,7 +394,7 @@ export function PosWorkspace(): React.JSX.Element {
                 <span>Sale finalized</span>
                 <strong>{receipt.invoiceNumber}</strong>
                 <small>
-                  {currency.format(Number(receipt.total))} · fiscal {receipt.fiscalStatus}
+                  {formatPkrMoney(receipt.total)} · fiscal {receipt.fiscalStatus}
                 </small>
                 <a href="#returns">Return token {receipt.returnLookupToken.slice(0, 8)}…</a>
               </div>
