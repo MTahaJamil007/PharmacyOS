@@ -3,7 +3,7 @@
 - **Roadmap source:** `docs/DEVELOPMENT_PLAN.md`
 - **Started:** 2026-09-01
 - **Branch:** `development`
-- **Status:** software implementation and automated gate passed locally; hardware usability gate pending
+- **Status:** software implementation and automated gate passed locally and in hosted CI; hardware usability gate pending
 - **Entry evidence:** Phase 2 passed in GitHub Actions run `33427582589` on commit `4f549af7fe38e0ccf4ad46402871578e18290261`.
 - **Phase 1 exception:** the user is deferring the second-LAN-terminal, printer/scanner, and external restore checks. This does not mark the Phase 1 operational gate passed.
 
@@ -12,7 +12,7 @@
 | Order | Workstream           | Required evidence                                                                                                |
 | ----- | -------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | 1     | Scanner and keyboard | Buffered wedge scan, debounced search, Enter-add, quantity multiplier/delete, and working F-key actions          |
-| 2     | Payment reality      | Exact tendered/change arithmetic and up to five split tenders persisted with the sale                            |
+| 2     | Payment reality      | Exact tendered/change arithmetic and cash/card/bank split tenders persisted with the sale                        |
 | 3     | Printing and reprint | 80 mm browser fallback, local ESC/POS adapter boundary, drawer kick, sale lookup/reprint, and visible QR failure |
 | 4     | Counter resilience   | Persisted cart, render recovery, re-authentication, stable retry ID, and receipt-fetch recovery                  |
 | 5     | Truthful state       | Live clock, measured LAN state, real draft/reservation state, and branch-date expiry thresholds                  |
@@ -46,6 +46,7 @@
 | 2026-09-01 | `npm run verify`                     | 0    | Format, lint, all workspace type-checks, 67 unit tests, 53 PostgreSQL-backed integration tests, 7 Playwright workflows, and all production builds passed. |
 | 2026-09-01 | `npm run test:e2e`                   | 0    | 7/7 core browser workflows passed, including scanner-to-split-tender-to-reprint, persisted cart/all four F-keys, and 401 re-authentication.               |
 | 2026-09-01 | `npm test --workspace @pharmacy/web` | 0    | 7 files / 12 tests passed, including scanner timing, exact payment/change, stable checkout ID, and render recovery.                                       |
+| 2026-09-01 | GitHub Actions `Quality gate`        | 0    | Clean Ubuntu clone passed on Phase 3 commit `e6552ead8ee81157041223f036df7e65fb737f6c`; run `33439305020`.                                                |
 
 The production build emitted separate POS, cash, inventory, returns, budget, owner, and QR/browser chunks. Vite also reported its advisory 500 kB main-chunk warning; this is not a failed gate, and the owner and QR paths are no longer part of the POS route chunk.
 
@@ -58,4 +59,4 @@ The production build emitted separate POS, cash, inventory, returns, budget, own
 
 ## Exit gate
 
-The automated implementation gate passed locally. Hosted CI evidence will be recorded after the Phase 3 commits are pushed. The roadmap's final usability gate remains an on-counter human test: a pharmacist completes 20 consecutive keyboard-and-scanner-only sales with printing and reprint working, then confirms the workflow is faster than the current system. Hardware results must be recorded here; code existence alone does not pass that gate.
+The automated implementation gate passed locally and in [GitHub Actions run 33439305020](https://github.com/MTahaJamil007/PharmacyOS/actions/runs/33439305020). The roadmap's final usability gate remains an on-counter human test: a pharmacist completes 20 consecutive keyboard-and-scanner-only sales with printing and reprint working, then confirms the workflow is faster than the current system. Hardware results must be recorded here; code existence alone does not pass that gate.
