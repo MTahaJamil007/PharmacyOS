@@ -2,7 +2,7 @@
 
 - **Roadmap source:** `docs/DEVELOPMENT_PLAN.md`
 - **Started:** 2026-08-31
-- **Status:** in progress
+- **Status:** implementation and local exit suite complete; hosted CI confirmation pending
 - **Sequence exception:** the user explicitly directed Phase 2 execution before the remaining Phase 1 on-site checks scheduled for 2026-09-01. Phase 1 remains open; this exception does not mark its exit gate passed.
 
 ## Execution order
@@ -30,26 +30,56 @@
 
 ## Execution evidence
 
-| Command                                 | Exit code | Result                                                                                         |
-| --------------------------------------- | --------: | ---------------------------------------------------------------------------------------------- |
-| `npm view` for Phase 2 harness packages |         0 | Resolved current stable exact versions on 2026-08-31                                           |
-| Root harness type-check and lint        |         0 | New Vitest, migration, rollback, and concurrency code passed                                   |
-| `npm run test:integration`              |         0 | Disposable PostgreSQL 18 started; four DB-backed tests passed; container removed automatically |
-| Root `npm run typecheck`                |         0 | Root harness and all six workspaces passed after the transactional changes                     |
-| Migration + ledger integration tests    |         0 | Two files and nine tests passed against disposable PostgreSQL 18                               |
-| `npm run test:integration`              |         0 | Three files and 11 tests passed; migration, POS races, refunds, and ledgers were green         |
-| `npm run test:unit`                     |         0 | 27 tests passed across API, web, worker, config, database, and shared workspaces               |
-| Root `npm run typecheck`                |         0 | Root harness and all workspaces passed after the money-boundary changes                        |
-| `npm run test:integration`              |         0 | Four files and 13 tests passed, including sub-paisa receipt and fractional FEFO sale totals    |
-| Root `npm run typecheck`                |         0 | Root harness and every workspace passed after auth/session changes                             |
-| Auth integration test                   |         0 | Four scenarios passed against PostgreSQL 18                                                    |
-| `npm run test:integration`              |         0 | Five files and 17 tests passed across migrations, POS, ledger, money, refunds, and auth        |
-| `npm run test:unit`                     |         0 | 35 tests passed across all six workspaces                                                      |
-| `npm run lint`                          |         0 | ESLint completed with zero warnings                                                            |
-| Validation integration test             |         0 | Five boundary, prototype-key, and oversized-identifier cases passed against PostgreSQL 18      |
-| `npm run test:unit`                     |         0 | 48 tests passed across all six workspaces after validation hardening                           |
-| `npm run lint`                          |         0 | ESLint completed with zero warnings after validation hardening                                 |
-| `npm run test:integration`              |         0 | Six files and 22 tests passed across all Docker-backed Phase 2 integration suites              |
+| Command                                 | Exit code | Result                                                                                                                                   |
+| --------------------------------------- | --------: | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm view` for Phase 2 harness packages |         0 | Resolved current stable exact versions on 2026-08-31                                                                                     |
+| Root harness type-check and lint        |         0 | New Vitest, migration, rollback, and concurrency code passed                                                                             |
+| `npm run test:integration`              |         0 | Disposable PostgreSQL 18 started; four DB-backed tests passed; container removed automatically                                           |
+| Root `npm run typecheck`                |         0 | Root harness and all six workspaces passed after the transactional changes                                                               |
+| Migration + ledger integration tests    |         0 | Two files and nine tests passed against disposable PostgreSQL 18                                                                         |
+| `npm run test:integration`              |         0 | Three files and 11 tests passed; migration, POS races, refunds, and ledgers were green                                                   |
+| `npm run test:unit`                     |         0 | 27 tests passed across API, web, worker, config, database, and shared workspaces                                                         |
+| Root `npm run typecheck`                |         0 | Root harness and all workspaces passed after the money-boundary changes                                                                  |
+| `npm run test:integration`              |         0 | Four files and 13 tests passed, including sub-paisa receipt and fractional FEFO sale totals                                              |
+| Root `npm run typecheck`                |         0 | Root harness and every workspace passed after auth/session changes                                                                       |
+| Auth integration test                   |         0 | Four scenarios passed against PostgreSQL 18                                                                                              |
+| `npm run test:integration`              |         0 | Five files and 17 tests passed across migrations, POS, ledger, money, refunds, and auth                                                  |
+| `npm run test:unit`                     |         0 | 35 tests passed across all six workspaces                                                                                                |
+| `npm run lint`                          |         0 | ESLint completed with zero warnings                                                                                                      |
+| Validation integration test             |         0 | Five boundary, prototype-key, and oversized-identifier cases passed against PostgreSQL 18                                                |
+| `npm run test:unit`                     |         0 | 48 tests passed across all six workspaces after validation hardening                                                                     |
+| `npm run lint`                          |         0 | ESLint completed with zero warnings after validation hardening                                                                           |
+| `npm run test:integration`              |         0 | Six files and 22 tests passed across all Docker-backed Phase 2 integration suites                                                        |
+| Phase 2 P0 intelligence suite           |         0 | Four shelf, expiry, reorder, and budget scenarios passed against disposable PostgreSQL 18                                                |
+| Phase 2 return-concurrency suite        |         0 | Four scenarios passed, including two requests competing for the final returnable unit                                                    |
+| Phase 2 RBAC matrix                     |         0 | 24 endpoint and isolation scenarios passed against disposable PostgreSQL 18                                                              |
+| Phase 2 AI unit suite                   |         0 | 23 API tests passed, including disabled, timeout, rate-limit, malformed, and grounding failures                                          |
+| `npm run test:e2e`                      |         0 | All five required counter workflows passed in Chromium-compatible Chrome                                                                 |
+| `npm run verify`                        |         0 | Formatting, lint, type-check, 58 unit tests, 52 Docker integration tests, five E2E tests, and all production builds passed on 2026-08-31 |
+
+## P0 exit matrix
+
+| Audit requirement  | Objective evidence                                                                                                                                      | Result |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Migrations         | A copied applied migration is tampered with; the production migration runner rejects the checksum mismatch                                              | Pass   |
+| POS regression     | Parallel finalization, last-unit FEFO, fractional reservation pricing, immutable receipt lines, and exact header totals pass against PostgreSQL 18      | Pass   |
+| Return concurrency | Two requests compete for the final returnable unit; one succeeds, one is rejected, retries are idempotent, and the original sale item remains immutable | Pass   |
+| Shelf safety       | Unsafe and stale shelf recommendations cannot move stock; application revalidates state atomically before writing the append-only ledger                | Pass   |
+| Expiry boundary    | Branch-local dates determine sellability and expiration; exact-boundary stock is excluded and acquisition cost remains exact                            | Pass   |
+| Reorder math       | No-history, stockout, minimum stock, MOQ, pack multiple, near-expiry, and replay cases pass; no purchase order is created automatically                 | Pass   |
+| Budget safety      | Zero-day, multi-medicine, fractional, and stale-price cases use exact arithmetic; checkout recalculates current prices                                  | Pass   |
+| RBAC               | 24 allowed/denied endpoint cases prove empty-role denial, branch isolation, system-admin business isolation, and tool-level authorization rechecks      | Pass   |
+| AI isolation       | Disabled mode performs no provider call; timeouts, 429s, malformed output, tool failures, numeric contradictions, and secret-bearing errors fail safely | Pass   |
+
+## Browser exit workflows
+
+- Sign in and sign out.
+- Complete a cash sale and render its printable receipt.
+- Open, adjust, and close a cash session.
+- Review shelf-safety and reorder recommendations.
+- Look up, request, approve, and refund a return.
+
+On this Windows host, Playwright used the installed Chrome binary because the pinned Playwright browser download was unavailable. The GitHub Actions workflow installs the pinned Playwright Chromium package before running the same `npm run verify` command.
 
 ## Test-foundation decisions
 
@@ -91,4 +121,4 @@
 
 ## Gate status
 
-The Phase 2 exit gate is **not passed**. Workstreams 1–7 are implemented and green locally. The remaining P0 audit matrix, the five core Playwright workflows, and CI exit evidence remain in progress.
+The complete Phase 2 P0 exit suite is **green locally** and the implementation is complete. The strict Phase 2 exit gate is **not yet passed** because `docs/DEVELOPMENT_PLAN.md` requires these results to be green in hosted CI. This checkout has no Git remote, so no hosted workflow can be triggered or cited. Phase 3 must not start until the same `npm run verify` workflow reports exit `0` in CI.

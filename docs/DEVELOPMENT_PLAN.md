@@ -154,6 +154,8 @@ Remove the "local-first" claim (there is no service worker, no IndexedDB, no off
 
 ### Phase 2 — Correctness under concurrency · ~4 weeks
 
+> **Execution status (2026-08-31):** implementation and the complete local P0 exit suite are green: `npm run verify` exited `0` with 58 unit tests, 52 Docker/PostgreSQL integration tests, five browser workflows, and all builds. Hosted CI confirmation is still unavailable because this checkout has no Git remote, so the strict exit gate remains open and Phase 3 has not started. See `PHASE_2_EXECUTION.md`.
+
 The most important phase. This is where "Implemented" becomes "proven".
 
 **2.1 Build the test harness first.** There is effectively none today — the one API test never imports `AuthGuard`, and the "database contract test" is `String.includes` on a `.sql` file. Nothing can be safely fixed without this.
