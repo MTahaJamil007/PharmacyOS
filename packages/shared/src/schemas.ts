@@ -1,14 +1,36 @@
 import { z } from 'zod';
 
+import { decimalToScaledInteger } from './decimal.js';
 import { PAYMENT_METHODS } from './domain.js';
+import { moneyToMinorUnits } from './money.js';
 
-export const idSchema = z.coerce.bigint().positive();
-export const quantitySchema = z.string().regex(/^\d+(?:\.\d{1,3})?$/);
+const MAX_DATABASE_ID = 9_223_372_036_854_775_807n;
+const MAX_MONEY_MINOR_UNITS = 999_999_999_999n;
+const MAX_QUANTITY_MILLI_UNITS = 999_999_999_999n;
+
+export const idSchema = z.coerce.bigint().positive().max(MAX_DATABASE_ID);
+export const quantitySchema = z
+  .string()
+  .regex(/^\d+(?:\.\d{1,3})?$/)
+  .refine(
+    (value) => decimalToScaledInteger(value, 3) <= MAX_QUANTITY_MILLI_UNITS,
+    'Quantity exceeds the database limit',
+  );
 export const positiveQuantitySchema = quantitySchema.refine(
-  (value) => /[1-9]/.test(value),
+  (value) => decimalToScaledInteger(value, 3) > 0n,
   'Quantity must be greater than zero',
 );
-export const moneySchema = z.string().regex(/^\d+(?:\.\d{1,2})?$/);
+export const moneySchema = z
+  .string()
+  .regex(/^\d+(?:\.\d{1,2})?$/)
+  .refine(
+    (value) => moneyToMinorUnits(value) <= MAX_MONEY_MINOR_UNITS,
+    'Money exceeds the database limit',
+  );
+export const positiveMoneySchema = moneySchema.refine(
+  (value) => moneyToMinorUnits(value) > 0n,
+  'Amount must be greater than zero',
+);
 export const clientRequestIdSchema = z.string().trim().min(8).max(128);
 
 export const loginSchema = z.object({
@@ -28,7 +50,7 @@ export const createDraftSchema = z.object({
     .array(
       z.object({
         medicineId: idSchema,
-        quantity: quantitySchema,
+        quantity: positiveQuantitySchema,
       }),
     )
     .min(1)
@@ -43,7 +65,7 @@ export const finalizeSaleSchema = z.object({
     .array(
       z.object({
         method: z.enum(PAYMENT_METHODS),
-        amount: moneySchema,
+        amount: positiveMoneySchema,
         reference: z.string().trim().max(120).optional(),
       }),
     )
@@ -53,7 +75,7 @@ export const finalizeSaleSchema = z.object({
 
 export const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
 });
 
 export const shelfRecommendationQuerySchema = paginationSchema.extend({
@@ -76,17 +98,22 @@ export const expiryWorkItemActionSchema = z.object({
   notes: z.string().trim().min(2).max(500),
 });
 
-export const supplierQuoteSchema = z.object({
-  supplierId: idSchema,
-  medicineId: idSchema,
-  quotedUnitCost: moneySchema,
-  quoteUnit: z.string().trim().min(1).max(40),
-  baseUnitsPerQuoteUnit: quantitySchema,
-  minimumOrderQuantity: quantitySchema.default('0'),
-  validFrom: z.iso.date().optional(),
-  validUntil: z.iso.date().optional(),
-  source: z.string().trim().min(2).max(160),
-});
+export const supplierQuoteSchema = z
+  .object({
+    supplierId: idSchema,
+    medicineId: idSchema,
+    quotedUnitCost: moneySchema,
+    quoteUnit: z.string().trim().min(1).max(40),
+    baseUnitsPerQuoteUnit: positiveQuantitySchema,
+    minimumOrderQuantity: quantitySchema.default('0'),
+    validFrom: z.iso.date().optional(),
+    validUntil: z.iso.date().optional(),
+    source: z.string().trim().min(2).max(160),
+  })
+  .refine((quote) => !quote.validFrom || !quote.validUntil || quote.validFrom <= quote.validUntil, {
+    message: 'validUntil must be on or after validFrom',
+    path: ['validUntil'],
+  });
 
 export const reorderSuggestionQuerySchema = paginationSchema.extend({
   status: z
@@ -100,7 +127,7 @@ export const purchaseOrderQuerySchema = paginationSchema.extend({
 
 export const createDraftPurchaseOrderSchema = z.object({
   supplierId: idSchema.optional(),
-  quantity: quantitySchema.optional(),
+  quantity: positiveQuantitySchema.optional(),
   clientRequestId: clientRequestIdSchema,
 });
 
@@ -158,8 +185,8 @@ export const budgetRegimenSchema = z.object({
     .array(
       z.object({
         medicineId: idSchema,
-        prescribedBaseUnitsPerDay: quantitySchema,
-        minimumSaleIncrement: quantitySchema.default('1'),
+        prescribedBaseUnitsPerDay: positiveQuantitySchema,
+        minimumSaleIncrement: positiveQuantitySchema.default('1'),
       }),
     )
     .min(1)
@@ -175,7 +202,7 @@ export const createReturnSchema = z.object({
     .array(
       z.object({
         saleItemId: idSchema,
-        quantity: quantitySchema,
+        quantity: positiveQuantitySchema,
         disposition: z.enum(['RESTOCK_SELLABLE', 'QUARANTINE', 'SCRAP']),
       }),
     )
@@ -212,6 +239,13 @@ export const ownerAiChatSchema = z.object({
       limit: z.coerce.number().int().min(1).max(50).optional(),
     })
     .strict()
+    .refine(
+      (arguments_) => !arguments_.from || !arguments_.to || arguments_.from <= arguments_.to,
+      {
+        message: 'to must be on or after from',
+        path: ['to'],
+      },
+    )
     .default({}),
 });
 
@@ -222,7 +256,7 @@ export const openCashSessionSchema = z.object({
 
 export const cashMovementSchema = z.object({
   movementType: z.enum(['CASH_IN', 'CASH_OUT']),
-  amount: moneySchema.refine((value) => Number(value) > 0, 'Amount must be greater than zero'),
+  amount: positiveMoneySchema,
   reason: z.string().trim().min(3).max(500),
   clientRequestId: clientRequestIdSchema,
 });

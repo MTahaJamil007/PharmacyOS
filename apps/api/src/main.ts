@@ -7,6 +7,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { parseEnvironment } from '@pharmacy/config';
 
 import { AppModule } from './app.module.js';
+import { RequestBoundaryPipe } from './common/request-boundary.pipe.js';
 
 async function bootstrap(): Promise<void> {
   const environment = parseEnvironment();
@@ -28,6 +29,7 @@ async function bootstrap(): Promise<void> {
   app.enableCors({ origin: allowedOrigins, credentials: true });
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+  app.useGlobalPipes(new RequestBoundaryPipe());
   app.enableShutdownHooks();
 
   await app.listen(environment.API_PORT, environment.HOST);

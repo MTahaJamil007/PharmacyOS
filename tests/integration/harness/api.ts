@@ -6,6 +6,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { VersioningType } from '@nestjs/common';
 
 import { AppModule } from '../../../apps/api/src/app.module.js';
+import { RequestBoundaryPipe } from '../../../apps/api/src/common/request-boundary.pipe.js';
 import { DATABASE, ENVIRONMENT } from '../../../apps/api/src/database.module.js';
 
 export interface IntegrationApi {
@@ -45,6 +46,7 @@ export async function createIntegrationApi(
   const app = moduleReference.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
   app.setGlobalPrefix('api');
   app.enableVersioning({ defaultVersion: '1', type: VersioningType.URI });
+  app.useGlobalPipes(new RequestBoundaryPipe());
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
 

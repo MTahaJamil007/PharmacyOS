@@ -46,6 +46,10 @@
 | `npm run test:integration`              |         0 | Five files and 17 tests passed across migrations, POS, ledger, money, refunds, and auth        |
 | `npm run test:unit`                     |         0 | 35 tests passed across all six workspaces                                                      |
 | `npm run lint`                          |         0 | ESLint completed with zero warnings                                                            |
+| Validation integration test             |         0 | Five boundary, prototype-key, and oversized-identifier cases passed against PostgreSQL 18      |
+| `npm run test:unit`                     |         0 | 48 tests passed across all six workspaces after validation hardening                           |
+| `npm run lint`                          |         0 | ESLint completed with zero warnings after validation hardening                                 |
+| `npm run test:integration`              |         0 | Six files and 22 tests passed across all Docker-backed Phase 2 integration suites              |
 
 ## Test-foundation decisions
 
@@ -75,6 +79,9 @@
 - **Session lifetime:** a session has a 30-minute idle expiry that refreshes after half the idle window, bounded by a non-extendable 12-hour absolute expiry. `POST /auth/logout` records revocation and an audit event; both web sign-out controls call it before discarding the local session.
 - **Authorization:** duplicate terminal codes bind deterministically by branch and terminal ID. The guard uses left joins below the assigned role, so a valid zero-permission session authenticates and receives `403` for a forbidden operation instead of a misleading `401`.
 - **Refund ownership:** a cash refund accepts only an open session owned by the authenticated user on the authenticated terminal. The integration suite rejects another cashier's open till before proving one refund under eight concurrent retries.
+- **Exact validation bounds:** identifiers, quantities, and money are bounded to the corresponding PostgreSQL domains without converting input to JavaScript `Number`. Required-positive fields reject every representation of zero, and range endpoints are validated in chronological order.
+- **Request shape:** a global request-boundary pipe limits key length, nesting, array size, and traversed nodes, and rejects prototype-mutating keys before controllers execute. The raw-JSON integration test proves `__proto__` is rejected at the application boundary.
+- **Normalized failures:** expected uniqueness, foreign-key, constraint, invalid-text, range, serialization, deadlock, and timeout failures have stable non-`500` responses; unexpected database failures remain on Nest's normal internal-error path and do not disclose database details.
 
 ## Findings resolved during execution
 
@@ -84,4 +91,4 @@
 
 ## Gate status
 
-The Phase 2 exit gate is **not passed**. Workstreams 1–6 are implemented and green locally. Request validation, the remaining P0 audit matrix, the five core Playwright workflows, and CI exit evidence remain in progress.
+The Phase 2 exit gate is **not passed**. Workstreams 1–7 are implemented and green locally. The remaining P0 audit matrix, the five core Playwright workflows, and CI exit evidence remain in progress.
