@@ -11,6 +11,7 @@ export const previewMedicines: readonly MedicineSearchResult[] = [
     shelf: 'A-03 / R2 / B1',
     availableQuantity: '148.000',
     nearestExpiry: '2027-02-28',
+    daysToExpiry: 180,
     salePrice: '35.00',
   },
   {
@@ -23,6 +24,7 @@ export const previewMedicines: readonly MedicineSearchResult[] = [
     shelf: 'B-01 / R1 / B2',
     availableQuantity: '26.000',
     nearestExpiry: '2026-11-30',
+    daysToExpiry: 90,
     salePrice: '1180.00',
   },
   {
@@ -35,6 +37,7 @@ export const previewMedicines: readonly MedicineSearchResult[] = [
     shelf: 'C-07 / R3 / B1',
     availableQuantity: '8.000',
     nearestExpiry: '2026-09-15',
+    daysToExpiry: 14,
     salePrice: '470.00',
   },
 ];

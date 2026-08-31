@@ -1,277 +1,448 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import QRCode from 'qrcode';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import type { SalePaymentInput, SaleReceipt } from '@pharmacy/shared';
 
 import {
   createSaleDraft,
-  finalizeCashSale,
+  finalizeSale,
   getCurrentCashSession,
   getSaleReceipt,
-  logout,
   reserveSaleDraft,
   searchMedicines,
   type FinalizedSale,
-  type SaleReceipt,
+  type MedicineSearchResult,
 } from './api';
+import { AppShell } from './components/AppShell';
+import { useClock } from './hooks/useClock';
+import { useDebouncedValue } from './hooks/useDebouncedValue';
+import { useI18n } from './i18n';
 import { calculateCartLineTotal, calculateCartTotal, formatPkrMoney } from './money';
 import { previewMedicines } from './preview-data';
 import { usePharmacyStore } from './store';
+import {
+  cartSignature,
+  clearCheckoutAttempt,
+  createCheckoutAttempt,
+  loadCheckoutAttempt,
+  saveCheckoutAttempt,
+  type CheckoutAttempt,
+} from './modules/pos/checkout-attempt';
+import { PaymentDialog } from './modules/pos/PaymentDialog';
+import { ReceiptDialog } from './modules/pos/ReceiptDialog';
+import { ReprintDialog } from './modules/pos/ReprintDialog';
+import { WedgeScannerBuffer } from './modules/pos/scanner';
 
 const previewMode = import.meta.env.VITE_PREVIEW_MODE === 'true';
-function PrintableReceipt({
-  receipt,
-  onClose,
-}: {
-  readonly receipt: SaleReceipt;
-  readonly onClose: () => void;
-}): React.JSX.Element {
-  const [qrUrl, setQrUrl] = useState('');
-  useEffect(() => {
-    void QRCode.toDataURL(receipt.returnQrPayload, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 220,
-    }).then(setQrUrl);
-  }, [receipt.returnQrPayload]);
-  return (
-    <div className="receipt-overlay" role="dialog" aria-modal="true" aria-label="Sale receipt">
-      <article className="printable-receipt">
-        <header>
-          <strong>{receipt.sale.branch_name}</strong>
-          <span>{receipt.sale.branch_address}</span>
-          <span>{receipt.sale.branch_phone}</span>
-        </header>
-        <div className="receipt-identifiers">
-          <b>{receipt.sale.invoice_number}</b>
-          <span>{new Date(receipt.sale.created_at).toLocaleString('en-PK')}</span>
-          <span>Cashier: {receipt.sale.cashier_name}</span>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>Qty</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {receipt.items.map((item) => (
-              <tr key={item.id}>
-                <td>
-                  {item.name} {item.strength}
-                  <small>
-                    Batch {item.batch_number} · exp {item.expiry_date}
-                  </small>
-                </td>
-                <td>{item.quantity}</td>
-                <td>{formatPkrMoney(item.line_total)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <dl>
-          <div>
-            <dt>Subtotal</dt>
-            <dd>{formatPkrMoney(receipt.sale.subtotal)}</dd>
-          </div>
-          <div>
-            <dt>Discount</dt>
-            <dd>{formatPkrMoney(receipt.sale.discount_total)}</dd>
-          </div>
-          <div>
-            <dt>Total</dt>
-            <dd>{formatPkrMoney(receipt.sale.total)}</dd>
-          </div>
-        </dl>
-        <div className="receipt-qr">
-          {qrUrl ? <img src={qrUrl} alt="Opaque return lookup token" /> : null}
-          <strong>Scan for an authorized return lookup</strong>
-          <small>No customer, medicine, or payment data is stored in this QR.</small>
-        </div>
-        <footer>
-          <span>Fiscal status: {receipt.sale.fiscal_status}</span>
-          {receipt.sale.fiscal_invoice_number ? (
-            <span>Fiscal invoice: {receipt.sale.fiscal_invoice_number}</span>
-          ) : null}
-        </footer>
-      </article>
-      <div className="receipt-controls">
-        <button className="secondary-button" onClick={onClose}>
-          Close
-        </button>
-        <button className="primary-button" onClick={() => window.print()}>
-          Print receipt
-        </button>
-      </div>
-    </div>
-  );
+
+function clockLabel(
+  now: Date,
+  timeZone?: string,
+): { readonly date: string; readonly time: string } {
+  const options = timeZone ? { timeZone } : {};
+  return {
+    date: new Intl.DateTimeFormat('en-PK', {
+      ...options,
+      day: '2-digit',
+      month: 'short',
+      weekday: 'short',
+    }).format(now),
+    time: new Intl.DateTimeFormat('en-PK', {
+      ...options,
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(now),
+  };
 }
 
 export function PosWorkspace(): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
   const cart = usePharmacyStore((state) => state.cart);
+  const heldCart = usePharmacyStore((state) => state.heldCart);
   const addMedicine = usePharmacyStore((state) => state.addMedicine);
   const changeQuantity = usePharmacyStore((state) => state.changeQuantity);
+  const setQuantity = usePharmacyStore((state) => state.setQuantity);
+  const removeMedicine = usePharmacyStore((state) => state.removeMedicine);
   const clearCart = usePharmacyStore((state) => state.clearCart);
-  const setSession = usePharmacyStore((state) => state.setSession);
+  const holdOrResumeCart = usePharmacyStore((state) => state.holdOrResumeCart);
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
+  const [selectedMedicineId, setSelectedMedicineId] = useState<string | null>(
+    cart[0]?.medicine.id ?? null,
+  );
   const [checkoutError, setCheckoutError] = useState('');
+  const [counterNotice, setCounterNotice] = useState('');
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [receipt, setReceipt] = useState<FinalizedSale | null>(null);
   const [printReceipt, setPrintReceipt] = useState<SaleReceipt | null>(null);
+  const [paymentTotal, setPaymentTotal] = useState<string | null>(null);
+  const [reprintOpen, setReprintOpen] = useState(false);
+  const [attempt, setAttempt] = useState<CheckoutAttempt | null>(() =>
+    session ? loadCheckoutAttempt(session.user.terminalId, cart) : null,
+  );
   const searchInput = useRef<HTMLInputElement>(null);
-  const signOut = (): void => {
-    if (session) void logout(session.accessToken).catch(() => undefined);
-    setSession(null);
-  };
-
-  useEffect(() => {
-    searchInput.current?.focus();
-
-    const focusSearch = (event: KeyboardEvent): void => {
-      if (event.key === '/' && !(event.target instanceof HTMLInputElement)) {
-        event.preventDefault();
-        searchInput.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', focusSearch);
-    return () => window.removeEventListener('keydown', focusSearch);
-  }, []);
+  const scanner = useRef(new WedgeScannerBuffer());
+  const debouncedQuery = useDebouncedValue(query.trim(), 180);
+  const now = useClock(session?.user.branchTimezone);
+  const clock = clockLabel(now, session?.user.branchTimezone);
 
   const search = useQuery({
-    queryKey: ['medicine-search', query],
-    queryFn: () => searchMedicines(session?.accessToken ?? '', query),
-    enabled: !previewMode && Boolean(session) && query.trim().length > 0,
+    queryKey: ['medicine-search', debouncedQuery],
+    queryFn: () => searchMedicines(session?.accessToken ?? '', debouncedQuery),
+    enabled: !previewMode && Boolean(session) && debouncedQuery.length > 0,
     staleTime: 10_000,
   });
-
   const results = previewMode
     ? previewMedicines.filter((medicine) =>
-        `${medicine.name} ${medicine.genericName ?? ''}`
+        `${medicine.name} ${medicine.genericName ?? ''} ${medicine.barcode ?? ''}`
           .toLowerCase()
-          .includes(query.toLowerCase()),
+          .includes(debouncedQuery.toLowerCase()),
       )
     : (search.data ?? []);
   const total = useMemo(
     () =>
       calculateCartTotal(
-        cart.map((line) => ({
-          quantity: line.quantity,
-          unitPrice: line.medicine.salePrice,
-        })),
+        cart.map((line) => ({ quantity: line.quantity, unitPrice: line.medicine.salePrice })),
       ),
     [cart],
   );
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
-  const checkout = async (): Promise<void> => {
-    if (!session || cart.length === 0) return;
-    try {
-      setCheckoutPending(true);
-      setCheckoutError('');
-      setReceipt(null);
-      const cashSession = await getCurrentCashSession(session.accessToken);
-      if (!cashSession || cashSession.status !== 'OPEN') {
-        throw new Error('Open a cash session for this terminal before finalizing a sale');
+  const lockedCart = Boolean(attempt?.reservedTotal || attempt?.finalizedSaleId);
+
+  const updateAttempt = useCallback((next: CheckoutAttempt | null): void => {
+    setAttempt(next);
+    if (next) saveCheckoutAttempt(next);
+  }, []);
+
+  const recoverReceipt = useCallback(
+    async (saleId: string): Promise<void> => {
+      if (!session) return;
+      try {
+        const recovered = await getSaleReceipt(session.accessToken, saleId);
+        setPrintReceipt(recovered);
+        clearCheckoutAttempt(session.user.terminalId);
+        setAttempt(null);
+        setCheckoutError('');
+      } catch {
+        setCheckoutError(
+          'Sale is finalized, but its receipt could not be loaded. Use Retry receipt or Receipt search; do not charge again.',
+        );
       }
-      const draft = await createSaleDraft(
-        session.accessToken,
-        session.user.terminalId,
-        cart.map((line) => ({
-          medicineId: line.medicine.id,
-          quantity: line.quantity.toString(),
-        })),
-      );
-      const reservation = await reserveSaleDraft(session.accessToken, draft.id);
-      const finalized = await finalizeCashSale(
-        session.accessToken,
-        cashSession.id,
-        draft.id,
-        reservation.total,
-      );
-      setReceipt(finalized);
-      setPrintReceipt(await getSaleReceipt(session.accessToken, finalized.id));
-      clearCart();
-      setQuery('');
-    } catch (error) {
-      setCheckoutError(error instanceof Error ? error.message : 'Sale finalization failed');
+    },
+    [session],
+  );
+
+  useEffect(() => {
+    const finalizedSaleId = attempt?.finalizedSaleId;
+    if (!finalizedSaleId) return;
+    const recoveryTimer = window.setTimeout(() => void recoverReceipt(finalizedSaleId), 0);
+    return () => window.clearTimeout(recoveryTimer);
+  }, [attempt?.finalizedSaleId, recoverReceipt]);
+
+  const addSearchResult = useCallback(
+    (medicine: MedicineSearchResult, quantity = 1): void => {
+      if (lockedCart) return;
+      addMedicine(medicine, quantity);
+      setSelectedMedicineId(medicine.id);
+      setCounterNotice(`${medicine.name} added`);
+    },
+    [addMedicine, lockedCart],
+  );
+
+  const addBarcode = useCallback(
+    async (barcode: string): Promise<void> => {
+      setCheckoutError('');
+      try {
+        const matches = previewMode
+          ? previewMedicines.filter((medicine) => medicine.barcode === barcode)
+          : await searchMedicines(session?.accessToken ?? '', barcode);
+        const exact = matches.find((medicine) => medicine.barcode === barcode);
+        if (!exact) throw new Error(`Barcode ${barcode} has no exact medicine match`);
+        addSearchResult(exact);
+        setQuery('');
+      } catch (cause) {
+        setCheckoutError(cause instanceof Error ? cause.message : 'Barcode lookup failed');
+      }
+    },
+    [addSearchResult, session],
+  );
+
+  const resetSale = useCallback((): void => {
+    if (lockedCart) {
+      setCounterNotice('Complete the reserved sale before starting a new one');
+      return;
+    }
+    if (session) clearCheckoutAttempt(session.user.terminalId);
+    clearCart();
+    setAttempt(null);
+    setPaymentTotal(null);
+    setReceipt(null);
+    setCheckoutError('');
+    setCounterNotice('New sale ready');
+    setQuery('');
+    searchInput.current?.focus();
+  }, [clearCart, lockedCart, session]);
+
+  const toggleHeldCart = useCallback((): void => {
+    if (lockedCart) {
+      setCounterNotice('A reserved sale cannot be held');
+      return;
+    }
+    const outcome = holdOrResumeCart();
+    setCounterNotice(
+      outcome === 'HELD'
+        ? 'Cart held on this terminal'
+        : outcome === 'RESUMED'
+          ? 'Held cart resumed'
+          : 'Finish or clear the current cart first',
+    );
+  }, [holdOrResumeCart, lockedCart]);
+
+  const beginCheckout = useCallback(async (): Promise<void> => {
+    if (!session || cart.length === 0 || checkoutPending) return;
+    setCheckoutPending(true);
+    setCheckoutError('');
+    try {
+      let current = attempt;
+      if (current?.finalizedSaleId) {
+        await recoverReceipt(current.finalizedSaleId);
+        return;
+      }
+      if (!current || current.cartSignature !== cartSignature(cart)) {
+        current = createCheckoutAttempt(session.user.terminalId, cart);
+        updateAttempt(current);
+      }
+      if (!current.cashSessionId) {
+        const cashSession = await getCurrentCashSession(session.accessToken);
+        if (!cashSession || cashSession.status !== 'OPEN') {
+          throw new Error('Open a cash session for this terminal before taking payment');
+        }
+        current = { ...current, cashSessionId: cashSession.id };
+        updateAttempt(current);
+      }
+      if (!current.draftId) {
+        const draft = await createSaleDraft(
+          session.accessToken,
+          session.user.terminalId,
+          cart.map((line) => ({
+            medicineId: line.medicine.id,
+            quantity: line.quantity.toString(),
+          })),
+        );
+        current = { ...current, draftId: draft.id };
+        updateAttempt(current);
+      }
+      const reservationExpired =
+        current.reservedUntil !== undefined && new Date(current.reservedUntil) <= new Date();
+      if (!current.reservedTotal || reservationExpired) {
+        const draftId = current.draftId;
+        if (!draftId) throw new Error('Sale draft could not be resumed');
+        const reservation = await reserveSaleDraft(session.accessToken, draftId);
+        current = {
+          ...current,
+          reservedTotal: reservation.total,
+          reservedUntil: reservation.reservedUntil,
+        };
+        updateAttempt(current);
+      }
+      if (!current.reservedTotal) throw new Error('Sale reservation total is unavailable');
+      setPaymentTotal(current.reservedTotal);
+    } catch (cause) {
+      setCheckoutError(cause instanceof Error ? cause.message : 'Sale reservation failed');
     } finally {
       setCheckoutPending(false);
     }
+  }, [attempt, cart, checkoutPending, recoverReceipt, session, updateAttempt]);
+
+  const completePayment = useCallback(
+    async (payments: readonly SalePaymentInput[]): Promise<void> => {
+      if (!session || !attempt?.cashSessionId || !attempt.draftId) return;
+      setCheckoutPending(true);
+      setCheckoutError('');
+      try {
+        const finalized = await finalizeSale(
+          session.accessToken,
+          attempt.cashSessionId,
+          attempt.draftId,
+          attempt.clientRequestId,
+          payments,
+        );
+        const finalizedAttempt = { ...attempt, finalizedSaleId: finalized.id };
+        updateAttempt(finalizedAttempt);
+        setReceipt(finalized);
+        setPaymentTotal(null);
+        clearCart();
+        await recoverReceipt(finalized.id);
+      } catch (cause) {
+        setCheckoutError(cause instanceof Error ? cause.message : 'Sale finalization failed');
+        throw cause;
+      } finally {
+        setCheckoutPending(false);
+      }
+    },
+    [attempt, clearCart, recoverReceipt, session, updateAttempt],
+  );
+
+  useEffect(() => {
+    searchInput.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent): void => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const barcode = scanner.current.push(event.key, event.timeStamp);
+      if (barcode) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void addBarcode(barcode);
+        return;
+      }
+      if (event.key === 'F2') {
+        event.preventDefault();
+        resetSale();
+      } else if (event.key === 'F4') {
+        event.preventDefault();
+        toggleHeldCart();
+      } else if (event.key === 'F6') {
+        event.preventDefault();
+        setReprintOpen(true);
+      } else if (event.key === 'F8' && !paymentTotal) {
+        event.preventDefault();
+        void beginCheckout();
+      } else if (
+        event.key === 'Delete' &&
+        selectedMedicineId &&
+        !lockedCart &&
+        !(event.target instanceof HTMLInputElement)
+      ) {
+        event.preventDefault();
+        removeMedicine(selectedMedicineId);
+      } else if (event.key === 'Escape' && !paymentTotal && !reprintOpen && !printReceipt) {
+        setQuery('');
+        searchInput.current?.focus();
+      } else if (event.key === '/' && !(event.target instanceof HTMLInputElement)) {
+        event.preventDefault();
+        searchInput.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', keyboard, true);
+    return () => window.removeEventListener('keydown', keyboard, true);
+  }, [
+    addBarcode,
+    beginCheckout,
+    lockedCart,
+    paymentTotal,
+    printReceipt,
+    removeMedicine,
+    reprintOpen,
+    resetSale,
+    selectedMedicineId,
+    toggleHeldCart,
+  ]);
+
+  const searchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const multiplier = /^\*(\d{1,4})$/.exec(query.trim());
+    if (multiplier && selectedMedicineId) {
+      setQuantity(selectedMedicineId, Number(multiplier[1]));
+      setQuery('');
+      return;
+    }
+    const first = results[0];
+    if (first) {
+      addSearchResult(first);
+      setQuery('');
+    }
   };
 
-  return (
-    <div className="workspace-shell">
-      {printReceipt ? (
-        <PrintableReceipt receipt={printReceipt} onClose={() => setPrintReceipt(null)} />
-      ) : null}
-      <header className="topbar">
-        <div className="compact-brand">
-          <span className="brand-mark">Rx</span>
-          <strong>PharmacyOS</strong>
-        </div>
-        <nav aria-label="Primary navigation">
-          <a className="active" href="#pos">
-            Counter
-          </a>
-          <a href="#cash">Cash session</a>
-          <a href="#inventory">Inventory intelligence</a>
-          <a href="#budget">Budget calculator</a>
-          <a href="#returns">Returns</a>
-          <a href="#owner">Owner assistant</a>
-        </nav>
-        <div className="operator">
-          <span>
-            <i className="status-dot" /> LAN online
-          </span>
-          <button onClick={signOut}>
-            {session?.user.displayName ?? 'Training user'} · Sign out
-          </button>
-        </div>
-      </header>
+  const ticketState = attempt?.finalizedSaleId
+    ? ['Finalized', 'Receipt recovery']
+    : attempt?.reservedTotal
+      ? [
+          'Reserved',
+          attempt.reservedUntil
+            ? `Until ${new Date(attempt.reservedUntil).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' })}`
+            : 'Active',
+        ]
+      : attempt?.draftId
+        ? ['Draft created', 'Not reserved']
+        : ['New sale', 'Stock not reserved'];
 
+  return (
+    <AppShell>
+      {printReceipt ? (
+        <ReceiptDialog
+          key={printReceipt.sale.id}
+          receipt={printReceipt}
+          onClose={() => setPrintReceipt(null)}
+        />
+      ) : null}
+      {paymentTotal ? (
+        <PaymentDialog
+          total={paymentTotal}
+          busy={checkoutPending}
+          onClose={() => setPaymentTotal(null)}
+          onPay={completePayment}
+        />
+      ) : null}
+      {reprintOpen && session ? (
+        <ReprintDialog
+          token={session.accessToken}
+          onClose={() => setReprintOpen(false)}
+          onReceipt={(value) => {
+            setReprintOpen(false);
+            setPrintReceipt(value);
+          }}
+        />
+      ) : null}
       <main className="pos-layout" id="pos">
         <section className="catalog-pane">
           <div className="counter-heading">
             <div>
-              <p className="eyebrow">Sales counter 01</p>
-              <h1>Find medicine</h1>
+              <p className="eyebrow">{session?.user.terminalName ?? 'Training counter'}</p>
+              <h1>{t('pos.findMedicine')}</h1>
             </div>
             <span className="clock-label">
-              Thu · 20 Aug
+              {clock.date}
               <br />
-              <strong>12:42 PM</strong>
+              <strong>{clock.time}</strong>
             </span>
           </div>
           <label className="search-box">
             <span aria-hidden="true">⌕</span>
             <input
               ref={searchInput}
-              placeholder="Brand, generic, barcode or company"
+              placeholder={t('pos.searchPlaceholder')}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={searchKeyDown}
             />
             <kbd>/</kbd>
           </label>
           <div className="search-caption">
-            <span>Scan a barcode or start typing</span>
+            <span>{t('pos.scanHint')}</span>
             <span>{search.isFetching ? 'Searching…' : `${results.length} matches`}</span>
           </div>
-
           {search.error ? (
             <p className="inline-error" role="alert">
               Search is unavailable. Check the local API connection.
             </p>
           ) : null}
+          {counterNotice ? (
+            <p className="counter-notice" role="status">
+              {counterNotice}
+            </p>
+          ) : null}
           <div className="medicine-list" aria-live="polite">
             {results.map((medicine, index) => {
-              const expiringSoon = Boolean(
-                medicine.nearestExpiry && medicine.nearestExpiry < '2026-12-01',
-              );
+              const expiringSoon = medicine.daysToExpiry !== null && medicine.daysToExpiry <= 90;
               return (
                 <button
+                  type="button"
                   className="medicine-row"
                   key={medicine.id}
-                  onClick={() => addMedicine(medicine)}
+                  onClick={() => addSearchResult(medicine)}
                 >
                   <span className="result-index">{String(index + 1).padStart(2, '0')}</span>
                   <span className="medicine-identity">
@@ -293,7 +464,7 @@ export function PosWorkspace(): React.JSX.Element {
                   </span>
                   <span className="result-price">
                     {formatPkrMoney(medicine.salePrice ?? '0.00')}
-                    <small>Space to add</small>
+                    <small>Enter to add</small>
                   </span>
                 </button>
               );
@@ -301,16 +472,22 @@ export function PosWorkspace(): React.JSX.Element {
           </div>
           <footer className="shortcut-rail">
             <span>
-              <kbd>F2</kbd> New sale
+              <kbd>F2</kbd> {t('pos.newSale')}
             </span>
             <span>
-              <kbd>F4</kbd> Hold cart
+              <kbd>F4</kbd> {t('pos.holdCart')} {heldCart ? '•' : ''}
             </span>
             <span>
-              <kbd>F6</kbd> Cashier queue
+              <kbd>F6</kbd> {t('pos.reprint')}
             </span>
             <span>
-              <kbd>Esc</kbd> Clear search
+              <kbd>F8</kbd> {t('pos.takePayment')}
+            </span>
+            <span>
+              <kbd>*N</kbd> Set selected quantity
+            </span>
+            <span>
+              <kbd>Del</kbd> Remove selected line
             </span>
           </footer>
         </section>
@@ -318,14 +495,14 @@ export function PosWorkspace(): React.JSX.Element {
         <aside className="cart-pane" aria-label="Current cart">
           <div className="cart-heading">
             <div>
-              <p className="eyebrow">Current cart</p>
+              <p className="eyebrow">{t('pos.currentCart')}</p>
               <h2>Counter ticket</h2>
             </div>
             <strong>{String(itemCount).padStart(2, '0')}</strong>
           </div>
           <div className="ticket-meta">
-            <span>Draft</span>
-            <span>Not reserved</span>
+            <span>{ticketState[0]}</span>
+            <span>{ticketState[1]}</span>
           </div>
           <div className="cart-lines">
             {cart.length === 0 ? (
@@ -333,13 +510,17 @@ export function PosWorkspace(): React.JSX.Element {
                 <span>+</span>
                 <h3>No items yet</h3>
                 <p>
-                  Select a medicine or scan its barcode. Stock is reserved only when this cart goes
-                  to the cashier.
+                  Select a medicine or scan its barcode. Stock is reserved only when payment starts.
                 </p>
               </div>
             ) : (
               cart.map((line) => (
-                <div className="cart-line" key={line.medicine.id}>
+                <div
+                  className={
+                    selectedMedicineId === line.medicine.id ? 'cart-line selected' : 'cart-line'
+                  }
+                  key={line.medicine.id}
+                >
                   <div>
                     <strong>{line.medicine.name}</strong>
                     <small>
@@ -349,13 +530,24 @@ export function PosWorkspace(): React.JSX.Element {
                   <div className="quantity-control">
                     <button
                       aria-label={`Remove one ${line.medicine.name}`}
+                      disabled={lockedCart}
                       onClick={() => changeQuantity(line.medicine.id, -1)}
                     >
                       −
                     </button>
-                    <output>{line.quantity}</output>
+                    <input
+                      aria-label={`${line.medicine.name} quantity`}
+                      inputMode="numeric"
+                      value={line.quantity}
+                      disabled={lockedCart}
+                      onFocus={() => setSelectedMedicineId(line.medicine.id)}
+                      onChange={(event) =>
+                        setQuantity(line.medicine.id, Number(event.target.value))
+                      }
+                    />
                     <button
                       aria-label={`Add one ${line.medicine.name}`}
+                      disabled={lockedCart}
                       onClick={() => changeQuantity(line.medicine.id, 1)}
                     >
                       +
@@ -391,7 +583,17 @@ export function PosWorkspace(): React.JSX.Element {
           <div className="cart-actions">
             {checkoutError ? (
               <p className="inline-error checkout-error" role="alert">
-                {checkoutError} <a href="#cash">Manage cash session</a>
+                {checkoutError}{' '}
+                {attempt?.finalizedSaleId ? (
+                  <button
+                    className="link-button"
+                    onClick={() => void recoverReceipt(attempt.finalizedSaleId!)}
+                  >
+                    Retry receipt
+                  </button>
+                ) : (
+                  <Link to="/cash">Manage cash session</Link>
+                )}
               </p>
             ) : null}
             {receipt ? (
@@ -401,22 +603,31 @@ export function PosWorkspace(): React.JSX.Element {
                 <small>
                   {formatPkrMoney(receipt.total)} · fiscal {receipt.fiscalStatus}
                 </small>
-                <a href="#returns">Return token {receipt.returnLookupToken.slice(0, 8)}…</a>
+                <Link to="/returns">Return token {receipt.returnLookupToken.slice(0, 8)}…</Link>
               </div>
             ) : null}
-            <button className="secondary-button" disabled={cart.length === 0} onClick={clearCart}>
+            <button
+              className="secondary-button"
+              disabled={cart.length === 0 || lockedCart}
+              onClick={resetSale}
+            >
               Clear
             </button>
             <button
               className="primary-button"
               disabled={cart.length === 0 || checkoutPending}
-              onClick={() => void checkout()}
+              onClick={() => void beginCheckout()}
             >
-              {checkoutPending ? 'Finalizing…' : 'Reserve and take cash'} <span>→</span>
+              {checkoutPending
+                ? 'Reserving…'
+                : lockedCart
+                  ? 'Resume payment'
+                  : 'Reserve and take payment'}{' '}
+              <span>→</span>
             </button>
           </div>
         </aside>
       </main>
-    </div>
+    </AppShell>
   );
 }
