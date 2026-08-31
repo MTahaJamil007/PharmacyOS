@@ -172,9 +172,10 @@ export class ReturnsService {
       if (input.cashSessionId) {
         const [session] = await transaction<Array<{ id: string }>>`
           select id::text from cash_sessions where id = ${input.cashSessionId.toString()}
-            and branch_id = ${user.branchId} and status = 'OPEN' for update
+            and branch_id = ${user.branchId} and terminal_id = ${user.terminalId}
+            and cashier_user_id = ${user.id} and status = 'OPEN' for update
         `;
-        if (!session) throw new ConflictException('Cash session is not open');
+        if (!session) throw new ConflictException('Caller cash session is not open');
       }
       const items = await transaction<
         Array<{

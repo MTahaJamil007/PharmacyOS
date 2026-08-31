@@ -9,8 +9,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { createHash } from 'node:crypto';
 
-import { DATABASE } from '../database.module.js';
+import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
+import { DATABASE, ENVIRONMENT } from '../database.module.js';
 import { PERMISSION_METADATA_KEY } from './auth.decorators.js';
 import type { AuthenticatedRequest, AuthenticatedUser } from './auth.types.js';
 
@@ -18,6 +19,7 @@ import type { AuthenticatedRequest, AuthenticatedUser } from './auth.types.js';
 export class AuthGuard implements CanActivate {
   constructor(
     @Inject(DATABASE) private readonly database: Database,
+    @Inject(ENVIRONMENT) private readonly environment: Environment,
     @Inject(Reflector) private readonly reflector: Reflector,
   ) {}
 
@@ -59,17 +61,29 @@ export class AuthGuard implements CanActivate {
       join users on users.id = sessions.user_id
       join user_branch_roles on user_branch_roles.user_id = users.id
         and user_branch_roles.branch_id = sessions.branch_id
-      join role_permissions on role_permissions.role_id = user_branch_roles.role_id
-      join permissions on permissions.id = role_permissions.permission_id
+      left join role_permissions on role_permissions.role_id = user_branch_roles.role_id
+      left join permissions on permissions.id = role_permissions.permission_id
       where sessions.token_hash = ${tokenHash}
         and sessions.revoked_at is null
         and sessions.expires_at > now()
+        and sessions.absolute_expires_at > now()
         and users.is_active = true
         and users.deleted_at is null
       group by sessions.id, users.id
     `;
 
     if (!row) throw new UnauthorizedException('Session expired or revoked');
+    const slidingExpiresAt = new Date(Date.now() + this.environment.SESSION_TTL_MINUTES * 60_000);
+    const refreshThresholdMinutes = Math.max(
+      1,
+      Math.floor(this.environment.SESSION_TTL_MINUTES / 2),
+    );
+    await this.database`
+      update sessions set last_seen_at = now(),
+        expires_at = least(${slidingExpiresAt}, absolute_expires_at)
+      where id = ${row.session_id} and revoked_at is null
+        and expires_at < now() + (${refreshThresholdMinutes} * interval '1 minute')
+    `;
     const user: AuthenticatedUser = {
       id: row.user_id,
       branchId: row.branch_id,

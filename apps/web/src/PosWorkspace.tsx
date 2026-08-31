@@ -7,6 +7,7 @@ import {
   finalizeCashSale,
   getCurrentCashSession,
   getSaleReceipt,
+  logout,
   reserveSaleDraft,
   searchMedicines,
   type FinalizedSale,
@@ -119,6 +120,10 @@ export function PosWorkspace(): React.JSX.Element {
   const [receipt, setReceipt] = useState<FinalizedSale | null>(null);
   const [printReceipt, setPrintReceipt] = useState<SaleReceipt | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const signOut = (): void => {
+    if (session) void logout(session.accessToken).catch(() => undefined);
+    setSession(null);
+  };
 
   useEffect(() => {
     searchInput.current?.focus();
@@ -218,7 +223,7 @@ export function PosWorkspace(): React.JSX.Element {
           <span>
             <i className="status-dot" /> LAN online
           </span>
-          <button onClick={() => setSession(null)}>
+          <button onClick={signOut}>
             {session?.user.displayName ?? 'Training user'} · Sign out
           </button>
         </div>

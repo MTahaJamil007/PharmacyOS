@@ -318,6 +318,24 @@ describe('stock ledger integrity', () => {
     });
 
     const service = new ReturnsService(database.application);
+    const [otherCashier] = await database.admin<{ id: string }[]>`
+      insert into users (username, display_name, password_hash)
+      values ('other-refund-cashier', 'Other Refund Cashier', 'not-used') returning id::text
+    `;
+    if (!otherCashier) throw new Error('Failed to create other cashier fixture');
+    const [otherSession] = await database.admin<{ id: string }[]>`
+      insert into cash_sessions (branch_id, terminal_id, cashier_user_id, opening_float)
+      values (${fixture.branchId}, ${fixture.terminalId}, ${otherCashier.id}, 0)
+      returning id::text
+    `;
+    if (!otherSession) throw new Error('Failed to create other cash session fixture');
+    await expect(
+      service.refund(fixture.user, BigInt(returnId), {
+        cashSessionId: BigInt(otherSession.id),
+        method: 'CASH',
+      }),
+    ).rejects.toMatchObject({ message: 'Caller cash session is not open' });
+
     const results = await runConcurrently(8, () =>
       service.refund(fixture.user, BigInt(returnId), { method: 'CARD', reference: 'TEST-REFUND' }),
     );

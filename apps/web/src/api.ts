@@ -2,6 +2,7 @@ import { createClientRequestId } from '@pharmacy/shared';
 
 export interface LoginResponse {
   readonly accessToken: string;
+  readonly absoluteExpiresAt: string;
   readonly expiresAt: string;
   readonly user: {
     readonly displayName: string;
@@ -73,6 +74,10 @@ export function login(
     method: 'POST',
     body: JSON.stringify({ username, password, terminalCode }),
   });
+}
+
+export function logout(token: string): Promise<{ readonly revoked: boolean }> {
+  return authenticatedRequest(token, '/auth/logout', { method: 'POST' });
 }
 
 export interface ExpiryRiskItem {

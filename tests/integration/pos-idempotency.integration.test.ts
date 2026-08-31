@@ -69,10 +69,13 @@ async function seedPosFixture(database: IsolatedDatabase): Promise<PosFixture> {
     values (${user.id}, ${branch.id}, ${role.id})
   `;
   await database.admin`
-    insert into sessions (user_id, branch_id, terminal_id, token_hash, expires_at)
+    insert into sessions (
+      user_id, branch_id, terminal_id, token_hash, expires_at, absolute_expires_at
+    )
     values (
       ${user.id}, ${branch.id}, ${terminal.id},
-      ${createHash('sha256').update(ACCESS_TOKEN).digest()}, now() + interval '1 hour'
+      ${createHash('sha256').update(ACCESS_TOKEN).digest()},
+      now() + interval '1 hour', now() + interval '12 hours'
     )
   `;
   const [cashSession] = await database.admin<{ id: string }[]>`

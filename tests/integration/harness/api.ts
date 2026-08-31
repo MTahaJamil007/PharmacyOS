@@ -13,7 +13,10 @@ export interface IntegrationApi {
   close(): Promise<void>;
 }
 
-function testEnvironment(databaseUrl: string): Environment {
+function testEnvironment(
+  databaseUrl: string,
+  overrides: Readonly<Record<string, string>> = {},
+): Environment {
   return parseEnvironment({
     AI_ENABLED: 'false',
     DATABASE_URL: databaseUrl,
@@ -23,12 +26,16 @@ function testEnvironment(databaseUrl: string): Environment {
     SESSION_SECRET: 'integration-session-secret-at-least-32-bytes',
     TRUST_PROXY: 'false',
     WEB_ORIGIN: 'http://127.0.0.1:5173',
+    ...overrides,
   });
 }
 
-export async function createIntegrationApi(databaseUrl: string): Promise<IntegrationApi> {
+export async function createIntegrationApi(
+  databaseUrl: string,
+  environmentOverrides: Readonly<Record<string, string>> = {},
+): Promise<IntegrationApi> {
   const applicationDatabase = createDatabase(databaseUrl);
-  const environment = testEnvironment(databaseUrl);
+  const environment = testEnvironment(databaseUrl, environmentOverrides);
   const moduleReference = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(DATABASE)
     .useValue(applicationDatabase)

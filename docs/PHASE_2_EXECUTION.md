@@ -41,6 +41,11 @@
 | `npm run test:unit`                     |         0 | 27 tests passed across API, web, worker, config, database, and shared workspaces               |
 | Root `npm run typecheck`                |         0 | Root harness and all workspaces passed after the money-boundary changes                        |
 | `npm run test:integration`              |         0 | Four files and 13 tests passed, including sub-paisa receipt and fractional FEFO sale totals    |
+| Root `npm run typecheck`                |         0 | Root harness and every workspace passed after auth/session changes                             |
+| Auth integration test                   |         0 | Four scenarios passed against PostgreSQL 18                                                    |
+| `npm run test:integration`              |         0 | Five files and 17 tests passed across migrations, POS, ledger, money, refunds, and auth        |
+| `npm run test:unit`                     |         0 | 35 tests passed across all six workspaces                                                      |
+| `npm run lint`                          |         0 | ESLint completed with zero warnings                                                            |
 
 ## Test-foundation decisions
 
@@ -65,6 +70,11 @@
 - **Rounding rule:** line extension uses nearest paisa with halves away from zero everywhere, including the budget-regimen calculator. Quantity rounding up to a permitted sale increment remains a separate physical-quantity rule.
 - **Browser exactness:** cart lines, cart totals, receipts, cash values, refunds, and budget values use shared `bigint` decimal helpers plus string formatting. No browser production path converts money to JavaScript `Number`; return quantities are also filtered with scaled integers.
 - **Fractional proof:** a one-unit sale at PKR `0.01` split across two `0.500` FEFO reservations changes the reservation total from the initial PKR `0.01` estimate to PKR `0.02`; the client tenders the reservation total and the stored header equals the two PKR `0.01` sale lines.
+- **Login throttling:** IP and normalized-username scopes are SHA-256 hashed and serialized with transaction advisory locks. The configured limit is consumed before Argon2 work, so parallel attempts cannot bypass it. Unknown usernames verify against a fixed Argon2id dummy hash and receive the same `401` response as invalid credentials. Audit evidence distinguishes ordinary failures from throttled attempts without using audit-row counts as limiter state.
+- **Account lockout:** failure counts use an explicit 15-minute window and a fixed lock expiry. Attempts during a lock do not extend it; the next failure after an expired window starts again at one. Successful login clears the account failure state.
+- **Session lifetime:** a session has a 30-minute idle expiry that refreshes after half the idle window, bounded by a non-extendable 12-hour absolute expiry. `POST /auth/logout` records revocation and an audit event; both web sign-out controls call it before discarding the local session.
+- **Authorization:** duplicate terminal codes bind deterministically by branch and terminal ID. The guard uses left joins below the assigned role, so a valid zero-permission session authenticates and receives `403` for a forbidden operation instead of a misleading `401`.
+- **Refund ownership:** a cash refund accepts only an open session owned by the authenticated user on the authenticated terminal. The integration suite rejects another cashier's open till before proving one refund under eight concurrent retries.
 
 ## Findings resolved during execution
 
@@ -74,4 +84,4 @@
 
 ## Gate status
 
-The Phase 2 exit gate is **not passed**. Workstreams 1–5 are implemented and green locally. Authentication/authorization, request validation, the remaining P0 audit matrix, the five core Playwright workflows, and CI exit evidence remain in progress.
+The Phase 2 exit gate is **not passed**. Workstreams 1–6 are implemented and green locally. Request validation, the remaining P0 audit matrix, the five core Playwright workflows, and CI exit evidence remain in progress.

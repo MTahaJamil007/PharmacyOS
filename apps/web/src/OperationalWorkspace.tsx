@@ -17,6 +17,7 @@ import {
   getReorderSuggestions,
   getShelfRecommendations,
   lookupReturn,
+  logout,
   openCashSession,
   refundReturn,
   requestReturn,
@@ -55,6 +56,10 @@ function isPositiveQuantity(value: string): boolean {
 function WorkspaceHeader({ view }: { readonly view: OperationalView }): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
   const setSession = usePharmacyStore((state) => state.setSession);
+  const signOut = (): void => {
+    if (session) void logout(session.accessToken).catch(() => undefined);
+    setSession(null);
+  };
   const links: ReadonlyArray<{ readonly key: OperationalView | 'pos'; readonly label: string }> = [
     { key: 'pos', label: 'Counter' },
     { key: 'cash', label: 'Cash session' },
@@ -77,9 +82,7 @@ function WorkspaceHeader({ view }: { readonly view: OperationalView }): React.JS
         ))}
       </nav>
       <div className="operator">
-        <button onClick={() => setSession(null)}>
-          {session?.user.displayName ?? 'Operator'} · Sign out
-        </button>
+        <button onClick={signOut}>{session?.user.displayName ?? 'Operator'} · Sign out</button>
       </div>
     </header>
   );
