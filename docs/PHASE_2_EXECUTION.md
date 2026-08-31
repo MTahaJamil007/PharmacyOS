@@ -2,7 +2,7 @@
 
 - **Roadmap source:** `docs/DEVELOPMENT_PLAN.md`
 - **Started:** 2026-08-31
-- **Status:** implementation and local exit suite complete; hosted CI confirmation pending
+- **Status:** exit gate passed
 - **Sequence exception:** the user explicitly directed Phase 2 execution before the remaining Phase 1 on-site checks scheduled for 2026-09-01. Phase 1 remains open; this exception does not mark its exit gate passed.
 
 ## Execution order
@@ -56,6 +56,7 @@
 | Phase 2 AI unit suite                   |         0 | 23 API tests passed, including disabled, timeout, rate-limit, malformed, and grounding failures                                          |
 | `npm run test:e2e`                      |         0 | All five required counter workflows passed in Chromium-compatible Chrome                                                                 |
 | `npm run verify`                        |         0 | Formatting, lint, type-check, 58 unit tests, 52 Docker integration tests, five E2E tests, and all production builds passed on 2026-08-31 |
+| GitHub Actions `Quality gate`           |         0 | Clean Ubuntu clone passed on commit `4f549af7fe38e0ccf4ad46402871578e18290261`; run `33427582589` on 2026-08-31                          |
 
 ## P0 exit matrix
 
@@ -121,4 +122,4 @@ On this Windows host, Playwright used the installed Chrome binary because the pi
 
 ## Gate status
 
-The complete Phase 2 P0 exit suite is **green locally** and the implementation is complete. The strict Phase 2 exit gate is **not yet passed** because `docs/DEVELOPMENT_PLAN.md` requires these results to be green in hosted CI. This checkout has no Git remote, so no hosted workflow can be triggered or cited. Phase 3 must not start until the same `npm run verify` workflow reports exit `0` in CI.
+The Phase 2 exit gate is **passed**. The complete P0 suite passed locally and in [GitHub Actions run 33427582589](https://github.com/MTahaJamil007/PharmacyOS/actions/runs/33427582589) from a clean Ubuntu clone at commit `4f549af7fe38e0ccf4ad46402871578e18290261`. The first hosted run exposed a web workspace alias that depended on generated local output; commit `4f549af` made that dependency explicit and the repeated hosted gate exited `0`.

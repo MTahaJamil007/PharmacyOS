@@ -154,7 +154,7 @@ Remove the "local-first" claim (there is no service worker, no IndexedDB, no off
 
 ### Phase 2 — Correctness under concurrency · ~4 weeks
 
-> **Execution status (2026-08-31):** implementation and the complete local P0 exit suite are green: `npm run verify` exited `0` with 58 unit tests, 52 Docker/PostgreSQL integration tests, five browser workflows, and all builds. Hosted CI confirmation is still unavailable because this checkout has no Git remote, so the strict exit gate remains open and Phase 3 has not started. See `PHASE_2_EXECUTION.md`.
+> **Execution status (2026-09-01):** exit gate passed. Local `npm run verify` exited `0` with 58 unit tests, 52 Docker/PostgreSQL integration tests, five browser workflows, and all builds; GitHub Actions run `33427582589` repeated the clean-clone gate successfully on commit `4f549af`. See `PHASE_2_EXECUTION.md`.
 
 The most important phase. This is where "Implemented" becomes "proven".
 
@@ -188,6 +188,8 @@ The most important phase. This is where "Implemented" becomes "proven".
 ---
 
 ### Phase 3 — Counter-grade POS · ~4 weeks
+
+> **Implementation status (2026-09-01):** software workstreams 3.1–3.7 are complete on `development`; `npm run verify` passed locally with 67 unit tests, 53 PostgreSQL-backed integration tests, 7 browser workflows, and all production builds. The roadmap exit gate remains open until the deferred counter-hardware exercise records 20 consecutive keyboard-and-scanner-only sales with printing and reprint.
 
 This is where the product starts to feel better than what it replaces. A pharmacist judges a POS in the first ten minutes at the counter.
 
