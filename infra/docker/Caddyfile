@@ -1,7 +1,11 @@
 http://{$PHARMACY_HOSTNAME:pharmacy.lan} {
-  @health path /healthz
-  respond @health "ok" 200
-  redir https://{$PHARMACY_HOSTNAME:pharmacy.lan}{uri} permanent
+  handle /healthz {
+    respond "ok" 200
+  }
+
+  handle {
+    redir https://{$PHARMACY_HOSTNAME:pharmacy.lan}{uri} permanent
+  }
 }
 
 https://{$PHARMACY_HOSTNAME:pharmacy.lan} {

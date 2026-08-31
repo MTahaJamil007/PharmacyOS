@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the Compose environment file}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in the Compose environment file}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
       - ./postgres-init-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d pharmacy_os']
@@ -20,7 +20,7 @@ services:
       start_period: 10s
     deploy:
       resources:
-        limits: { cpus: '1.50', memory: 2G }
+        limits: { cpus: '1.50', memory: 2G, pids: 256 }
     pids_limit: 256
     networks: [backend]
 
@@ -46,7 +46,7 @@ services:
       retries: 5
     deploy:
       resources:
-        limits: { cpus: '0.25', memory: 192M }
+        limits: { cpus: '0.25', memory: 192M, pids: 128 }
     pids_limit: 128
     networks: [backend]
 
@@ -65,7 +65,7 @@ services:
       postgres: { condition: service_healthy }
     deploy:
       resources:
-        limits: { cpus: '1.00', memory: 512M }
+        limits: { cpus: '1.00', memory: 512M, pids: 128 }
     pids_limit: 128
     networks: [backend]
 
@@ -100,7 +100,7 @@ services:
       start_period: 15s
     deploy:
       resources:
-        limits: { cpus: '1.00', memory: 768M }
+        limits: { cpus: '1.00', memory: 768M, pids: 256 }
     pids_limit: 256
     networks: [backend]
 
@@ -132,7 +132,7 @@ services:
       start_period: 30s
     deploy:
       resources:
-        limits: { cpus: '1.00', memory: 1G }
+        limits: { cpus: '1.00', memory: 1G, pids: 256 }
     pids_limit: 256
     networks: [backend]
 
@@ -172,7 +172,7 @@ services:
       start_period: 30s
     deploy:
       resources:
-        limits: { cpus: '0.50', memory: 512M }
+        limits: { cpus: '0.50', memory: 512M, pids: 128 }
     pids_limit: 128
     networks: [backend]
 
@@ -202,9 +202,9 @@ services:
       start_period: 15s
     deploy:
       resources:
-        limits: { cpus: '0.25', memory: 128M }
+        limits: { cpus: '0.25', memory: 128M, pids: 128 }
     pids_limit: 128
-    networks: [backend]
+    networks: [backend, edge]
 
 volumes:
   backup-data:
@@ -219,3 +219,4 @@ secrets:
 networks:
   backend:
     internal: true
+  edge:

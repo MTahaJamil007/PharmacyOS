@@ -1,10 +1,21 @@
 FROM node:24.19.0-bookworm-slim AS build
 ENV HUSKY=0
 WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/shared/package.json packages/shared/package.json
+RUN npm ci
 ARG VITE_API_URL=/api/v1
 ENV VITE_API_URL=$VITE_API_URL
-COPY . .
-RUN npm ci && npm run build --workspace @pharmacy/web
+COPY tsconfig.base.json ./
+COPY apps/web apps/web
+COPY packages/shared packages/shared
+RUN npm run build --workspace @pharmacy/shared \
+  && npm run build --workspace @pharmacy/web
 
 FROM caddy:2.11.4-alpine
 COPY infra/docker/Caddyfile /etc/caddy/Caddyfile

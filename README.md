@@ -4,14 +4,14 @@ PharmacyOS is a single-shop, on-premise pharmacy operations platform for Pakista
 
 ## Current status
 
-| Area                 | Verified status                                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Engineering gate     | Phase 0 is complete locally. A clean clone passes the locked install and `npm run verify`; hosted CI awaits a Git remote.                                                      |
-| Pilot deployment     | Phase 1 code is implemented and statically verified. The clean-host Compose, second-terminal sale/receipt, and timed restore exit gate still require Docker and shop hardware. |
-| Receipts             | A sale can render and print an 80 mm browser receipt with an opaque return-token QR code. There is no find-sale/reprint workflow yet.                                          |
-| Fiscal integration   | The durable FBR outbox boundary exists. No certified production FBR adapter exists; non-disabled real modes retry rather than submit.                                          |
-| Owner reporting      | The read-only AI boundary and limited operational screens exist. A deterministic non-AI owner dashboard is planned for Phase 4.                                                |
-| Production readiness | Blocked until the active phase exit gates in `docs/DEVELOPMENT_PLAN.md` have on-site evidence.                                                                                 |
+| Area                 | Verified status                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engineering gate     | Phase 0 is complete locally. A clean clone passes the locked install and `npm run verify`; hosted CI awaits a Git remote.                                                       |
+| Pilot deployment     | Phase 1 code and an isolated Docker-host build/start/backup/restore are verified. Second-terminal sale/receipt, trusted client TLS, and physical external-disk evidence remain. |
+| Receipts             | A sale can render and print an 80 mm browser receipt with an opaque return-token QR code. There is no find-sale/reprint workflow yet.                                           |
+| Fiscal integration   | The durable FBR outbox boundary exists. No certified production FBR adapter exists; non-disabled real modes retry rather than submit.                                           |
+| Owner reporting      | The read-only AI boundary and limited operational screens exist. A deterministic non-AI owner dashboard is planned for Phase 4.                                                 |
+| Production readiness | Blocked until the active phase exit gates in `docs/DEVELOPMENT_PLAN.md` have on-site evidence.                                                                                  |
 
 ## Prerequisites
 

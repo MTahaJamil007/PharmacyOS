@@ -286,7 +286,7 @@ perform_restore_drill() {
   started_at="$(date '+%s')"
   log "Starting restore drill run $run_id from $(basename "$source_path")"
 
-  if ! (cd "$(dirname "$source_path")" && sha256sum --check "$(basename "$source_path").sha256" >/dev/null); then
+  if ! (cd "$(dirname "$source_path")" && sha256sum -c "$(basename "$source_path").sha256" >/dev/null); then
     record_failure "$run_id" 'encrypted backup checksum validation failed'
     return 1
   fi

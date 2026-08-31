@@ -7,12 +7,14 @@ import { parse } from 'yaml';
 type ComposeService = {
   command?: string[];
   depends_on?: Record<string, { condition?: string }>;
-  deploy?: { resources?: { limits?: { cpus?: string; memory?: string } } };
+  deploy?: { resources?: { limits?: { cpus?: string; memory?: string; pids?: number } } };
   environment?: Record<string, string>;
   healthcheck?: { test?: string[] };
+  networks?: string[];
   pids_limit?: number;
   ports?: string[];
   secrets?: string[];
+  volumes?: Array<string | Record<string, unknown>>;
 };
 
 type ComposeFile = {
@@ -67,6 +69,7 @@ describe('production deployment contract', () => {
         `${name} memory limit`,
       ).toBeDefined();
       expect(configuredService.pids_limit, `${name} process limit`).toBeGreaterThan(0);
+      expect(configuredService.deploy?.resources?.limits?.pids).toBe(configuredService.pids_limit);
     }
   });
 
@@ -87,18 +90,38 @@ describe('production deployment contract', () => {
     expect(roleInitializer).toContain('create role pharmacy_app login password %L');
   });
 
+  it('mounts PostgreSQL 18 data at the supported cluster root', () => {
+    expect(service(compose, 'postgres').volumes).toContain('postgres-data:/var/lib/postgresql');
+  });
+
   it('exposes TLS and keeps internal services off the host network', () => {
     expect(service(compose, 'web').ports).toEqual([
       '${HTTP_PORT:-80}:80',
       '${HTTPS_PORT:-443}:443',
     ]);
     expect(compose.networks?.backend?.internal).toBe(true);
+    expect(compose.networks?.edge?.internal).not.toBe(true);
+    expect(service(compose, 'web').networks).toEqual(['backend', 'edge']);
+    for (const name of ['postgres', 'redis', 'migrate', 'api', 'worker', 'backup']) {
+      expect(service(compose, name).networks).toEqual(['backend']);
+    }
 
     const caddyfile = readRepositoryFile('infra/docker/Caddyfile');
     expect(caddyfile).toContain('tls internal');
+    expect(caddyfile).toMatch(/handle \/healthz[\s\S]*respond "ok" 200/);
     expect(caddyfile).toContain('Strict-Transport-Security "max-age=31536000"');
     expect(caddyfile).toContain('Content-Security-Policy');
     expect(caddyfile).toMatch(/http:\/\/.*redir https:\/\//s);
+
+    const webDockerfile = readRepositoryFile('infra/docker/Dockerfile.web');
+    expect(webDockerfile).toMatch(
+      /npm run build --workspace @pharmacy\/shared[\s\S]*npm run build --workspace @pharmacy\/web/,
+    );
+
+    for (const path of ['infra/docker/Dockerfile.api', 'infra/docker/Dockerfile.worker']) {
+      const dockerfile = readRepositoryFile(path);
+      expect(dockerfile).toContain('npm ci --omit=dev --ignore-scripts');
+    }
   });
 
   it('requires encrypted external backups and automated restore drills', () => {
@@ -113,9 +136,15 @@ describe('production deployment contract', () => {
     expect(script).toContain('WEEKLY_KEEP=4');
     expect(script).toContain('MONTHLY_KEEP=3');
     expect(script).toContain('| pg_restore --exit-on-error');
+    expect(script).toContain('sha256sum -c');
+    expect(script).not.toContain('sha256sum --check');
     expect(script).toContain("record_start 'RESTORE_DRILL'");
     expect(script).toContain('psql "$restore_app_url"');
     expect(script).toContain('flock -n 9');
+
+    const entrypoint = readRepositoryFile('infra/docker/backup-entrypoint.sh');
+    expect(entrypoint).toContain('install -o backup -g backup -m 0400');
+    expect(entrypoint).toContain('export BACKUP_AGE_IDENTITY_FILE="$identity_runtime"');
   });
 
   it('never sends local backup identities into a Docker build context', () => {
