@@ -215,26 +215,138 @@ export class IntelligenceService {
   ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
       const [item] = await transaction<
-        Array<{ id: string; branch_id: string; inventory_batch_id: string; status: string }>
+        Array<{
+          id: string;
+          action: string | null;
+          branch_id: string;
+          inventory_batch_id: string;
+          status: string;
+        }>
       >`
-        select id::text, branch_id::text, inventory_batch_id::text, status
+        select id::text, action, branch_id::text, inventory_batch_id::text, status
         from expiry_work_items where id = ${workItemId.toString()} for update
       `;
       if (!item || item.branch_id !== user.branchId)
         throw new NotFoundException('Expiry work item not found');
+      if (item.action === input.action) {
+        return {
+          action: item.action,
+          id: item.id,
+          idempotentReplay: true,
+          status: item.status,
+        };
+      }
       if (item.status === 'RESOLVED')
         throw new ConflictException('Expiry work item is already resolved');
-      if (input.action === 'QUARANTINED') {
-        await transaction`
-          update inventory_batches set status = 'QUARANTINE'
-          where id = ${item.inventory_batch_id} and status <> 'DEPLETED'
+
+      let inventoryBatchId = item.inventory_batch_id;
+      if (input.action === 'QUARANTINED' || input.action === 'SCRAPPED') {
+        const [batch] = await transaction<
+          Array<{
+            id: string;
+            batch_number: string;
+            cost_price: string;
+            current_qty: string;
+            expiry_date: string;
+            medicine_id: string;
+            purchase_order_item_id: string | null;
+            received_at: Date;
+            sale_price: string;
+            source_batch_id: string | null;
+            status: string;
+          }>
+        >`
+          select id::text, medicine_id::text, purchase_order_item_id::text,
+            batch_number, expiry_date::text, received_at, cost_price::text,
+            sale_price::text, current_qty::text, status, source_batch_id::text
+          from inventory_batches
+          where id = ${item.inventory_batch_id} and current_qty > 0
+          for update
         `;
+        if (!batch) {
+          throw new ConflictException('Expiry batch has no stock to action');
+        }
+        const [reservation] = await transaction<Array<{ has_active: boolean }>>`
+          select exists (
+            select 1 from stock_reservations
+            where inventory_batch_id = ${batch.id}
+              and status = 'ACTIVE' and expires_at > now()
+          ) as has_active
+        `;
+        if (reservation?.has_active) {
+          throw new ConflictException('Release active reservations before restricting this batch');
+        }
+
+        if (input.action === 'QUARANTINED') {
+          if (batch.status !== 'SELLABLE') {
+            throw new ConflictException('Only sellable stock can enter expiry quarantine');
+          }
+          const [quarantineBatch] = await transaction<
+            Array<{ id: string; quantity_after: string }>
+          >`
+            insert into inventory_batches (
+              branch_id, medicine_id, purchase_order_item_id, batch_number, expiry_date,
+              received_at, cost_price, sale_price, current_qty, status,
+              source_batch_id, segment_key
+            ) values (
+              ${user.branchId}, ${batch.medicine_id}, ${batch.purchase_order_item_id},
+              ${batch.batch_number}, ${batch.expiry_date}, ${batch.received_at},
+              ${batch.cost_price}, ${batch.sale_price}, ${batch.current_qty}, 'QUARANTINE',
+              ${batch.source_batch_id ?? batch.id}, 'EXPIRY_QUARANTINE'
+            )
+            on conflict on constraint inventory_batches_acquisition_lot_key do update set
+              current_qty = inventory_batches.current_qty + excluded.current_qty,
+              status = 'QUARANTINE', deleted_at = null
+            returning id::text, current_qty::text as quantity_after
+          `;
+          if (!quarantineBatch) throw new Error('Quarantine batch creation failed');
+          await transaction`
+            update inventory_batches set current_qty = 0, status = 'DEPLETED' where id = ${batch.id}
+          `;
+          await transaction`
+            insert into stock_movements (
+              branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
+              performed_by_user_id, reason, metadata
+            ) values (
+              ${user.branchId}, ${batch.id}, 'QUARANTINE', -${batch.current_qty}::numeric, 0,
+              ${user.id}, 'Expiry quarantine',
+              ${transaction.json({ expiryWorkItemId: item.id, quarantineBatchId: quarantineBatch.id })}
+            )
+          `;
+          await transaction`
+            insert into stock_movements (
+              branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
+              performed_by_user_id, reason, metadata
+            ) values (
+              ${user.branchId}, ${quarantineBatch.id}, 'TRANSFER', ${batch.current_qty},
+              ${quarantineBatch.quantity_after}, ${user.id}, 'Received into expiry quarantine',
+              ${transaction.json({ expiryWorkItemId: item.id, sourceBatchId: batch.id })}
+            )
+          `;
+          inventoryBatchId = quarantineBatch.id;
+        } else {
+          await transaction`
+            update inventory_batches set current_qty = 0, status = 'DEPLETED' where id = ${batch.id}
+          `;
+          await transaction`
+            insert into stock_movements (
+              branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
+              performed_by_user_id, reason, metadata
+            ) values (
+              ${user.branchId}, ${batch.id}, 'SCRAP', -${batch.current_qty}::numeric, 0,
+              ${user.id}, 'Expiry write-off',
+              ${transaction.json({ expiryWorkItemId: item.id, notes: input.notes })}
+            )
+          `;
+        }
       }
-      const nextStatus = input.action === 'RESOLVED' ? 'RESOLVED' : 'REVIEWED';
+      const nextStatus =
+        input.action === 'RESOLVED' || input.action === 'SCRAPPED' ? 'RESOLVED' : 'REVIEWED';
       await transaction`
         update expiry_work_items
-        set action = ${input.action}, status = ${nextStatus}, acted_by_user_id = ${user.id},
-            action_notes = ${input.notes}, acted_at = now()
+          set action = ${input.action}, status = ${nextStatus}, acted_by_user_id = ${user.id},
+            action_notes = ${input.notes}, acted_at = now(),
+            inventory_batch_id = ${inventoryBatchId}
         where id = ${item.id}
       `;
       await transaction`
@@ -245,7 +357,13 @@ export class IntelligenceService {
           'expiry_work_item', ${item.id}, ${transaction.json({ action: input.action })}
         )
       `;
-      return { id: item.id, status: nextStatus, action: input.action };
+      return {
+        id: item.id,
+        status: nextStatus,
+        action: input.action,
+        inventoryBatchId,
+        idempotentReplay: false,
+      };
     });
   }
 }

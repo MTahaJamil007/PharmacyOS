@@ -157,12 +157,35 @@ try {
         now() - interval '60 days',
         (25 + ((substring(medicines.sku from 5)::int - 1) % 200))::numeric(12, 2),
         (35 + ((substring(medicines.sku from 5)::int - 1) % 250))::numeric(12, 2),
-        case when substring(medicines.sku from 5)::int <= 90 then 49 else 50 end,
-        'SELLABLE'
+        50, 'SELLABLE'
       from medicines where medicines.sku like 'DEV-%' and medicines.deleted_at is null
       on conflict on constraint inventory_batches_acquisition_lot_key
       do update set cost_price = excluded.cost_price, sale_price = excluded.sale_price,
-        current_qty = excluded.current_qty, status = excluded.status, deleted_at = null
+        current_qty = case
+          when exists (
+            select 1 from stock_movements
+            where stock_movements.inventory_batch_id = inventory_batches.id
+          ) then inventory_batches.current_qty
+          else excluded.current_qty
+        end,
+        status = excluded.status, deleted_at = null
+    `;
+    await transaction`
+      insert into stock_movements (
+        branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after, reason,
+        metadata
+      )
+      select inventory_batches.branch_id, inventory_batches.id, 'ADJUSTMENT_IN',
+        inventory_batches.current_qty, inventory_batches.current_qty,
+        'Development fixture opening balance', '{"fixture":true}'::jsonb
+      from inventory_batches
+      where inventory_batches.branch_id = ${branch.id}
+        and inventory_batches.batch_number like 'DEV-B-%'
+        and inventory_batches.current_qty > 0
+        and not exists (
+          select 1 from stock_movements
+          where stock_movements.inventory_batch_id = inventory_batches.id
+        )
     `;
 
     await transaction`
@@ -285,13 +308,19 @@ try {
           insert into payments (sale_id, cash_session_id, method, amount, created_at)
           values (${sale.id}, ${cashSession.id}, 'CASH', ${source.sale_price}, ${occurredAt})
         `;
+        const [inventory] = await transaction<Array<{ quantity_after: string }>>`
+          update inventory_batches set current_qty = current_qty - 1
+          where id = ${source.batch_id} and current_qty >= 1
+          returning current_qty::text as quantity_after
+        `;
+        if (!inventory) throw new Error('Historical inventory fixture failed');
         await transaction`
           insert into stock_movements (
             branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
             sale_item_id, performed_by_user_id, reason, created_at
           ) values (
-            ${branch.id}, ${source.batch_id}, 'SALE', -1, 49, ${saleItem.id}, ${cashierId},
-            'Development history fixture', ${occurredAt}
+            ${branch.id}, ${source.batch_id}, 'SALE', -1, ${inventory.quantity_after},
+            ${saleItem.id}, ${cashierId}, 'Development history fixture', ${occurredAt}
           )
         `;
         await transaction`insert into return_lookup_tokens (sale_id) values (${sale.id})`;

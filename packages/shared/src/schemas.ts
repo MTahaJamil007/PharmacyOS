@@ -72,7 +72,7 @@ export const expiryRiskQuerySchema = paginationSchema.extend({
 });
 
 export const expiryWorkItemActionSchema = z.object({
-  action: z.enum(['REVIEWED', 'SUPPLIER_RETURN_CANDIDATE', 'QUARANTINED', 'RESOLVED']),
+  action: z.enum(['REVIEWED', 'SUPPLIER_RETURN_CANDIDATE', 'QUARANTINED', 'SCRAPPED', 'RESOLVED']),
   notes: z.string().trim().min(2).max(500),
 });
 

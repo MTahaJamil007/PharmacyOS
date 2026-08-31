@@ -16,6 +16,7 @@ import {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE } from '../database.module.js';
 
 interface SuggestionRow {
@@ -216,6 +217,12 @@ export class ProcurementService {
     input: CreateDraftPurchaseOrderRequest,
   ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'PROCUREMENT.CREATE_DRAFT_PURCHASE_ORDER',
+        user.branchId,
+        input.clientRequestId,
+      );
       const [existing] = await transaction<Array<{ id: string; order_number: string }>>`
         select id::text, order_number from purchase_orders
         where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}
@@ -389,6 +396,12 @@ export class ProcurementService {
     const totalCost = sumMoney(lineTotals);
 
     return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'PROCUREMENT.CREATE_PURCHASE_ORDER',
+        user.branchId,
+        input.clientRequestId,
+      );
       const [existing] = await transaction<Array<{ id: string }>>`
         select id::text from purchase_orders
         where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}
@@ -453,6 +466,12 @@ export class ProcurementService {
     input: OrderPurchaseOrderRequest,
   ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'PROCUREMENT.ORDER_PURCHASE_ORDER',
+        user.branchId,
+        input.clientRequestId,
+      );
       const order = await this.lockPurchaseOrder(transaction, user.branchId, purchaseOrderId);
       if (order.ordered_client_request_id === input.clientRequestId) {
         return {
@@ -502,6 +521,12 @@ export class ProcurementService {
     });
 
     return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'PROCUREMENT.RECEIVE_PURCHASE_ORDER',
+        user.branchId,
+        input.clientRequestId,
+      );
       const [existing] = await transaction<Array<{ id: string }>>`
         select id::text from goods_receipts
         where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}

@@ -52,6 +52,47 @@ describe('database-backed integration harness', () => {
     ).rejects.toMatchObject({ code: '42501' });
   });
 
+  it('grants the application role access to tables created by future migrations', async () => {
+    await testDatabase.admin`
+      create table phase2_future_grant_check (
+        id bigint generated always as identity primary key,
+        value text not null
+      )
+    `;
+    await expect(
+      testDatabase.application`
+        insert into phase2_future_grant_check (value) values ('readable') returning id
+      `,
+    ).resolves.toHaveLength(1);
+    await expect(
+      testDatabase.application`select value from phase2_future_grant_check`,
+    ).resolves.toEqual([{ value: 'readable' }]);
+  });
+
+  it('uses business-scope uniqueness for idempotent state transitions', async () => {
+    const indexes = await testDatabase.admin<{ indexdef: string; indexname: string }[]>`
+      select indexname, indexdef from pg_indexes
+      where schemaname = 'public' and indexname in (
+        'cash_sessions_close_request_uidx',
+        'cash_sessions_variance_approval_request_uidx',
+        'purchase_orders_order_request_uidx'
+      )
+      order by indexname
+    `;
+
+    expect(indexes.map((index) => index.indexname)).toEqual([
+      'cash_sessions_close_request_uidx',
+      'cash_sessions_variance_approval_request_uidx',
+      'purchase_orders_order_request_uidx',
+    ]);
+    expect(indexes.map((index) => index.indexdef)).toEqual([
+      expect.stringContaining('(branch_id, terminal_id, close_client_request_id)'),
+      expect.stringContaining('(branch_id, variance_approval_client_request_id)'),
+      expect.stringContaining('(branch_id, ordered_client_request_id)'),
+    ]);
+    expect(indexes.every((index) => !index.indexdef.includes('(id, '))).toBe(true);
+  });
+
   it('rolls successful test work back', async () => {
     const insertedId = await withRollback(testDatabase.admin, async (transaction) => {
       const [branch] = await transaction<{ id: string }[]>`

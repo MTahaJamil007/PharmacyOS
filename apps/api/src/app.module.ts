@@ -1,4 +1,4 @@
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { Module } from '@nestjs/common';
 
 import { AuthGuard } from './auth/auth.guard.js';
@@ -14,6 +14,7 @@ import { JobsModule } from './operations/jobs.module.js';
 import { ProcurementModule } from './procurement/procurement.module.js';
 import { ReturnsModule } from './returns/returns.module.js';
 import { CashSessionsModule } from './cash-sessions/cash-sessions.module.js';
+import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
 
 @Module({
   imports: [
@@ -30,6 +31,11 @@ import { CashSessionsModule } from './cash-sessions/cash-sessions.module.js';
     JobsModule,
     CashSessionsModule,
   ],
-  providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
+  providers: [
+    AuthGuard,
+    DatabaseExceptionFilter,
+    { provide: APP_GUARD, useExisting: AuthGuard },
+    { provide: APP_FILTER, useExisting: DatabaseExceptionFilter },
+  ],
 })
 export class AppModule {}

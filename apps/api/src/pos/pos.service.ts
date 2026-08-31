@@ -12,6 +12,7 @@ import {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
 
 interface DraftRow {
@@ -40,7 +41,7 @@ interface BatchRow {
   readonly received_at: Date;
   readonly cost_price: string;
   readonly sale_price: string;
-  readonly available_qty: string;
+  readonly current_qty: string;
 }
 
 interface ReservedLineRow {
@@ -230,13 +231,7 @@ export class PosService {
             inventory_batches.received_at,
             inventory_batches.cost_price::text,
             inventory_batches.sale_price::text,
-            (inventory_batches.current_qty - coalesce((
-              select sum(stock_reservations.quantity)
-              from stock_reservations
-              where stock_reservations.inventory_batch_id = inventory_batches.id
-                and stock_reservations.status = 'ACTIVE'
-                and stock_reservations.expires_at > now()
-            ), 0))::text as available_qty
+            inventory_batches.current_qty::text
           from inventory_batches
           where inventory_batches.branch_id = ${user.branchId}
             and inventory_batches.medicine_id = ${item.medicine_id}
@@ -247,6 +242,24 @@ export class PosService {
           order by inventory_batches.id
           for update of inventory_batches
         `;
+        const batchIds = lockedBatches.map((batch) => batch.batch_id);
+        const activeReservations =
+          batchIds.length === 0
+            ? []
+            : await transaction<Array<{ inventory_batch_id: string; reserved_qty: string }>>`
+                select inventory_batch_id::text,
+                  coalesce(sum(quantity), 0)::text as reserved_qty
+                from stock_reservations
+                where inventory_batch_id in ${transaction(batchIds)}
+                  and status = 'ACTIVE' and expires_at > now()
+                group by inventory_batch_id
+              `;
+        const reservedByBatch = new Map(
+          activeReservations.map((reservation) => [
+            reservation.inventory_batch_id,
+            decimalToScaledInteger(reservation.reserved_qty, 3),
+          ]),
+        );
         lockedBatches.sort((left, right) => {
           const dateOrder = left.expiry_date.localeCompare(right.expiry_date);
           if (dateOrder !== 0) return dateOrder;
@@ -260,7 +273,9 @@ export class PosService {
         let required = decimalToScaledInteger(item.quantity, 3);
         for (const batch of lockedBatches) {
           if (required === 0n) break;
-          const available = decimalToScaledInteger(batch.available_qty, 3);
+          const available =
+            decimalToScaledInteger(batch.current_qty, 3) -
+            (reservedByBatch.get(batch.batch_id) ?? 0n);
           if (available <= 0n) continue;
           const allocated = available < required ? available : required;
           const quantity = scaledIntegerToDecimal(allocated, 3);
@@ -311,6 +326,12 @@ export class PosService {
     const cashSessionId = input.cashSessionId.toString();
     const draftId = input.draftId.toString();
     return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'POS.FINALIZE_SALE',
+        user.branchId,
+        input.clientRequestId,
+      );
       const [existingSale] = await transaction<
         Array<{
           id: string;
@@ -445,9 +466,12 @@ export class PosService {
         if (!saleItem) throw new Error('Sale item creation failed');
         const [batch] = await transaction<Array<{ quantity_after: string }>>`
           update inventory_batches
-          set current_qty = current_qty - ${line.quantity},
-              status = case when current_qty - ${line.quantity} = 0 then 'DEPLETED' else status end
-          where id = ${line.inventory_batch_id} and current_qty >= ${line.quantity}
+          set current_qty = current_qty - ${line.quantity}::numeric,
+              status = case
+                when current_qty - ${line.quantity}::numeric = 0 then 'DEPLETED'
+                else status
+              end
+          where id = ${line.inventory_batch_id} and current_qty >= ${line.quantity}::numeric
           returning current_qty::text as quantity_after
         `;
         if (!batch) throw new ConflictException('Stock changed before sale finalization');
@@ -456,7 +480,7 @@ export class PosService {
             branch_id, inventory_batch_id, movement_type, quantity_delta,
             quantity_after, sale_item_id, performed_by_user_id
           ) values (
-            ${user.branchId}, ${line.inventory_batch_id}, 'SALE', -${line.quantity},
+            ${user.branchId}, ${line.inventory_batch_id}, 'SALE', -${line.quantity}::numeric,
             ${batch.quantity_after}, ${saleItem.id}, ${user.id}
           )
         `;

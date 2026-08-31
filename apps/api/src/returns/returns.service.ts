@@ -3,6 +3,7 @@ import type { Database } from '@pharmacy/database';
 import { sumMoney, type CreateReturnRequest, type RefundReturnRequest } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE } from '../database.module.js';
 
 interface ReturnRow {
@@ -54,6 +55,7 @@ export class ReturnsService {
     input: CreateReturnRequest,
   ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(transaction, 'RETURN.REQUEST', user.branchId, input.clientRequestId);
       const [existing] = await transaction<ReturnRow[]>`
         select id::text, branch_id::text, sale_id::text, status from returns
         where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}
@@ -183,12 +185,26 @@ export class ReturnsService {
           disposition: string;
           refund_amount: string;
           sellable_by_date: boolean;
+          medicine_id: string;
+          purchase_order_item_id: string | null;
+          batch_number: string;
+          expiry_date: string;
+          received_at: Date;
+          cost_price: string;
+          sale_price: string;
+          batch_status: string;
+          source_batch_id: string | null;
         }>
       >`
         select return_items.id::text as return_item_id, sale_items.id::text as sale_item_id,
           sale_items.inventory_batch_id::text, return_items.quantity::text,
           return_items.disposition, return_items.refund_amount::text,
-          inventory_batches.expiry_date >= (now() at time zone 'Asia/Karachi')::date as sellable_by_date
+          inventory_batches.expiry_date >= (now() at time zone 'Asia/Karachi')::date as sellable_by_date,
+          inventory_batches.medicine_id::text, inventory_batches.purchase_order_item_id::text,
+          inventory_batches.batch_number, inventory_batches.expiry_date::text,
+          inventory_batches.received_at, inventory_batches.cost_price::text,
+          inventory_batches.sale_price::text, inventory_batches.status as batch_status,
+          inventory_batches.source_batch_id::text
         from return_items
         join sale_items on sale_items.id = return_items.sale_item_id
         join inventory_batches on inventory_batches.id = sale_items.inventory_batch_id
@@ -201,20 +217,42 @@ export class ReturnsService {
           throw new ConflictException('Expired returned stock cannot be restored as sellable');
         }
         if (item.disposition !== 'SCRAP') {
-          const [batch] = await transaction<Array<{ quantity_after: string }>>`
-            update inventory_batches
-            set current_qty = current_qty + ${item.quantity}::numeric,
-                status = ${item.disposition === 'QUARANTINE' ? 'QUARANTINE' : 'SELLABLE'}
-            where id = ${item.inventory_batch_id}
-            returning current_qty::text as quantity_after
-          `;
+          const [batch] =
+            item.disposition === 'QUARANTINE'
+              ? await transaction<Array<{ id: string; quantity_after: string }>>`
+                  insert into inventory_batches (
+                    branch_id, medicine_id, purchase_order_item_id, batch_number, expiry_date,
+                    received_at, cost_price, sale_price, current_qty, status,
+                    source_batch_id, segment_key
+                  ) values (
+                    ${user.branchId}, ${item.medicine_id}, ${item.purchase_order_item_id},
+                    ${item.batch_number}, ${item.expiry_date}, ${item.received_at},
+                    ${item.cost_price}, ${item.sale_price}, ${item.quantity}, 'QUARANTINE',
+                    ${item.source_batch_id ?? item.inventory_batch_id}, 'RETURN_QUARANTINE'
+                  )
+                  on conflict on constraint inventory_batches_acquisition_lot_key do update set
+                    current_qty = inventory_batches.current_qty + excluded.current_qty,
+                    status = case
+                      when inventory_batches.status = 'RECALLED' then 'RECALLED'
+                      else 'QUARANTINE'
+                    end,
+                    deleted_at = null
+                  returning id::text, current_qty::text as quantity_after
+                `
+              : await transaction<Array<{ id: string; quantity_after: string }>>`
+                  update inventory_batches
+                  set current_qty = current_qty + ${item.quantity}::numeric,
+                      status = case when status = 'DEPLETED' then 'SELLABLE' else status end
+                  where id = ${item.inventory_batch_id}
+                  returning id::text, current_qty::text as quantity_after
+                `;
           if (!batch) throw new ConflictException('Original inventory batch is unavailable');
           await transaction`
             insert into stock_movements (
               branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
               sale_item_id, performed_by_user_id, reason, metadata
             ) values (
-              ${user.branchId}, ${item.inventory_batch_id}, 'RETURN_RESTOCK', ${item.quantity},
+              ${user.branchId}, ${batch.id}, 'RETURN_RESTOCK', ${item.quantity},
               ${batch.quantity_after}, ${item.sale_item_id}, ${user.id}, 'Accepted customer return',
               ${transaction.json({ returnId: row.id, disposition: item.disposition })}
             )

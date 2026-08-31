@@ -12,6 +12,7 @@ let databaseSequence = 0;
 export interface IsolatedDatabase {
   readonly admin: Database;
   readonly application: Database;
+  readonly applicationUrl: string;
   readonly name: string;
   readonly url: string;
   dispose(): Promise<void>;
@@ -63,13 +64,13 @@ export async function createIsolatedDatabase(label: string): Promise<IsolatedDat
   }
 
   const admin = createDatabase(url);
-  const application = createDatabase(
-    databaseUrl(serverUrl, name, 'pharmacy_app', APPLICATION_PASSWORD),
-  );
+  const applicationUrl = databaseUrl(serverUrl, name, 'pharmacy_app', APPLICATION_PASSWORD);
+  const application = createDatabase(applicationUrl);
 
   return {
     admin,
     application,
+    applicationUrl,
     name,
     url,
     async dispose(): Promise<void> {

@@ -14,9 +14,9 @@
   },
   "dependencies": {
     "@fastify/helmet": "13.1.1",
-    "@nestjs/common": "11.2.1",
-    "@nestjs/core": "11.2.1",
-    "@nestjs/platform-fastify": "11.2.1",
+    "@nestjs/common": "11.2.3",
+    "@nestjs/core": "11.2.3",
+    "@nestjs/platform-fastify": "11.2.3",
     "@pharmacy/config": "0.1.0",
     "@pharmacy/database": "0.1.0",
     "@pharmacy/shared": "0.1.0",

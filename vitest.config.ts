@@ -1,6 +1,10 @@
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from 'vitest/config';
+
+const repositoryRoot = dirname(fileURLToPath(import.meta.url));
+const isIntegrationRun = resolve(process.cwd()) === repositoryRoot;
 
 export default defineConfig({
   resolve: {
@@ -12,14 +16,20 @@ export default defineConfig({
       '@pharmacy/shared': fileURLToPath(new URL('./packages/shared/src/index.ts', import.meta.url)),
     },
   },
-  test: {
-    environment: 'node',
-    exclude: ['**/dist/**', '**/node_modules/**'],
-    fileParallelism: false,
-    globalSetup: ['./tests/integration/global-setup.ts'],
-    hookTimeout: 120_000,
-    include: ['tests/integration/**/*.integration.test.ts'],
-    maxWorkers: 1,
-    testTimeout: 60_000,
-  },
+  test: isIntegrationRun
+    ? {
+        environment: 'node',
+        exclude: ['**/dist/**', '**/node_modules/**'],
+        fileParallelism: false,
+        globalSetup: ['./tests/integration/global-setup.ts'],
+        hookTimeout: 120_000,
+        include: ['tests/integration/**/*.integration.test.ts'],
+        maxWorkers: 1,
+        testTimeout: 60_000,
+      }
+    : {
+        environment: 'node',
+        exclude: ['**/dist/**', '**/node_modules/**'],
+        include: ['src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+      },
 });
