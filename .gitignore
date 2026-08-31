@@ -13,3 +13,5 @@ backups/
 infra/docker/secrets/*
 !infra/docker/secrets/.gitkeep
 apps/web/.vite/
+playwright-report/
+test-results/
