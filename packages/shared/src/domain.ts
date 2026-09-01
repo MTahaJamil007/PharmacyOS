@@ -8,7 +8,7 @@ export const SALE_DRAFT_STATUSES = [
   'EXPIRED',
 ] as const;
 
-export const PAYMENT_METHODS = ['CASH', 'CARD', 'BANK_TRANSFER'] as const;
+export const PAYMENT_METHODS = ['CASH', 'CARD', 'BANK_TRANSFER', 'CREDIT'] as const;
 export const CASH_MOVEMENT_TYPES = ['CASH_IN', 'CASH_OUT'] as const;
 export const CASH_SESSION_STATUSES = ['OPEN', 'CLOSING', 'CLOSED', 'VARIANCE_APPROVED'] as const;
 export const FBR_STATUSES = [
@@ -36,6 +36,10 @@ export const PERMISSIONS = {
   SALE_FINALIZE_PAYMENT: 'sale.finalize_payment',
   SALE_DISCOUNT_BASIC: 'sale.discount.basic',
   SALE_DISCOUNT_OVERRIDE: 'sale.discount.override',
+  CUSTOMER_READ: 'customer.read',
+  CUSTOMER_MANAGE: 'customer.manage',
+  CUSTOMER_CREDIT: 'customer.credit',
+  CUSTOMER_PAYMENT: 'customer.payment',
   RETURNS_REQUEST: 'returns.request',
   RETURNS_APPROVE: 'returns.approve',
   RETURNS_REFUND_CASH: 'returns.refund_cash',

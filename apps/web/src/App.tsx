@@ -12,6 +12,8 @@ const InventoryRoute = lazy(() => import('./modules/inventory/InventoryRoute'));
 const ReturnsRoute = lazy(() => import('./modules/returns/ReturnsRoute'));
 const BudgetRoute = lazy(() => import('./modules/dashboard/BudgetRoute'));
 const OwnerRoute = lazy(() => import('./modules/dashboard/OwnerRoute'));
+const CustomersRoute = lazy(() => import('./modules/customers/CustomersRoute'));
+const AdministrationRoute = lazy(() => import('./modules/administration/AdministrationRoute'));
 
 function RoutedWorkspace(): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
@@ -34,6 +36,8 @@ function RoutedWorkspace(): React.JSX.Element {
           <Route path="/budget" element={<BudgetRoute />} />
           <Route path="/returns" element={<ReturnsRoute />} />
           <Route path="/owner" element={<OwnerRoute />} />
+          <Route path="/customers" element={<CustomersRoute />} />
+          <Route path="/admin" element={<AdministrationRoute />} />
           <Route path="*" element={<Navigate replace to="/pos" />} />
         </Routes>
       </Suspense>

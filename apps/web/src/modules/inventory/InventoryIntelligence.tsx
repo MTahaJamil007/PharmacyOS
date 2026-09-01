@@ -57,7 +57,7 @@ export function InventoryIntelligence(): React.JSX.Element {
   const queryError = attention.error ?? expiry.error ?? shelves.error ?? reorders.error;
 
   return (
-    <main className="operations-canvas">
+    <section className="operations-canvas" aria-label="Inventory intelligence">
       <section className="operations-heading">
         <div>
           <p className="eyebrow">Morning control desk</p>
@@ -191,6 +191,6 @@ export function InventoryIntelligence(): React.JSX.Element {
           </div>
         </article>
       </section>
-    </main>
+    </section>
   );
 }

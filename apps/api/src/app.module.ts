@@ -14,6 +14,11 @@ import { JobsModule } from './operations/jobs.module.js';
 import { ProcurementModule } from './procurement/procurement.module.js';
 import { ReturnsModule } from './returns/returns.module.js';
 import { CashSessionsModule } from './cash-sessions/cash-sessions.module.js';
+import { CustomersModule } from './customers/customers.module.js';
+import { ReportsModule } from './reports/reports.module.js';
+import { DashboardModule } from './dashboard/dashboard.module.js';
+import { InventoryOperationsModule } from './inventory-operations/inventory-operations.module.js';
+import { AdministrationModule } from './administration/administration.module.js';
 import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
 
 @Module({
@@ -30,6 +35,11 @@ import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
     OwnerAiModule,
     JobsModule,
     CashSessionsModule,
+    CustomersModule,
+    ReportsModule,
+    DashboardModule,
+    InventoryOperationsModule,
+    AdministrationModule,
   ],
   providers: [
     AuthGuard,

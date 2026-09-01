@@ -9,6 +9,7 @@ const form = {
   cardReference: 'AUTH-7',
   cashAmount: '40.00',
   cashTendered: '50.00',
+  creditAmount: '',
 };
 
 describe('counter tender arithmetic', () => {
@@ -23,6 +24,21 @@ describe('counter tender arithmetic', () => {
     expect(createPaymentInputs('100.00', form)).toEqual([
       { amount: '40.00', method: 'CASH', tenderedAmount: '50.00' },
       { amount: '60.00', method: 'CARD', reference: 'AUTH-7' },
+    ]);
+  });
+
+  it('supports exact customer-credit allocation', () => {
+    const creditForm = {
+      ...form,
+      cardAmount: '',
+      cashAmount: '25.00',
+      cashTendered: '25.00',
+      creditAmount: '75.00',
+    };
+    expect(paymentSummary('100.00', creditForm).complete).toBe(true);
+    expect(createPaymentInputs('100.00', creditForm)).toEqual([
+      { amount: '25.00', method: 'CASH', tenderedAmount: '25.00' },
+      { amount: '75.00', method: 'CREDIT' },
     ]);
   });
 

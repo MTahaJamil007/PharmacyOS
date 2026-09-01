@@ -5,12 +5,12 @@ import { ENVIRONMENT } from '../database.module.js';
 import { GeminiProvider } from './gemini.provider.js';
 import { OwnerAiController } from './owner-ai.controller.js';
 import { OwnerAiService } from './owner-ai.service.js';
-import { OwnerToolsService } from './owner-tools.service.js';
+import { ReportsModule } from '../reports/reports.module.js';
 
 @Module({
+  imports: [ReportsModule],
   controllers: [OwnerAiController],
   providers: [
-    OwnerToolsService,
     OwnerAiService,
     {
       provide: GeminiProvider,

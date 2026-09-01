@@ -19,6 +19,10 @@ const permissions = [
   'sale.finalize_payment',
   'sale.discount.basic',
   'sale.discount.override',
+  'customer.read',
+  'customer.manage',
+  'customer.credit',
+  'customer.payment',
   'returns.request',
   'returns.approve',
   'returns.refund_cash',
@@ -59,6 +63,7 @@ const rolePermissions: Readonly<Record<string, readonly string[]>> = {
     'returns.request',
     'inventory.shelf.read',
     'sales.budget_regimen.calculate',
+    'customer.read',
   ],
   CASHIER: [
     'pos.search',
@@ -75,6 +80,9 @@ const rolePermissions: Readonly<Record<string, readonly string[]>> = {
     'returns.lookup',
     'returns.refund',
     'sales.budget_regimen.calculate',
+    'customer.read',
+    'customer.credit',
+    'customer.payment',
   ],
   SUPERVISOR: [
     'pos.search',
@@ -99,6 +107,9 @@ const rolePermissions: Readonly<Record<string, readonly string[]>> = {
     'sales.budget_regimen.verify',
     'returns.lookup',
     'returns.refund',
+    'customer.read',
+    'customer.credit',
+    'customer.payment',
   ],
   INVENTORY_MANAGER: [
     'pos.search',

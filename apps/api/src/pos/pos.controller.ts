@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   createDraftSchema,
+  applySaleDiscountSchema,
   finalizeSaleSchema,
   idSchema,
   PERMISSIONS,
@@ -77,6 +78,19 @@ export class PosController {
     const id = idSchema.safeParse(draftId);
     if (!id.success) throw new BadRequestException('Invalid draft id');
     return this.posService.reserveDraft(user, id.data);
+  }
+
+  @Post('drafts/:draftId/discount')
+  @RequirePermissions(PERMISSIONS.SALE_DISCOUNT_BASIC)
+  async applyDiscount(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('draftId') draftId: string,
+    @Body() body: unknown,
+  ): Promise<Record<string, unknown>> {
+    const id = idSchema.safeParse(draftId);
+    const input = applySaleDiscountSchema.safeParse(body);
+    if (!id.success || !input.success) throw new BadRequestException('Invalid discount request');
+    return this.posService.applyDiscount(user, id.data, input.data);
   }
 
   @Post('sales/finalize')

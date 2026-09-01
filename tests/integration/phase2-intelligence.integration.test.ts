@@ -449,7 +449,18 @@ describe('Phase 2 P0 operational-intelligence boundaries', () => {
       (initial.lines as Array<{ priceVersion: string }>)[0]?.priceVersion,
     );
 
-    await database.admin`update inventory_batches set sale_price = 15 where id = ${batchId}`;
+    await database.admin.begin(async (transaction) => {
+      await transaction`update inventory_batches set sale_price = 15 where id = ${batchId}`;
+      await transaction`
+        insert into inventory_batch_price_history (
+          branch_id, inventory_batch_id, old_sale_price, new_sale_price,
+          change_type, reason, client_request_id
+        ) values (
+          ${fixture.branchId}, ${batchId}, 10, 15, 'MANUAL',
+          'Phase 2 stale-price fixture', 'phase2-budget-price-change'
+        )
+      `;
+    });
     const recalculated = await service.calculate(fixture.user, request);
     expect(recalculated).toMatchObject({ completeDays: 1, totalCost: '15.00' });
     expect((recalculated.lines as Array<{ priceVersion: string }>)[0]?.priceVersion).not.toBe(

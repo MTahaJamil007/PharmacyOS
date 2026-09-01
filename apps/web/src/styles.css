@@ -1663,7 +1663,7 @@ kbd {
 }
 .tender-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 .tender-grid fieldset {
@@ -1723,6 +1723,332 @@ kbd {
 .receipt-search-results span,
 .receipt-search-results small {
   display: block;
+}
+
+.tender-note {
+  margin: 0;
+  color: #687672;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.ticket-controls {
+  position: relative;
+  display: grid;
+  gap: 9px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: #f0f5f2;
+}
+.ticket-controls label,
+.form-grid label {
+  display: grid;
+  gap: 5px;
+  color: #51605e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ticket-controls input,
+.form-grid input,
+.form-grid select,
+.payment-inline input,
+.payment-inline select {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #b9c8c2;
+  color: var(--ink);
+  background: #fff;
+}
+.discount-controls {
+  display: grid;
+  grid-template-columns: 0.65fr 1.35fr;
+  gap: 8px;
+}
+.customer-matches {
+  position: absolute;
+  z-index: 5;
+  top: 70px;
+  right: 18px;
+  left: 18px;
+  display: grid;
+  border: 1px solid #98aba5;
+  background: #fff;
+  box-shadow: 4px 5px 0 rgb(16 40 44 / 18%);
+}
+.customer-matches button,
+.customer-row,
+.batch-row {
+  display: flex;
+  padding: 11px 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  background: #fff;
+  text-align: left;
+}
+.customer-matches span,
+.customer-row span,
+.customer-row small,
+.batch-row span,
+.batch-row small {
+  display: block;
+}
+.customer-matches span,
+.customer-row small,
+.batch-row small {
+  margin-top: 3px;
+  color: #6b7a76;
+  font-size: 10px;
+}
+.customer-row.selected,
+.batch-row.selected {
+  box-shadow: inset 5px 0 0 var(--amber);
+  background: #fffdf5;
+}
+.approval-details {
+  color: #5c6b67;
+  font-size: 11px;
+}
+.approval-details summary {
+  cursor: pointer;
+}
+.approval-details input {
+  width: 100%;
+  margin-top: 6px;
+}
+.compact-form-panel {
+  padding-bottom: 20px;
+}
+.compact-form-panel > .primary-button,
+.compact-form-panel > .secondary-button {
+  margin: 16px 22px 0;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  padding: 20px 22px 0;
+}
+.form-grid.single-column {
+  grid-template-columns: 1fr;
+}
+.customer-layout,
+.inventory-operation-layout,
+.admin-layout,
+.dashboard-charts {
+  display: grid;
+  gap: 18px;
+}
+.customer-layout {
+  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.8fr);
+}
+.customer-index {
+  padding: 16px;
+}
+.customer-index .search-box,
+.batch-browser .search-box {
+  margin-bottom: 12px;
+}
+.statement-panel > header > strong {
+  color: var(--teal);
+  font-size: 24px;
+}
+.account-strip,
+.continuity-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--rule);
+}
+.account-strip span,
+.continuity-strip article {
+  padding: 14px 18px;
+  border-right: 1px solid var(--rule);
+  color: #64736f;
+  font-size: 11px;
+}
+.account-strip b,
+.continuity-strip strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+}
+.payment-inline {
+  display: grid;
+  grid-template-columns: 1fr 0.8fr 1.2fr auto;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--teal-light);
+}
+.statement-list {
+  max-height: 580px;
+  overflow: auto;
+}
+.statement-row {
+  display: grid;
+  grid-template-columns: 1fr 130px 120px;
+  gap: 16px;
+  padding: 14px 18px;
+  align-items: center;
+  border-bottom: 1px solid var(--rule);
+}
+.statement-row small {
+  display: block;
+  margin-top: 4px;
+  color: #687672;
+}
+.statement-row > :not(:first-child) {
+  text-align: right;
+}
+.credit-entry {
+  color: var(--teal);
+}
+.debit-entry {
+  color: var(--danger);
+}
+.metric-ledger {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  margin-bottom: 18px;
+  border: 1px solid #aebab5;
+  background: var(--paper);
+}
+.metric-ledger article {
+  min-height: 100px;
+  padding: 16px;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.metric-ledger span,
+.continuity-strip span {
+  color: #65736f;
+  font:
+    700 10px Bahnschrift,
+    sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.metric-ledger strong {
+  display: block;
+  margin-top: 24px;
+  color: var(--deep);
+  font:
+    650 19px Bahnschrift,
+    sans-serif;
+}
+.snapshot-status {
+  padding: 10px 13px;
+  border-left: 4px solid var(--amber);
+  background: #fff7df;
+  font-size: 12px;
+}
+.snapshot-status.ready {
+  border-color: var(--teal);
+  background: var(--teal-light);
+}
+.dashboard-charts {
+  grid-template-columns: 1.25fr 0.75fr;
+}
+.chart-panel {
+  padding-bottom: 14px;
+}
+.continuity-strip {
+  margin-top: 18px;
+  border: 1px solid #aebab5;
+  background: var(--paper);
+}
+.continuity-strip .critical {
+  box-shadow: inset 5px 0 0 var(--danger);
+}
+.inventory-operations,
+.assistant-canvas {
+  border-top: 1px solid #b8c7c2;
+}
+.inventory-operation-layout {
+  grid-template-columns: 1.2fr 0.8fr;
+}
+.batch-browser {
+  padding: 16px;
+}
+.batch-browser .data-list {
+  max-height: 520px;
+  overflow: auto;
+}
+.segmented-control {
+  display: flex;
+  gap: 0;
+  padding: 14px 18px;
+}
+.segmented-control button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #aebbb7;
+  border-right: 0;
+  color: var(--ink);
+  background: #fff;
+  font-weight: 800;
+}
+.segmented-control button:last-child {
+  border-right: 1px solid #aebbb7;
+}
+.segmented-control button.selected {
+  color: #fff;
+  background: var(--teal);
+}
+.admin-tabs {
+  padding: 0 0 18px;
+}
+.admin-layout {
+  grid-template-columns: 0.72fr 1.2fr 0.8fr;
+}
+.admin-records .data-list {
+  max-height: 620px;
+  overflow: auto;
+}
+.admin-row {
+  display: flex;
+  padding: 13px 18px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--rule);
+}
+.admin-row small {
+  display: block;
+  margin-top: 3px;
+  color: #697772;
+}
+.admin-row button {
+  padding: 7px 10px;
+  border: 1px solid #aebbb7;
+  background: transparent;
+}
+.admin-side-stack {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+@media (max-width: 1100px) {
+  .metric-ledger {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .dashboard-charts,
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+  .customer-layout,
+  .inventory-operation-layout {
+    grid-template-columns: 1fr;
+  }
+  .payment-inline {
+    grid-template-columns: 1fr 1fr;
+  }
+  .tender-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .receipt-search-results small {
   margin-top: 4px;

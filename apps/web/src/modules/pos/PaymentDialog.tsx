@@ -12,6 +12,7 @@ const initialTender = (total: string): TenderForm => ({
   cardReference: '',
   cashAmount: total,
   cashTendered: total,
+  creditAmount: '',
 });
 
 export function PaymentDialog({
@@ -19,11 +20,15 @@ export function PaymentDialog({
   onClose,
   onPay,
   total,
+  customerName,
+  allowCredit,
 }: {
   readonly busy: boolean;
   readonly onClose: () => void;
   readonly onPay: (payments: readonly SalePaymentInput[]) => Promise<void>;
   readonly total: string;
+  readonly customerName?: string;
+  readonly allowCredit: boolean;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const cashTendered = useRef<HTMLInputElement>(null);
@@ -139,6 +144,23 @@ export function PaymentDialog({
                 onChange={(event) => update('bankReference', event.target.value)}
               />
             </label>
+          </fieldset>
+          <fieldset>
+            <legend>Customer credit</legend>
+            <label>
+              Amount
+              <input
+                value={form.creditAmount ?? ''}
+                inputMode="decimal"
+                disabled={!allowCredit}
+                onChange={(event) => update('creditAmount', event.target.value)}
+              />
+            </label>
+            <p className="tender-note">
+              {allowCredit
+                ? `Charge to ${customerName ?? 'selected customer'}`
+                : 'Attach an active customer with available credit first.'}
+            </p>
           </fieldset>
         </div>
         <div className="payment-balance" aria-live="polite">

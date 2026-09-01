@@ -8,10 +8,12 @@ import { usePharmacyStore } from '../store';
 const navigation = [
   { key: 'nav.counter', to: '/pos' },
   { key: 'nav.cash', to: '/cash' },
+  { key: 'nav.customers', to: '/customers' },
   { key: 'nav.inventory', to: '/inventory' },
   { key: 'nav.budget', to: '/budget' },
   { key: 'nav.returns', to: '/returns' },
   { key: 'nav.owner', to: '/owner' },
+  { key: 'nav.admin', to: '/admin' },
 ] as const;
 
 export function AppShell({ children }: { readonly children: React.ReactNode }) {
@@ -40,11 +42,21 @@ export function AppShell({ children }: { readonly children: React.ReactNode }) {
           <strong>{t('app.name')}</strong>
         </div>
         <nav aria-label="Primary navigation">
-          {navigation.map((item) => (
-            <NavLink key={item.to} to={item.to}>
-              {t(item.key)}
-            </NavLink>
-          ))}
+          {navigation
+            .filter(
+              (item) =>
+                item.to !== '/admin' ||
+                Boolean(
+                  session?.user.permissions.includes('settings.manage_users') ||
+                  session?.user.permissions.includes('settings.manage_system') ||
+                  session?.user.permissions.includes('inventory.shelf.manage'),
+                ),
+            )
+            .map((item) => (
+              <NavLink key={item.to} to={item.to}>
+                {t(item.key)}
+              </NavLink>
+            ))}
         </nav>
         <div className="operator">
           <span className={`lan-state ${lan.toLowerCase()}`}>

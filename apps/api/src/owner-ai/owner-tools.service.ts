@@ -5,7 +5,7 @@ import { PERMISSIONS, type OwnerAiChatRequest } from '@pharmacy/shared';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { DATABASE } from '../database.module.js';
 
-interface ToolResult {
+export interface ToolResult {
   readonly facts: unknown;
   readonly dataBasis: string;
   readonly reportPath: string;
@@ -44,6 +44,11 @@ export class OwnerToolsService {
   }
 
   private assertToolPermission(user: AuthenticatedUser, tool: OwnerAiChatRequest['tool']): void {
+    const reportPermission =
+      tool === 'get_profit_summary' || tool === 'get_cash_reconciliation_summary'
+        ? PERMISSIONS.REPORTS_VIEW_FINANCIAL
+        : PERMISSIONS.REPORTS_VIEW_BASIC;
+    if (user.permissions.includes(reportPermission)) return;
     const required =
       tool === 'get_supplier_price_comparison'
         ? PERMISSIONS.PROCUREMENT_SUPPLIER_PRICE_READ
@@ -80,16 +85,20 @@ export class OwnerToolsService {
 
   private async profitSummary(branchId: string, from: string, to: string): Promise<ToolResult> {
     const [facts] = await this.database<Array<Record<string, unknown>>>`
-      select coalesce(sum(sale_items.line_total), 0)::text as revenue,
-        coalesce(sum(sale_items.unit_cost * sale_items.quantity), 0)::text as cost_basis,
-        coalesce(sum(sale_items.line_total - sale_items.unit_cost * sale_items.quantity), 0)::text as gross_profit_estimate
-      from sale_items join sales on sales.id = sale_items.sale_id
+      select coalesce(sum(sales.total), 0)::text as revenue,
+        coalesce(sum(costs.cost_basis), 0)::text as cost_basis,
+        coalesce(sum(sales.total - costs.cost_basis), 0)::text as gross_profit_estimate
+      from sales
+      left join lateral (
+        select coalesce(sum(sale_items.unit_cost * sale_items.quantity), 0) as cost_basis
+        from sale_items where sale_items.sale_id = sales.id
+      ) costs on true
       where sales.branch_id = ${branchId} and sales.status <> 'VOIDED'
         and sales.created_at >= ${from}::date and sales.created_at < ${to}::date + interval '1 day'
     `;
     return {
       facts,
-      dataBasis: `Sale-line revenue minus recorded batch acquisition cost, ${from} through ${to}`,
+      dataBasis: `Final sale totals after discounts minus recorded batch acquisition cost, ${from} through ${to}`,
       reportPath: '/owner?report=profit',
     };
   }

@@ -26,7 +26,7 @@ function sqlText(call: unknown[] | undefined): string {
 }
 
 describe('DurableWorker reliability', () => {
-  it('schedules reservation expiry every minute alongside branch jobs', async () => {
+  it('schedules reservation expiry and hourly dashboard refresh alongside branch jobs', async () => {
     const query = Object.assign(
       vi
         .fn()
@@ -39,10 +39,13 @@ describe('DurableWorker reliability', () => {
 
     await (worker as unknown as MaintenanceSubject).enqueueOperationalJobs();
 
-    expect(query).toHaveBeenCalledTimes(6);
+    expect(query).toHaveBeenCalledTimes(7);
     expect(sqlText(query.mock.calls[0])).toContain("'EXPIRE_RESERVATIONS'");
     expect(sqlText(query.mock.calls[0])).toContain("'{}'::jsonb, 20");
     expect(query.mock.calls[0]?.[1]).toMatch(/^reservation-expiry:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    expect(query.mock.calls[2]?.[1]).toBe('REFRESH_DASHBOARD_METRICS');
+    expect(query.mock.calls[2]?.[2]).toMatch(/^dashboard:7:\d{4}-\d{2}-\d{2}T\d{2}$/);
+    expect(query.mock.calls[2]?.[4]).toBe(30);
   });
 
   it('reclaims stale locks inside one skip-locked transaction', async () => {

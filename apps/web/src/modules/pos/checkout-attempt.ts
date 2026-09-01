@@ -11,6 +11,11 @@ export interface CheckoutAttempt {
   readonly reservedTotal?: string;
   readonly reservedUntil?: string;
   readonly terminalId: string;
+  readonly customerId?: string;
+  readonly customerName?: string;
+  readonly discountAmount?: string;
+  readonly discountRequestId?: string;
+  readonly discountApplied?: boolean;
 }
 
 function storageKey(terminalId: string): string {

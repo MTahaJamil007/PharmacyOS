@@ -2,6 +2,9 @@ import {
   createClientRequestId,
   type BudgetRegimenResult,
   type CashSessionSummary,
+  type CustomerStatement,
+  type CustomerSummary,
+  type DashboardSnapshot,
   type ExpiryRiskItem,
   type FailedJobsResponse,
   type FinalizedSale,
@@ -23,6 +26,9 @@ import {
 export type {
   BudgetRegimenResult,
   CashSessionSummary,
+  CustomerStatement,
+  CustomerSummary,
+  DashboardSnapshot,
   ExpiryRiskItem,
   FailedJobsResponse,
   FinalizedSale,
@@ -305,6 +311,7 @@ export function finalizeSale(
   draftId: string,
   clientRequestId: string,
   payments: readonly SalePaymentInput[],
+  customerId?: string,
 ): Promise<FinalizedSale> {
   return authenticatedRequest(token, '/pos/sales/finalize', {
     method: 'POST',
@@ -313,7 +320,164 @@ export function finalizeSale(
       draftId,
       clientRequestId,
       payments,
+      customerId,
     }),
+  });
+}
+
+export function applySaleDiscount(
+  token: string,
+  draftId: string,
+  input: {
+    readonly invoiceDiscount: string;
+    readonly reason: string;
+    readonly clientRequestId: string;
+    readonly approverUsername?: string;
+    readonly approverPassword?: string;
+  },
+): Promise<{ readonly total: string; readonly approvalLevel: string }> {
+  return authenticatedRequest(token, `/pos/drafts/${draftId}/discount`, {
+    method: 'POST',
+    body: JSON.stringify({ ...input, lineDiscounts: [] }),
+  });
+}
+
+export async function searchCustomers(token: string, query: string): Promise<CustomerSummary[]> {
+  const response = await authenticatedRequest<{ readonly data: CustomerSummary[] }>(
+    token,
+    `/customers?query=${encodeURIComponent(query)}&limit=20`,
+  );
+  return response.data;
+}
+
+export function createCustomer(
+  token: string,
+  input: {
+    readonly name: string;
+    readonly phone?: string;
+    readonly address?: string;
+    readonly creditLimit: string;
+    readonly openingBalance: string;
+  },
+): Promise<CustomerSummary> {
+  return authenticatedRequest(token, '/customers', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function getCustomerStatement(
+  token: string,
+  customerId: string,
+): Promise<CustomerStatement> {
+  return authenticatedRequest(token, `/customers/${customerId}/statement`);
+}
+
+export function recordCustomerPayment(
+  token: string,
+  customerId: string,
+  input: {
+    readonly amount: string;
+    readonly method: 'CASH' | 'CARD' | 'BANK_TRANSFER';
+    readonly cashSessionId?: string;
+    readonly reference?: string;
+  },
+) {
+  return authenticatedRequest<{ readonly id: string; readonly balance: string }>(
+    token,
+    `/customers/${customerId}/payments`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...input, clientRequestId: createClientRequestId() }),
+    },
+  );
+}
+
+export function getOwnerDashboard(
+  token: string,
+  date?: string,
+): Promise<{
+  readonly data: DashboardSnapshot | null;
+  readonly status: 'READY' | 'PENDING_REFRESH';
+  readonly dataBasis: string;
+}> {
+  return authenticatedRequest(token, `/dashboard/owner${date ? `?date=${date}` : ''}`);
+}
+
+export interface InventoryBatchSummary {
+  readonly id: string;
+  readonly medicineId: string;
+  readonly medicineName: string;
+  readonly batchNumber: string;
+  readonly expiryDate: string;
+  readonly currentQuantity: string;
+  readonly salePrice: string;
+  readonly maximumRetailPrice: string | null;
+  readonly status: string;
+}
+
+export async function searchInventoryBatches(
+  token: string,
+  query: string,
+): Promise<readonly InventoryBatchSummary[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly InventoryBatchSummary[] }>(
+    token,
+    `/inventory/batches?query=${encodeURIComponent(query)}&limit=50`,
+  );
+  return response.data;
+}
+
+export function updateInventoryPrice(
+  token: string,
+  batchId: string,
+  input: {
+    readonly salePrice: string;
+    readonly maximumRetailPrice?: string | null;
+    readonly reason: string;
+  },
+) {
+  return authenticatedRequest<Record<string, unknown>>(
+    token,
+    `/inventory/batches/${batchId}/price`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...input, clientRequestId: createClientRequestId() }),
+    },
+  );
+}
+
+export function adjustInventoryStock(
+  token: string,
+  batchId: string,
+  input:
+    | { readonly type: 'COUNT'; readonly countedQuantity: string; readonly reason: string }
+    | { readonly type: 'SCRAP'; readonly quantity: string; readonly reason: string },
+) {
+  return authenticatedRequest<Record<string, unknown>>(
+    token,
+    `/inventory/batches/${batchId}/adjustments`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...input, clientRequestId: createClientRequestId() }),
+    },
+  );
+}
+
+export function adminGet<T>(token: string, path: string): Promise<T> {
+  return authenticatedRequest(token, `/admin${path}`);
+}
+
+export function adminPost<T>(token: string, path: string, body: unknown): Promise<T> {
+  return authenticatedRequest(token, `/admin${path}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function adminPatch<T>(token: string, path: string, body: unknown): Promise<T> {
+  return authenticatedRequest(token, `/admin${path}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
   });
 }
 

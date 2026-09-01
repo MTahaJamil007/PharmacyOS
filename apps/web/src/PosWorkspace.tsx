@@ -1,14 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { SalePaymentInput, SaleReceipt } from '@pharmacy/shared';
+import {
+  createClientRequestId,
+  minorUnitsToMoney,
+  moneyToMinorUnits,
+  PERMISSIONS,
+  type CustomerSummary,
+  type SalePaymentInput,
+  type SaleReceipt,
+} from '@pharmacy/shared';
 
 import {
   createSaleDraft,
+  applySaleDiscount,
   finalizeSale,
   getCurrentCashSession,
   getSaleReceipt,
   reserveSaleDraft,
+  searchCustomers,
   searchMedicines,
   type FinalizedSale,
   type MedicineSearchResult,
@@ -77,12 +87,19 @@ export function PosWorkspace(): React.JSX.Element {
   const [printReceipt, setPrintReceipt] = useState<SaleReceipt | null>(null);
   const [paymentTotal, setPaymentTotal] = useState<string | null>(null);
   const [reprintOpen, setReprintOpen] = useState(false);
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerSummary | null>(null);
+  const [invoiceDiscount, setInvoiceDiscount] = useState('');
+  const [discountReason, setDiscountReason] = useState('Counter discount');
+  const [approverUsername, setApproverUsername] = useState('');
+  const [approverPassword, setApproverPassword] = useState('');
   const [attempt, setAttempt] = useState<CheckoutAttempt | null>(() =>
     session ? loadCheckoutAttempt(session.user.terminalId, cart) : null,
   );
   const searchInput = useRef<HTMLInputElement>(null);
   const scanner = useRef(new WedgeScannerBuffer());
   const debouncedQuery = useDebouncedValue(query.trim(), 180);
+  const debouncedCustomerQuery = useDebouncedValue(customerQuery.trim(), 180);
   const now = useClock(session?.user.branchTimezone);
   const clock = clockLabel(now, session?.user.branchTimezone);
 
@@ -99,6 +116,15 @@ export function PosWorkspace(): React.JSX.Element {
           .includes(debouncedQuery.toLowerCase()),
       )
     : (search.data ?? []);
+  const customers = useQuery({
+    queryKey: ['customer-search', debouncedCustomerQuery],
+    queryFn: () => searchCustomers(session?.accessToken ?? '', debouncedCustomerQuery),
+    enabled:
+      !previewMode &&
+      Boolean(session) &&
+      debouncedCustomerQuery.length > 0 &&
+      (session?.user.permissions.includes(PERMISSIONS.CUSTOMER_READ) ?? false),
+  });
   const total = useMemo(
     () =>
       calculateCartTotal(
@@ -108,6 +134,21 @@ export function PosWorkspace(): React.JSX.Element {
   );
   const itemCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const lockedCart = Boolean(attempt?.reservedTotal || attempt?.finalizedSaleId);
+  const lockedDraft = Boolean(attempt?.draftId);
+  const customerId = attempt?.customerId ?? selectedCustomer?.id;
+  const customerName = attempt?.customerName ?? selectedCustomer?.name;
+  const canUseCredit =
+    Boolean(customerId) &&
+    (session?.user.permissions.includes(PERMISSIONS.CUSTOMER_CREDIT) ?? false);
+  const estimatedTotal = useMemo(() => {
+    try {
+      const discount = invoiceDiscount.trim() ? moneyToMinorUnits(invoiceDiscount) : 0n;
+      const value = moneyToMinorUnits(total) - discount;
+      return value >= 0n ? minorUnitsToMoney(value) : total;
+    } catch {
+      return total;
+    }
+  }, [invoiceDiscount, total]);
 
   const updateAttempt = useCallback((next: CheckoutAttempt | null): void => {
     setAttempt(next);
@@ -179,6 +220,11 @@ export function PosWorkspace(): React.JSX.Element {
     setReceipt(null);
     setCheckoutError('');
     setCounterNotice('New sale ready');
+    setSelectedCustomer(null);
+    setCustomerQuery('');
+    setInvoiceDiscount('');
+    setApproverUsername('');
+    setApproverPassword('');
     setQuery('');
     searchInput.current?.focus();
   }, [clearCart, lockedCart, session]);
@@ -210,6 +256,12 @@ export function PosWorkspace(): React.JSX.Element {
       }
       if (!current || current.cartSignature !== cartSignature(cart)) {
         current = createCheckoutAttempt(session.user.terminalId, cart);
+        current = {
+          ...current,
+          ...(selectedCustomer
+            ? { customerId: selectedCustomer.id, customerName: selectedCustomer.name }
+            : {}),
+        };
         updateAttempt(current);
       }
       if (!current.cashSessionId) {
@@ -232,6 +284,42 @@ export function PosWorkspace(): React.JSX.Element {
         current = { ...current, draftId: draft.id };
         updateAttempt(current);
       }
+      const requestedDiscount = invoiceDiscount.trim();
+      if (
+        requestedDiscount &&
+        moneyToMinorUnits(requestedDiscount) > 0n &&
+        !current.discountApplied
+      ) {
+        if (current.discountAmount && current.discountAmount !== requestedDiscount) {
+          throw new Error(
+            'This checkout already has a different discount request; clear it and start again',
+          );
+        }
+        if (!current.discountRequestId) {
+          current = {
+            ...current,
+            discountAmount: requestedDiscount,
+            discountRequestId: createClientRequestId(),
+          };
+          updateAttempt(current);
+        }
+        const discountRequestId = current.discountRequestId;
+        const draftId = current.draftId;
+        if (!discountRequestId || !draftId)
+          throw new Error('Discount request could not be resumed');
+        const discounted = await applySaleDiscount(session.accessToken, draftId, {
+          invoiceDiscount: requestedDiscount,
+          reason: discountReason,
+          clientRequestId: discountRequestId,
+          ...(approverUsername.trim() && approverPassword
+            ? { approverUsername: approverUsername.trim(), approverPassword }
+            : {}),
+        });
+        current = { ...current, discountApplied: true };
+        updateAttempt(current);
+        setCounterNotice(`${discounted.approvalLevel.toLowerCase()} discount approved`);
+        setApproverPassword('');
+      }
       const reservationExpired =
         current.reservedUntil !== undefined && new Date(current.reservedUntil) <= new Date();
       if (!current.reservedTotal || reservationExpired) {
@@ -252,7 +340,19 @@ export function PosWorkspace(): React.JSX.Element {
     } finally {
       setCheckoutPending(false);
     }
-  }, [attempt, cart, checkoutPending, recoverReceipt, session, updateAttempt]);
+  }, [
+    approverPassword,
+    approverUsername,
+    attempt,
+    cart,
+    checkoutPending,
+    discountReason,
+    invoiceDiscount,
+    recoverReceipt,
+    selectedCustomer,
+    session,
+    updateAttempt,
+  ]);
 
   const completePayment = useCallback(
     async (payments: readonly SalePaymentInput[]): Promise<void> => {
@@ -266,6 +366,7 @@ export function PosWorkspace(): React.JSX.Element {
           attempt.draftId,
           attempt.clientRequestId,
           payments,
+          attempt.customerId,
         );
         const finalizedAttempt = { ...attempt, finalizedSaleId: finalized.id };
         updateAttempt(finalizedAttempt);
@@ -384,6 +485,8 @@ export function PosWorkspace(): React.JSX.Element {
           busy={checkoutPending}
           onClose={() => setPaymentTotal(null)}
           onPay={completePayment}
+          allowCredit={canUseCredit}
+          {...(customerName ? { customerName } : {})}
         />
       ) : null}
       {reprintOpen && session ? (
@@ -504,6 +607,78 @@ export function PosWorkspace(): React.JSX.Element {
             <span>{ticketState[0]}</span>
             <span>{ticketState[1]}</span>
           </div>
+          <section className="ticket-controls" aria-label="Customer and discount">
+            <label>
+              Customer account
+              <input
+                value={selectedCustomer ? selectedCustomer.name : customerQuery}
+                placeholder="Phone or customer name"
+                disabled={lockedDraft}
+                onChange={(event) => {
+                  setSelectedCustomer(null);
+                  setCustomerQuery(event.target.value);
+                }}
+              />
+            </label>
+            {!selectedCustomer && customerQuery && !lockedDraft ? (
+              <div className="customer-matches">
+                {(customers.data ?? []).slice(0, 4).map((customer) => (
+                  <button
+                    type="button"
+                    key={customer.id}
+                    onClick={() => {
+                      setSelectedCustomer(customer);
+                      setCustomerQuery('');
+                    }}
+                  >
+                    <strong>{customer.name}</strong>
+                    <span>
+                      {customer.phone ?? 'No phone'} · available{' '}
+                      {formatPkrMoney(customer.availableCredit)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="discount-controls">
+              <label>
+                Invoice discount
+                <input
+                  value={invoiceDiscount}
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  disabled={lockedDraft}
+                  onChange={(event) => setInvoiceDiscount(event.target.value)}
+                />
+              </label>
+              <label>
+                Reason
+                <input
+                  value={discountReason}
+                  disabled={lockedDraft}
+                  onChange={(event) => setDiscountReason(event.target.value)}
+                />
+              </label>
+            </div>
+            {invoiceDiscount && !lockedDraft ? (
+              <details className="approval-details">
+                <summary>Supervisor credentials (only above policy limit)</summary>
+                <input
+                  value={approverUsername}
+                  autoComplete="off"
+                  placeholder="Supervisor username"
+                  onChange={(event) => setApproverUsername(event.target.value)}
+                />
+                <input
+                  value={approverPassword}
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Supervisor password"
+                  onChange={(event) => setApproverPassword(event.target.value)}
+                />
+              </details>
+            ) : null}
+          </section>
           <div className="cart-lines">
             {cart.length === 0 ? (
               <div className="empty-cart">
@@ -572,11 +747,11 @@ export function PosWorkspace(): React.JSX.Element {
             </div>
             <div>
               <span>Discount</span>
-              <strong>—</strong>
+              <strong>{formatPkrMoney(invoiceDiscount || '0.00')}</strong>
             </div>
             <div className="grand-total">
               <span>Estimated total</span>
-              <strong>{formatPkrMoney(total)}</strong>
+              <strong>{formatPkrMoney(attempt?.reservedTotal ?? estimatedTotal)}</strong>
             </div>
             <p>Final price and FEFO batches are confirmed by the server.</p>
           </div>

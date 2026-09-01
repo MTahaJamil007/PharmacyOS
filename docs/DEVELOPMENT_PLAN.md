@@ -213,7 +213,7 @@ This is where the product starts to feel better than what it replaces. A pharmac
 
 ### Phase 4 — Beat the incumbents · ~5 weeks
 
-> **Execution status (2026-09-01):** started on `development` under the explicit Phase 3 physical-hardware waiver recorded in `PHASE_3_EXECUTION.md`. Implementation follows the dependency order: customer credit ledger → deterministic reports/dashboard → discounts/pricing/stock adjustments → administration CRUD.
+> **Execution status (2026-09-01):** software exit gate passed on `development` under the explicit Phase 3 physical-hardware waiver recorded in `PHASE_3_EXECUTION.md`. The public-API owner-day scenario and owner-facing browser gate passed; full verification exited `0` with 69 unit tests, 55 Docker/PostgreSQL integration tests, nine browser workflows, and all production builds. See `PHASE_4_EXECUTION.md`. Physical Phase 3 evidence remains a Phase 5 pilot prerequisite.
 
 The three chosen must-haves. These are what legacy systems have and PharmacyOS does not.
 

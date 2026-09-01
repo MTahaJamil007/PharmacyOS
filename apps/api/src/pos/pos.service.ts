@@ -1,4 +1,11 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { verify } from 'argon2';
 import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
 import {
@@ -6,8 +13,10 @@ import {
   minorUnitsToMoney,
   moneyToMinorUnits,
   multiplyMoneyByQuantity,
+  PERMISSIONS,
   scaledIntegerToDecimal,
   sumMoney,
+  type ApplySaleDiscountRequest,
   type CreateDraftRequest,
   type FinalizeSaleRequest,
 } from '@pharmacy/shared';
@@ -25,6 +34,7 @@ interface DraftRow {
   readonly discount_total: string;
   readonly total: string;
   readonly reserved_until: Date | null;
+  readonly discount_approval_id: string | null;
 }
 
 interface DraftItemRow {
@@ -33,6 +43,7 @@ interface DraftItemRow {
   readonly quantity: string;
   readonly unit_price: string;
   readonly discount_amount: string;
+  readonly line_total: string;
 }
 
 interface BatchRow {
@@ -52,9 +63,48 @@ interface ReservedLineRow {
   readonly medicine_id: string;
   readonly quantity: string;
   readonly unit_price: string;
+  readonly discount_amount: string;
   readonly cost_price: string;
   readonly reservation_status: string;
   readonly expires_at: Date;
+}
+
+const DUMMY_PASSWORD_HASH =
+  '$argon2id$v=19$m=65536,p=1,t=3$Qmtqvlr9uuf0LHmWB9gtWQ$bqjEBg5g/m9jpoCKjF9k6ylMJbHj2GZxzLiSk8jQy3Q';
+
+function allocateDiscountedLines(lines: readonly ReservedLineRow[]) {
+  const groups = new Map<string, ReservedLineRow[]>();
+  for (const line of lines) {
+    const group = groups.get(line.draft_item_id) ?? [];
+    group.push(line);
+    groups.set(line.draft_item_id, group);
+  }
+
+  return [...groups.values()].flatMap((group) => {
+    const totalDiscount = moneyToMinorUnits(group[0]?.discount_amount ?? '0');
+    const rawAmounts = group.map((line) =>
+      moneyToMinorUnits(multiplyMoneyByQuantity(line.unit_price, line.quantity)),
+    );
+    const totalRaw = rawAmounts.reduce((total, amount) => total + amount, 0n);
+    if (totalDiscount > totalRaw) throw new ConflictException('Line discount exceeds line value');
+
+    let allocated = 0n;
+    return group.map((line, index) => {
+      const rawAmount = rawAmounts[index] ?? 0n;
+      const isLast = index === group.length - 1;
+      const discount = isLast
+        ? totalDiscount - allocated
+        : totalRaw === 0n
+          ? 0n
+          : (totalDiscount * rawAmount) / totalRaw;
+      allocated += discount;
+      return {
+        ...line,
+        discountAmount: minorUnitsToMoney(discount),
+        lineTotal: minorUnitsToMoney(rawAmount - discount),
+      };
+    });
+  });
 }
 
 @Injectable()
@@ -106,6 +156,8 @@ export class PosService {
         sales.discount_total::text, sales.tax_total::text, sales.total::text,
         sales.created_at, branches.name as branch_name, branches.address as branch_address,
         branches.phone as branch_phone, users.display_name as cashier_name,
+        customers.id::text as customer_id, customers.name as customer_name,
+        customers.phone as customer_phone,
         return_lookup_tokens.token::text as return_lookup_token,
         fbr_invoices.status as fiscal_status,
         fbr_invoices.fiscal_invoice_number,
@@ -113,6 +165,7 @@ export class PosService {
       from sales
       join branches on branches.id = sales.branch_id
       join users on users.id = sales.cashier_user_id
+      left join customers on customers.id = sales.customer_id
       join return_lookup_tokens on return_lookup_tokens.sale_id = sales.id
         and return_lookup_tokens.revoked_at is null
       join fbr_invoices on fbr_invoices.sale_id = sales.id
@@ -235,12 +288,180 @@ export class PosService {
     });
   }
 
+  async applyDiscount(
+    user: AuthenticatedUser,
+    draftId: bigint,
+    input: ApplySaleDiscountRequest,
+  ): Promise<Record<string, unknown>> {
+    const authenticatedApprover =
+      input.approverUsername && input.approverPassword
+        ? await this.authenticateDiscountApprover(input.approverUsername, input.approverPassword)
+        : null;
+
+    return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'POS.APPLY_DISCOUNT',
+        user.branchId,
+        input.clientRequestId,
+      );
+      const [replay] = await transaction<Array<{ id: string; sale_draft_id: string }>>`
+        select id::text, sale_draft_id::text from discount_approvals
+        where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}
+      `;
+      if (replay) {
+        const [draft] = await transaction<
+          Array<{ subtotal: string; discount_total: string; total: string }>
+        >`
+          select subtotal::text, discount_total::text, total::text
+          from sale_drafts where id = ${replay.sale_draft_id}
+        `;
+        return { approvalId: replay.id, ...draft, idempotentReplay: true };
+      }
+
+      const [draft] = await transaction<DraftRow[]>`
+        select id::text, branch_id::text, terminal_id::text, status,
+          subtotal::text, discount_total::text, total::text, reserved_until,
+          discount_approval_id::text
+        from sale_drafts where id = ${draftId.toString()} for update
+      `;
+      if (!draft || draft.branch_id !== user.branchId)
+        throw new NotFoundException('Draft not found');
+      if (!['DRAFT', 'SENT_TO_CASHIER', 'RESERVED', 'EXPIRED'].includes(draft.status)) {
+        throw new ConflictException(`Discount cannot be applied to a ${draft.status} draft`);
+      }
+      const items = await transaction<DraftItemRow[]>`
+        select id::text, medicine_id::text, quantity::text, unit_price::text,
+          discount_amount::text, line_total::text
+        from sale_draft_items where sale_draft_id = ${draft.id}
+        order by medicine_id, id for update
+      `;
+      if (items.length === 0) throw new ConflictException('Draft has no items');
+
+      const requested = new Map(
+        input.lineDiscounts.map((line) => [line.medicineId.toString(), line.amount]),
+      );
+      if ([...requested.keys()].some((id) => !items.some((item) => item.medicine_id === id))) {
+        throw new ConflictException('Discount references a medicine outside this draft');
+      }
+      const grossAmounts = items.map((item) =>
+        multiplyMoneyByQuantity(item.unit_price, item.quantity),
+      );
+      const grossAmount = sumMoney(grossAmounts);
+      const lineDiscounts = items.map((item, index) => {
+        const amount = requested.get(item.medicine_id) ?? '0';
+        if (moneyToMinorUnits(amount) > moneyToMinorUnits(grossAmounts[index] ?? '0')) {
+          throw new ConflictException('Line discount exceeds line value');
+        }
+        return amount;
+      });
+      const discountedSubtotal = minorUnitsToMoney(
+        moneyToMinorUnits(grossAmount) -
+          lineDiscounts.reduce((total, amount) => total + moneyToMinorUnits(amount), 0n),
+      );
+      if (moneyToMinorUnits(input.invoiceDiscount) > moneyToMinorUnits(discountedSubtotal)) {
+        throw new ConflictException('Invoice discount exceeds discounted subtotal');
+      }
+      const totalDiscount = sumMoney([...lineDiscounts, input.invoiceDiscount]);
+      const grossMinor = moneyToMinorUnits(grossAmount);
+      const discountMinor = moneyToMinorUnits(totalDiscount);
+      if (discountMinor >= grossMinor) {
+        throw new ConflictException('Discount must leave a positive sale total');
+      }
+      const percentHundredths = (discountMinor * 10_000n + grossMinor / 2n) / grossMinor;
+      const discountPercent = scaledIntegerToDecimal(percentHundredths, 2);
+      const [policy] = await transaction<Array<{ limit_percent: string }>>`
+        select basic_discount_limit_percent::text as limit_percent
+        from operational_intelligence_policies where branch_id = ${user.branchId}
+      `;
+      const limit = decimalToScaledInteger(policy?.limit_percent ?? '5', 2);
+      const needsOverride = percentHundredths > limit;
+      let approverId = user.id;
+      if (needsOverride && !user.permissions.includes(PERMISSIONS.SALE_DISCOUNT_OVERRIDE)) {
+        if (!authenticatedApprover)
+          throw new ForbiddenException('Supervisor approval is required for this discount');
+        const [authorized] = await transaction<Array<{ id: string }>>`
+          select users.id::text from users
+          where users.id = ${authenticatedApprover} and users.is_active
+            and users.deleted_at is null and (users.locked_until is null or users.locked_until <= now())
+            and exists (
+              select 1 from user_branch_roles
+              join role_permissions on role_permissions.role_id = user_branch_roles.role_id
+              join permissions on permissions.id = role_permissions.permission_id
+              where user_branch_roles.user_id = users.id
+                and user_branch_roles.branch_id = ${user.branchId}
+                and permissions.code = ${PERMISSIONS.SALE_DISCOUNT_OVERRIDE}
+            )
+        `;
+        if (!authorized) throw new ForbiddenException('Supervisor approval is not valid');
+        approverId = authorized.id;
+      }
+
+      for (const [index, item] of items.entries()) {
+        const discount = lineDiscounts[index] ?? '0';
+        const lineTotal = minorUnitsToMoney(
+          moneyToMinorUnits(grossAmounts[index] ?? '0') - moneyToMinorUnits(discount),
+        );
+        await transaction`
+          update sale_draft_items set discount_amount = ${discount}, line_total = ${lineTotal}
+          where id = ${item.id}
+        `;
+      }
+      const [approval] = await transaction<Array<{ id: string }>>`
+        insert into discount_approvals (
+          branch_id, sale_draft_id, requested_by_user_id, approved_by_user_id,
+          approval_level, gross_amount, discount_amount, discount_percent,
+          reason, client_request_id
+        ) values (
+          ${user.branchId}, ${draft.id}, ${user.id}, ${approverId},
+          ${needsOverride ? 'OVERRIDE' : 'BASIC'}, ${grossAmount}, ${totalDiscount},
+          ${discountPercent}, ${input.reason}, ${input.clientRequestId}
+        ) returning id::text
+      `;
+      if (!approval) throw new Error('Discount approval did not return an identifier');
+      const total = minorUnitsToMoney(
+        moneyToMinorUnits(discountedSubtotal) - moneyToMinorUnits(input.invoiceDiscount),
+      );
+      await transaction`
+        update stock_reservations set status = 'RELEASED', released_at = now()
+        where sale_draft_item_id in (
+          select id from sale_draft_items where sale_draft_id = ${draft.id}
+        ) and status = 'ACTIVE'
+      `;
+      await transaction`
+        update sale_drafts set status = 'DRAFT', subtotal = ${discountedSubtotal},
+          discount_total = ${input.invoiceDiscount}, total = ${total},
+          discount_approval_id = ${approval.id}, reserved_until = null
+        where id = ${draft.id}
+      `;
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id,
+          request_id, metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId}, 'SALE.DISCOUNT_APPROVED',
+          'discount_approval', ${approval.id}, ${input.clientRequestId},
+          ${transaction.json({ draftId: draft.id, approverId, approvalLevel: needsOverride ? 'OVERRIDE' : 'BASIC', grossAmount, totalDiscount, discountPercent, reason: input.reason })}
+        )
+      `;
+      return {
+        approvalId: approval.id,
+        approvalLevel: needsOverride ? 'OVERRIDE' : 'BASIC',
+        subtotal: discountedSubtotal,
+        invoiceDiscount: input.invoiceDiscount,
+        total,
+        idempotentReplay: false,
+      };
+    });
+  }
+
   async reserveDraft(user: AuthenticatedUser, draftId: bigint): Promise<Record<string, unknown>> {
     const draftIdText = draftId.toString();
     return this.database.begin(async (transaction) => {
       const [draft] = await transaction<DraftRow[]>`
         select id::text, branch_id::text, terminal_id::text, status,
-          subtotal::text, discount_total::text, total::text, reserved_until
+          subtotal::text, discount_total::text, total::text, reserved_until,
+          discount_approval_id::text
         from sale_drafts where id = ${draftIdText} for update
       `;
       if (!draft || draft.branch_id !== user.branchId)
@@ -255,14 +476,14 @@ export class PosService {
           and status = 'ACTIVE'
       `;
       const items = await transaction<DraftItemRow[]>`
-        select id::text, medicine_id::text, quantity::text, unit_price::text, discount_amount::text
+        select id::text, medicine_id::text, quantity::text, unit_price::text,
+          discount_amount::text, line_total::text
         from sale_draft_items where sale_draft_id = ${draft.id} order by medicine_id, id
       `;
       if (items.length === 0) throw new ConflictException('Draft has no items');
 
       const expiresAt = new Date(Date.now() + this.environment.RESERVATION_TTL_MINUTES * 60_000);
       let reservationCount = 0;
-      const reservationLineTotals: string[] = [];
       for (const item of items) {
         const lockedBatches = await transaction<BatchRow[]>`
           select inventory_batches.id::text as batch_id,
@@ -327,7 +548,6 @@ export class PosService {
             ) values (${item.id}, ${batch.batch_id}, ${quantity}, 'ACTIVE', ${expiresAt})
           `;
           reservationCount += 1;
-          reservationLineTotals.push(multiplyMoneyByQuantity(item.unit_price, quantity));
           required -= allocated;
         }
         if (required > 0n) {
@@ -339,7 +559,27 @@ export class PosService {
         }
       }
 
-      const reservedSubtotal = sumMoney(reservationLineTotals);
+      const reservedLines = await transaction<ReservedLineRow[]>`
+        select stock_reservations.id::text as reservation_id,
+          sale_draft_items.id::text as draft_item_id,
+          inventory_batches.id::text as inventory_batch_id,
+          sale_draft_items.medicine_id::text as medicine_id,
+          stock_reservations.quantity::text,
+          sale_draft_items.unit_price::text,
+          sale_draft_items.discount_amount::text,
+          inventory_batches.cost_price::text,
+          stock_reservations.status as reservation_status,
+          stock_reservations.expires_at
+        from stock_reservations
+        join sale_draft_items on sale_draft_items.id = stock_reservations.sale_draft_item_id
+        join inventory_batches on inventory_batches.id = stock_reservations.inventory_batch_id
+        where sale_draft_items.sale_draft_id = ${draft.id}
+          and stock_reservations.status = 'ACTIVE'
+        order by inventory_batches.id, stock_reservations.id
+      `;
+      const reservedSubtotal = sumMoney(
+        allocateDiscountedLines(reservedLines).map((line) => line.lineTotal),
+      );
       const reservedTotalMinor =
         moneyToMinorUnits(reservedSubtotal) - moneyToMinorUnits(draft.discount_total);
       if (reservedTotalMinor < 0n) {
@@ -379,6 +619,17 @@ export class PosService {
   ): Promise<Record<string, unknown>> {
     const cashSessionId = input.cashSessionId.toString();
     const draftId = input.draftId.toString();
+    const creditAmount = sumMoney(
+      input.payments
+        .filter((payment) => payment.method === 'CREDIT')
+        .map((payment) => payment.amount),
+    );
+    if (
+      moneyToMinorUnits(creditAmount) > 0n &&
+      !user.permissions.includes(PERMISSIONS.CUSTOMER_CREDIT)
+    ) {
+      throw new ForbiddenException('Customer credit permission is required');
+    }
     return this.database.begin(async (transaction) => {
       await lockIdempotencyKey(
         transaction,
@@ -425,7 +676,8 @@ export class PosService {
 
       const [draft] = await transaction<DraftRow[]>`
         select id::text, branch_id::text, terminal_id::text, status,
-          subtotal::text, discount_total::text, total::text, reserved_until
+          subtotal::text, discount_total::text, total::text, reserved_until,
+          discount_approval_id::text
         from sale_drafts where id = ${draftId} for update
       `;
       if (!draft || draft.branch_id !== user.branchId)
@@ -438,6 +690,36 @@ export class PosService {
         throw new ConflictException('Draft reservation is missing or expired');
       }
 
+      let customerBalanceAfter: string | null = null;
+      const customerId = input.customerId?.toString() ?? null;
+      if (customerId) {
+        const [customer] = await transaction<
+          Array<{ id: string; credit_limit: string; is_active: boolean }>
+        >`
+          select id::text, credit_limit::text, is_active from customers
+          where id = ${customerId} and branch_id = ${user.branchId} and deleted_at is null
+          for update
+        `;
+        if (!customer) throw new NotFoundException('Customer not found');
+        if (!customer.is_active) throw new ConflictException('Customer account is inactive');
+        const [latest] = await transaction<Array<{ balance: string }>>`
+          select coalesce((select balance_after from customer_ledger_entries
+            where customer_id = ${customer.id} order by id desc limit 1), 0)::text as balance
+        `;
+        const nextBalance =
+          moneyToMinorUnits(latest?.balance ?? '0') + moneyToMinorUnits(creditAmount);
+        if (nextBalance > moneyToMinorUnits(customer.credit_limit)) {
+          throw new ConflictException({
+            message: 'Customer credit limit exceeded',
+            balance: latest?.balance ?? '0.00',
+            creditLimit: customer.credit_limit,
+          });
+        }
+        customerBalanceAfter = minorUnitsToMoney(nextBalance);
+      } else if (moneyToMinorUnits(creditAmount) > 0n) {
+        throw new ConflictException('A customer is required for credit payment');
+      }
+
       const reservedLines = await transaction<ReservedLineRow[]>`
         select stock_reservations.id::text as reservation_id,
           sale_draft_items.id::text as draft_item_id,
@@ -445,6 +727,7 @@ export class PosService {
           sale_draft_items.medicine_id::text as medicine_id,
           stock_reservations.quantity::text,
           sale_draft_items.unit_price::text,
+          sale_draft_items.discount_amount::text,
           inventory_batches.cost_price::text,
           stock_reservations.status as reservation_status,
           stock_reservations.expires_at
@@ -475,10 +758,7 @@ export class PosService {
         }
       }
 
-      const finalizedLines = reservedLines.map((line) => ({
-        ...line,
-        lineTotal: multiplyMoneyByQuantity(line.unit_price, line.quantity),
-      }));
+      const finalizedLines = allocateDiscountedLines(reservedLines);
       const finalizedSubtotal = sumMoney(finalizedLines.map((line) => line.lineTotal));
       const finalizedTotalMinor =
         moneyToMinorUnits(finalizedSubtotal) - moneyToMinorUnits(draft.discount_total);
@@ -501,11 +781,13 @@ export class PosService {
       const [sale] = await transaction<Array<{ id: string }>>`
         insert into sales (
           branch_id, terminal_id, cashier_user_id, cash_session_id, sale_draft_id,
-          invoice_number, client_request_id, status, subtotal, discount_total, tax_total, total
+          customer_id, invoice_number, client_request_id, status,
+          subtotal, discount_total, tax_total, total, discount_approval_id
         ) values (
           ${user.branchId}, ${user.terminalId}, ${user.id}, ${cashSessionId}, ${draft.id},
-          ${invoice.invoice_number}, ${input.clientRequestId}, 'PAID',
-          ${finalizedSubtotal}, ${draft.discount_total}, 0, ${finalizedTotal}
+          ${customerId}, ${invoice.invoice_number}, ${input.clientRequestId}, 'PAID',
+          ${finalizedSubtotal}, ${draft.discount_total}, 0, ${finalizedTotal},
+          ${draft.discount_approval_id}
         )
         returning id::text
       `;
@@ -523,7 +805,7 @@ export class PosService {
             unit_price, unit_cost, discount_amount, tax_amount, line_total
           ) values (
             ${sale.id}, ${line.medicine_id}, ${line.inventory_batch_id}, ${line.quantity},
-            ${line.unit_price}, ${line.cost_price}, 0, 0, ${line.lineTotal}
+            ${line.unit_price}, ${line.cost_price}, ${line.discountAmount}, 0, ${line.lineTotal}
           )
           returning id::text
         `;
@@ -568,6 +850,17 @@ export class PosService {
           )
         `;
       }
+      if (customerId && moneyToMinorUnits(creditAmount) > 0n && customerBalanceAfter) {
+        await transaction`
+          insert into customer_ledger_entries (
+            branch_id, customer_id, entry_type, amount_delta, balance_after,
+            sale_id, performed_by_user_id, reason
+          ) values (
+            ${user.branchId}, ${customerId}, 'CREDIT_SALE', ${creditAmount},
+            ${customerBalanceAfter}, ${sale.id}, ${user.id}, 'Credit sale'
+          )
+        `;
+      }
       await transaction`
         update stock_reservations set status = 'CONSUMED', consumed_at = now()
         where id in ${transaction(reservedLines.map((line) => line.reservation_id))}
@@ -605,7 +898,7 @@ export class PosService {
         ) values (
           ${user.branchId}, ${user.id}, ${user.terminalId},
           'SALE.FINALIZED', 'sale', ${sale.id}, ${input.clientRequestId},
-          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: finalizedTotal, paymentTotal })}
+          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: finalizedTotal, paymentTotal, customerId, creditAmount })}
         )
       `;
 
@@ -616,8 +909,20 @@ export class PosService {
         fiscalStatus,
         returnLookupToken: returnLookup.token,
         returnLookupPath: `/returns/${returnLookup.token}`,
+        customerId,
+        customerBalance: customerBalanceAfter,
         idempotentReplay: false,
       };
     });
+  }
+
+  private async authenticateDiscountApprover(username: string, password: string) {
+    const [account] = await this.database<Array<{ id: string; password_hash: string }>>`
+      select id::text, password_hash from users
+      where lower(username) = lower(${username}) limit 1
+    `;
+    const valid = await verify(account?.password_hash ?? DUMMY_PASSWORD_HASH, password);
+    if (!account || !valid) throw new ForbiddenException('Supervisor approval is not valid');
+    return account.id;
   }
 }

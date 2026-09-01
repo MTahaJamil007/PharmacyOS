@@ -45,7 +45,7 @@ export function OwnerAssistant(): React.JSX.Element {
   };
   const factsText = useMemo(() => (answer ? JSON.stringify(answer.facts, null, 2) : ''), [answer]);
   return (
-    <main className="operations-canvas assistant-canvas">
+    <section className="operations-canvas assistant-canvas" aria-label="Owner assistant">
       <section className="operations-heading">
         <div>
           <p className="eyebrow">Owner-only · read-only</p>
@@ -143,6 +143,6 @@ export function OwnerAssistant(): React.JSX.Element {
           )}
         </article>
       </section>
-    </main>
+    </section>
   );
 }

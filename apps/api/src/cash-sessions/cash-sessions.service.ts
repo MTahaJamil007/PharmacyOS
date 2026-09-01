@@ -27,6 +27,7 @@ export interface CashSummaryRow {
   readonly cashierName: string;
   readonly openingFloat: string;
   readonly cashSales: string;
+  readonly accountPayments: string;
   readonly cashRefunds: string;
   readonly cashIn: string;
   readonly cashOut: string;
@@ -284,9 +285,11 @@ export class CashSessionsService {
       select cash_sessions.id::text as id, cash_sessions.status,
         cash_sessions.cashier_user_id::text as "cashierUserId",
         users.display_name as "cashierName", cash_sessions.opening_float::text as "openingFloat",
-        totals.cash_sales::text as "cashSales", totals.cash_refunds::text as "cashRefunds",
+        totals.cash_sales::text as "cashSales",
+        totals.account_payments::text as "accountPayments",
+        totals.cash_refunds::text as "cashRefunds",
         totals.cash_in::text as "cashIn", totals.cash_out::text as "cashOut",
-        (cash_sessions.opening_float + totals.cash_sales - totals.cash_refunds
+        (cash_sessions.opening_float + totals.cash_sales + totals.account_payments - totals.cash_refunds
           + totals.cash_in - totals.cash_out)::text as "expectedCash",
         cash_sessions.counted_cash::text as "countedCash",
         cash_sessions.variance::text as variance,
@@ -305,6 +308,9 @@ export class CashSessionsService {
             as cash_sales,
           coalesce((select sum(amount) from refunds
             where cash_session_id = cash_sessions.id and method = 'CASH'), 0) as cash_refunds,
+          coalesce((select -sum(amount_delta) from customer_ledger_entries
+            where cash_session_id = cash_sessions.id and entry_type = 'PAYMENT'
+              and payment_method = 'CASH'), 0) as account_payments,
           coalesce((select sum(amount) from cash_movements
             where cash_session_id = cash_sessions.id and movement_type = 'CASH_IN'), 0) as cash_in,
           coalesce((select sum(amount) from cash_movements

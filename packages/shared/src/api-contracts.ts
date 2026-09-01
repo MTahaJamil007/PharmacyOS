@@ -136,6 +136,7 @@ export interface CashSessionSummary {
   readonly cashierName: string;
   readonly openingFloat: string;
   readonly cashSales: string;
+  readonly accountPayments: string;
   readonly cashRefunds: string;
   readonly cashIn: string;
   readonly cashOut: string;
@@ -190,6 +191,9 @@ export interface SaleReceipt {
     readonly branch_address: string | null;
     readonly branch_phone: string | null;
     readonly cashier_name: string;
+    readonly customer_id: string | null;
+    readonly customer_name: string | null;
+    readonly customer_phone: string | null;
     readonly return_lookup_token: string;
     readonly fiscal_status: string;
     readonly fiscal_invoice_number: string | null;
@@ -221,4 +225,82 @@ export interface SalePaymentInput {
   readonly amount: string;
   readonly tenderedAmount?: string;
   readonly reference?: string;
+}
+
+export interface CustomerSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly phone: string | null;
+  readonly address: string | null;
+  readonly creditLimit: string;
+  readonly balance: string;
+  readonly availableCredit: string;
+  readonly isActive: boolean;
+  readonly createdAt: string;
+}
+
+export interface CustomerLedgerEntry {
+  readonly id: string;
+  readonly entryType: 'OPENING_BALANCE' | 'CREDIT_SALE' | 'PAYMENT' | 'ADJUSTMENT';
+  readonly amountDelta: string;
+  readonly balanceAfter: string;
+  readonly saleId: string | null;
+  readonly invoiceNumber: string | null;
+  readonly paymentMethod: Exclude<PaymentMethod, 'CREDIT'> | null;
+  readonly reference: string | null;
+  readonly reason: string | null;
+  readonly performedBy: string;
+  readonly createdAt: string;
+}
+
+export interface CustomerStatement {
+  readonly customer: CustomerSummary;
+  readonly entries: readonly CustomerLedgerEntry[];
+}
+
+export interface CustomerAgingReport {
+  readonly customerCount: number;
+  readonly total: string;
+  readonly current: string;
+  readonly days31To60: string;
+  readonly days61To90: string;
+  readonly over90Days: string;
+  readonly asOf: string;
+}
+
+export interface DashboardSnapshot {
+  readonly metricDate: string;
+  readonly netSales: string;
+  readonly grossProfitEstimate: string;
+  readonly cashCollected: string;
+  readonly nonCashCollected: string;
+  readonly refunds: string;
+  readonly invoiceCount: string;
+  readonly metrics: {
+    readonly receivables: string;
+    readonly expiryValueAtRisk: string;
+    readonly lowStockCount: number;
+    readonly failedFiscalSubmissions: number;
+    readonly netCashVariance: string;
+    readonly deadStockValue: string;
+    readonly topMovers: ReadonlyArray<{
+      readonly medicineId: string;
+      readonly name: string;
+      readonly quantity: string;
+      readonly netSales: string;
+    }>;
+    readonly lastSuccessfulBackup: {
+      readonly id: string;
+      readonly backupType: string;
+      readonly finishedAt: string | null;
+      readonly sizeBytes: string | null;
+      readonly checksum: string | null;
+    } | null;
+    readonly lastRestoreDrill: {
+      readonly id: string;
+      readonly finishedAt: string | null;
+      readonly destination: string | null;
+    } | null;
+  };
+  readonly updatedAt: string;
 }

@@ -7,6 +7,7 @@ export interface TenderForm {
   readonly cardReference: string;
   readonly cashAmount: string;
   readonly cashTendered: string;
+  readonly creditAmount?: string;
 }
 
 function optionalMoney(value: string): bigint {
@@ -18,7 +19,8 @@ export function paymentSummary(total: string, form: TenderForm) {
   const cash = optionalMoney(form.cashAmount);
   const card = optionalMoney(form.cardAmount);
   const bank = optionalMoney(form.bankAmount);
-  const allocated = cash + card + bank;
+  const credit = optionalMoney(form.creditAmount ?? '');
+  const allocated = cash + card + bank + credit;
   const tendered = form.cashTendered.trim() === '' ? cash : moneyToMinorUnits(form.cashTendered);
   return {
     allocated: minorUnitsToMoney(allocated),
@@ -36,6 +38,7 @@ export function createPaymentInputs(total: string, form: TenderForm): readonly S
   const cash = optionalMoney(form.cashAmount);
   const card = optionalMoney(form.cardAmount);
   const bank = optionalMoney(form.bankAmount);
+  const credit = optionalMoney(form.creditAmount ?? '');
   if (cash > 0n) {
     const tendered = form.cashTendered.trim() === '' ? cash : moneyToMinorUnits(form.cashTendered);
     payments.push({
@@ -57,6 +60,9 @@ export function createPaymentInputs(total: string, form: TenderForm): readonly S
       method: 'BANK_TRANSFER',
       ...(form.bankReference.trim() ? { reference: form.bankReference.trim() } : {}),
     });
+  }
+  if (credit > 0n) {
+    payments.push({ amount: minorUnitsToMoney(credit), method: 'CREDIT' });
   }
   return payments;
 }

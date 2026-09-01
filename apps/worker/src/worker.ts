@@ -110,6 +110,9 @@ export class DurableWorker {
         await this.expireReservations();
         return { status: 'COMPLETED' };
       case 'REFRESH_DASHBOARD_METRICS':
+        await this.runTracked(job, () =>
+          this.refreshDashboardMetrics(String(job.payload.branchId)),
+        );
         return { status: 'COMPLETED' };
       case 'SNAPSHOT_INVENTORY_AVAILABILITY':
         await this.runTracked(job, () =>
@@ -200,7 +203,9 @@ export class DurableWorker {
     for (const branch of branches) {
       const date = branch.local_date;
       const week = `${date.slice(0, 4)}-W${this.isoWeek(date).toString().padStart(2, '0')}`;
+      const hour = new Date().toISOString().slice(0, 13);
       const jobs = [
+        ['REFRESH_DASHBOARD_METRICS', `dashboard:${branch.id}:${hour}`, hour, 30],
         ['SNAPSHOT_INVENTORY_AVAILABILITY', `availability:${branch.id}:${date}`, date, 40],
         ['REFRESH_EXPIRY_RISK', `expiry:${branch.id}:${date}`, date, 50],
         ['REFRESH_REORDER_SUGGESTIONS', `reorder:${branch.id}:${date}`, date, 60],
@@ -284,6 +289,156 @@ export class DurableWorker {
       returning medicine_id::text
     `;
     return { medicinesSnapshotted: rows.length };
+  }
+
+  private async refreshDashboardMetrics(branchId: string): Promise<Record<string, unknown>> {
+    const [snapshot] = await this.database<Array<{ metric_date: string }>>`
+      with branch_clock as (
+        select id, timezone, (now() at time zone timezone)::date as metric_date,
+          ((now() at time zone timezone)::date::timestamp at time zone timezone) as start_at,
+          (((now() at time zone timezone)::date + 1)::timestamp at time zone timezone) as end_at
+        from branches where id = ${branchId}
+      ), day_sales as (
+        select coalesce(sum(sales.total), 0) as gross_sales, count(sales.id) as invoice_count,
+          coalesce(sum(costs.cost_basis), 0) as cost_basis
+        from branch_clock left join sales on sales.branch_id = branch_clock.id
+          and sales.status <> 'VOIDED' and sales.created_at >= branch_clock.start_at
+          and sales.created_at < branch_clock.end_at
+        left join lateral (
+          select coalesce(sum(sale_items.unit_cost * sale_items.quantity), 0) as cost_basis
+          from sale_items where sale_items.sale_id = sales.id
+        ) costs on true
+      ), day_payments as (
+        select
+          coalesce(sum(payments.amount) filter (where payments.method = 'CASH'), 0) as cash_sales,
+          coalesce(sum(payments.amount) filter (
+            where payments.method in ('CARD', 'BANK_TRANSFER')
+          ), 0) as non_cash_sales
+        from branch_clock left join sales on sales.branch_id = branch_clock.id
+          and sales.status <> 'VOIDED' and sales.created_at >= branch_clock.start_at
+          and sales.created_at < branch_clock.end_at
+        left join payments on payments.sale_id = sales.id and payments.status = 'CAPTURED'
+      ), account_payments as (
+        select
+          coalesce(-sum(entries.amount_delta) filter (where entries.payment_method = 'CASH'), 0)
+            as cash_accounts,
+          coalesce(-sum(entries.amount_delta) filter (
+            where entries.payment_method in ('CARD', 'BANK_TRANSFER')
+          ), 0) as non_cash_accounts
+        from branch_clock left join customer_ledger_entries entries
+          on entries.branch_id = branch_clock.id and entries.entry_type = 'PAYMENT'
+          and entries.created_at >= branch_clock.start_at and entries.created_at < branch_clock.end_at
+      ), day_refunds as (
+        select coalesce(sum(refunds.amount), 0) as total,
+          coalesce(sum(refunds.amount) filter (where refunds.method = 'CASH'), 0) as cash,
+          coalesce(sum(refunds.amount) filter (
+            where refunds.method in ('CARD', 'BANK_TRANSFER')
+          ), 0) as non_cash
+        from branch_clock left join returns on returns.branch_id = branch_clock.id
+          and returns.created_at >= branch_clock.start_at and returns.created_at < branch_clock.end_at
+        left join refunds on refunds.return_id = returns.id
+      ), latest_balances as (
+        select distinct on (entries.customer_id) entries.balance_after
+        from customer_ledger_entries entries
+        where entries.branch_id = ${branchId} order by entries.customer_id, entries.id desc
+      ), inventory_metrics as (
+        select coalesce(sum(batches.current_qty * batches.cost_price) filter (
+            where batches.current_qty > 0 and batches.expiry_date <= branch_clock.metric_date + 90
+          ), 0) as expiry_risk,
+          coalesce(sum(batches.current_qty * batches.cost_price) filter (
+            where batches.current_qty > 0 and not exists (
+              select 1 from sale_items join sales on sales.id = sale_items.sale_id
+              where sale_items.inventory_batch_id = batches.id
+                and sales.created_at >= branch_clock.start_at - interval '90 days'
+            )
+          ), 0) as dead_stock
+        from branch_clock left join inventory_batches batches on batches.branch_id = branch_clock.id
+          and batches.deleted_at is null
+      ), top_movers as (
+        select coalesce(jsonb_agg(jsonb_build_object(
+          'medicineId', ranked.medicine_id, 'name', ranked.name,
+          'quantity', ranked.quantity, 'netSales', ranked.net_sales
+        ) order by ranked.quantity desc, ranked.medicine_id), '[]'::jsonb) as items
+        from (
+          select medicines.id::text as medicine_id, medicines.name,
+            sum(sale_items.quantity)::text as quantity,
+            sum(sale_items.line_total)::text as net_sales
+          from branch_clock join sales on sales.branch_id = branch_clock.id
+            and sales.status <> 'VOIDED' and sales.created_at >= branch_clock.start_at
+            and sales.created_at < branch_clock.end_at
+          join sale_items on sale_items.sale_id = sales.id
+          join medicines on medicines.id = sale_items.medicine_id
+          group by medicines.id, medicines.name
+          order by sum(sale_items.quantity) desc, medicines.id limit 5
+        ) ranked
+      ), operational as (
+        select
+          (select count(*)::int from reorder_policies policies
+            left join lateral (select coalesce(sum(current_qty), 0) quantity
+              from inventory_batches where branch_id = policies.branch_id
+                and medicine_id = policies.medicine_id and status = 'SELLABLE'
+                and deleted_at is null) stock on true
+            where policies.branch_id = ${branchId} and policies.is_active
+              and stock.quantity <= policies.minimum_stock) as low_stock_count,
+          (select count(*)::int from fbr_invoices join sales on sales.id = fbr_invoices.sale_id
+            where sales.branch_id = ${branchId}
+              and fbr_invoices.status in ('FAILED_RETRYABLE', 'FAILED_NEEDS_REVIEW'))
+            as failed_fiscal,
+          (select coalesce(sum(variance), 0)::text from cash_sessions
+            cross join branch_clock where cash_sessions.branch_id = ${branchId}
+              and cash_sessions.opened_at >= branch_clock.start_at
+              and cash_sessions.opened_at < branch_clock.end_at) as cash_variance,
+          (select to_jsonb(run) from (
+            select id::text, backup_type as "backupType", finished_at as "finishedAt",
+              size_bytes::text as "sizeBytes", checksum
+            from backup_runs where status = 'SUCCEEDED' and backup_type <> 'RESTORE_DRILL'
+              and (branch_id = ${branchId} or branch_id is null)
+            order by finished_at desc nulls last, id desc limit 1
+          ) run) as last_backup,
+          (select to_jsonb(run) from (
+            select id::text, finished_at as "finishedAt", destination
+            from backup_runs where status = 'SUCCEEDED' and backup_type = 'RESTORE_DRILL'
+              and (branch_id = ${branchId} or branch_id is null)
+            order by finished_at desc nulls last, id desc limit 1
+          ) run) as last_restore
+      )
+      insert into dashboard_daily_metrics (
+        branch_id, metric_date, net_sales, gross_profit_estimate, cash_collected,
+        non_cash_collected, refunds, invoice_count, metrics, updated_at
+      )
+      select ${branchId}, branch_clock.metric_date,
+        day_sales.gross_sales - day_refunds.total,
+        day_sales.gross_sales - day_sales.cost_basis - day_refunds.total,
+        day_payments.cash_sales + account_payments.cash_accounts - day_refunds.cash,
+        day_payments.non_cash_sales + account_payments.non_cash_accounts - day_refunds.non_cash,
+        day_refunds.total, day_sales.invoice_count,
+        jsonb_build_object(
+          'receivables', (select coalesce(sum(balance_after), 0)::text from latest_balances),
+          'expiryValueAtRisk', inventory_metrics.expiry_risk::text,
+          'lowStockCount', operational.low_stock_count,
+          'failedFiscalSubmissions', operational.failed_fiscal,
+          'netCashVariance', operational.cash_variance,
+          'deadStockValue', inventory_metrics.dead_stock::text,
+          'topMovers', top_movers.items,
+          'lastSuccessfulBackup', operational.last_backup,
+          'lastRestoreDrill', operational.last_restore
+        ), now()
+      from branch_clock cross join day_sales cross join day_payments
+      cross join account_payments cross join day_refunds cross join inventory_metrics
+      cross join top_movers cross join operational
+      on conflict (branch_id, metric_date) do update set
+        net_sales = excluded.net_sales,
+        gross_profit_estimate = excluded.gross_profit_estimate,
+        cash_collected = excluded.cash_collected,
+        non_cash_collected = excluded.non_cash_collected,
+        refunds = excluded.refunds,
+        invoice_count = excluded.invoice_count,
+        metrics = excluded.metrics,
+        updated_at = now()
+      returning metric_date::text
+    `;
+    if (!snapshot) throw new Error(`Branch ${branchId} does not exist`);
+    return { metricDate: snapshot.metric_date };
   }
 
   private async refreshExpiryRisk(branchId: string): Promise<Record<string, unknown>> {

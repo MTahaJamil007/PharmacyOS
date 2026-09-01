@@ -120,6 +120,7 @@ export function CashSessionScreen(): React.JSX.Element {
             <dl className="cash-ledger">
               <MoneyCell label="Opening float" value={cashSession.openingFloat} />
               <MoneyCell label="Cash sales" value={cashSession.cashSales} />
+              <MoneyCell label="Account payments" value={cashSession.accountPayments} />
               <MoneyCell label="Cash refunds" value={`-${cashSession.cashRefunds}`} />
               <MoneyCell label="Cash in" value={cashSession.cashIn} />
               <MoneyCell label="Cash out" value={`-${cashSession.cashOut}`} />
