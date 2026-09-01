@@ -6,11 +6,11 @@ PharmacyOS is a single-shop, on-premise pharmacy operations platform for Pakista
 
 | Area                 | Verified status                                                                                                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Engineering gate     | Phase 0 is complete locally. A clean clone passes the locked install and `npm run verify`; hosted CI awaits a Git remote.                                                       |
+| Engineering gate     | Phases 0–4 and repository-controlled Phase 5 work are implemented on `development`; current command evidence is in the phase execution records.                                 |
 | Pilot deployment     | Phase 1 code and an isolated Docker-host build/start/backup/restore are verified. Second-terminal sale/receipt, trusted client TLS, and physical external-disk evidence remain. |
-| Receipts             | A sale can render and print an 80 mm browser receipt with an opaque return-token QR code. There is no find-sale/reprint workflow yet.                                           |
-| Fiscal integration   | The durable FBR outbox boundary exists. No certified production FBR adapter exists; non-disabled real modes retry rather than submit.                                           |
-| Owner reporting      | The read-only AI boundary and limited operational screens exist. A deterministic non-AI owner dashboard is planned for Phase 4.                                                 |
+| Receipts             | Sale lookup/reprint, opaque return-token QR, tax snapshots, and 80 mm browser rendering exist; physical printer/QR evidence remains a pilot prerequisite.                       |
+| Fiscal integration   | Exact tax snapshots and a real FBR DI gateway exist. Outbound transmission stays disabled pending explicit approval, licensed-integrator review, and real sandbox evidence.     |
+| Owner reporting      | Deterministic reports/dashboard, operational alerts, metrics, and the optional read-only AI explanation boundary are implemented.                                               |
 | Production readiness | Blocked until the active phase exit gates in `docs/DEVELOPMENT_PLAN.md` have on-site evidence.                                                                                  |
 
 ## Prerequisites
@@ -38,6 +38,8 @@ For UI-only review without a database, run `$env:VITE_PREVIEW_MODE='true'; npm r
 
 Run `npm run verify` before handing off a change. It checks formatting, lint, strict TypeScript, tests, and production builds. Migrations are checksum-protected after application and must never be edited after deployment.
 
+Run `npm run test:performance` separately for the representative Phase 5 gate (10,000 medicines and 200,000 historical batches). It is intentionally excluded from the normal fast verification loop.
+
 ## Production deployment
 
 The production stack provides:
@@ -60,4 +62,4 @@ Follow `docs/RUNBOOK.md`; do not improvise a production installation from the Co
 - Database constraints enforce invariants; controllers validate and services coordinate use cases.
 - Inventory locks follow deterministic ordering.
 
-The sequencing and objective release gates are defined in `docs/DEVELOPMENT_PLAN.md`. Phase execution evidence is stored beside it in `docs/PHASE_0_EXECUTION.md` and `docs/PHASE_1_EXECUTION.md`.
+The sequencing and objective release gates are defined in `docs/DEVELOPMENT_PLAN.md`. Phase execution evidence is stored beside it in `docs/PHASE_0_EXECUTION.md` through `docs/PHASE_5_EXECUTION.md`; the on-site process is `docs/PILOT_RUNBOOK.md`.

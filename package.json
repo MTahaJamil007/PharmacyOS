@@ -23,6 +23,7 @@
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "npm run test --workspaces --if-present",
     "test:integration": "vitest run --config vitest.config.ts",
+    "test:performance": "vitest run --config vitest.performance.config.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "db:migrate": "npm run migrate --workspace @pharmacy/database",

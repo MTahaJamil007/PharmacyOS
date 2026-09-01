@@ -102,7 +102,7 @@ services:
       resources:
         limits: { cpus: '1.00', memory: 768M, pids: 256 }
     pids_limit: 256
-    networks: [backend]
+    networks: [backend, egress]
 
   worker:
     build:
@@ -134,7 +134,7 @@ services:
       resources:
         limits: { cpus: '1.00', memory: 1G, pids: 256 }
     pids_limit: 256
-    networks: [backend]
+    networks: [backend, egress]
 
   backup:
     build:
@@ -220,3 +220,4 @@ networks:
   backend:
     internal: true
   edge:
+  egress:

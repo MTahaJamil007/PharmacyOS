@@ -102,9 +102,12 @@ describe('production deployment contract', () => {
     expect(compose.networks?.backend?.internal).toBe(true);
     expect(compose.networks?.edge?.internal).not.toBe(true);
     expect(service(compose, 'web').networks).toEqual(['backend', 'edge']);
-    for (const name of ['postgres', 'redis', 'migrate', 'api', 'worker', 'backup']) {
+    for (const name of ['postgres', 'redis', 'migrate', 'backup']) {
       expect(service(compose, name).networks).toEqual(['backend']);
     }
+    expect(service(compose, 'api').networks).toEqual(['backend', 'egress']);
+    expect(service(compose, 'worker').networks).toEqual(['backend', 'egress']);
+    expect(compose.networks?.egress?.internal).not.toBe(true);
 
     const caddyfile = readRepositoryFile('infra/docker/Caddyfile');
     expect(caddyfile).toContain('tls internal');

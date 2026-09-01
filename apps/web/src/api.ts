@@ -11,6 +11,7 @@ import {
   type LoginResponse,
   type MedicineSearchResult,
   type OwnerAnswer,
+  type OperationalAlertsResponse,
   type OwnerTool,
   type ReorderSuggestion,
   type ReservedSaleDraft,
@@ -35,6 +36,7 @@ export type {
   LoginResponse,
   MedicineSearchResult,
   OwnerAnswer,
+  OperationalAlertsResponse,
   OwnerTool,
   ReorderSuggestion,
   ReservedSaleDraft,
@@ -105,6 +107,13 @@ export function getInventoryAttention(token: string): Promise<Record<string, str
 
 export function getFailedJobs(token: string, limit = 20): Promise<FailedJobsResponse> {
   return authenticatedRequest(token, `/operations/jobs/failed?limit=${limit}`);
+}
+
+export function getOperationalAlerts(
+  token: string,
+  limit = 20,
+): Promise<OperationalAlertsResponse> {
+  return authenticatedRequest(token, `/operations/alerts?status=OPEN&limit=${limit}`);
 }
 
 export async function getExpiryRisk(token: string): Promise<ExpiryRiskItem[]> {

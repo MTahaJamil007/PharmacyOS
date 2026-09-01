@@ -20,6 +20,7 @@ import { DashboardModule } from './dashboard/dashboard.module.js';
 import { InventoryOperationsModule } from './inventory-operations/inventory-operations.module.js';
 import { AdministrationModule } from './administration/administration.module.js';
 import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
+import { ObservabilityModule } from './observability/observability.module.js';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
     DashboardModule,
     InventoryOperationsModule,
     AdministrationModule,
+    ObservabilityModule,
   ],
   providers: [
     AuthGuard,

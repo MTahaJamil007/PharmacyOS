@@ -9,5 +9,10 @@
     "types": ["node", "vitest/globals"],
     "useDefineForClassFields": false
   },
-  "include": ["playwright.config.ts", "vitest.config.ts", "tests/**/*.ts"]
+  "include": [
+    "playwright.config.ts",
+    "vitest.config.ts",
+    "vitest.performance.config.ts",
+    "tests/**/*.ts"
+  ]
 }

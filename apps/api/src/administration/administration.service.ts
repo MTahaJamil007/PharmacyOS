@@ -7,6 +7,7 @@ import type {
   CreateSupplierRequest,
   CreateTerminalRequest,
   UpdateMedicineRequest,
+  UpdateFiscalSettingsRequest,
   UpdateOperationalPoliciesRequest,
   UpdateShelfRequest,
   UpdateSupplierRequest,
@@ -34,6 +35,8 @@ export class AdministrationService {
         medicines.requires_prescription as "requiresPrescription",
         medicines.storage_class as "storageClass",
         medicines.requires_secured_storage as "requiresSecuredStorage",
+        medicines.hs_code as "hsCode", medicines.tax_rate::text as "taxRate",
+        medicines.fbr_uom as "fbrUom", medicines.fbr_sale_type as "fbrSaleType",
         medicines.is_active as "isActive", barcodes.barcode
       from medicines
       left join lateral (select barcode from medicine_barcodes
@@ -53,12 +56,14 @@ export class AdministrationService {
       const [medicine] = await transaction<Array<{ id: string }>>`
         insert into medicines (
           sku, name, generic_name, strength, dosage_form, pack_size, unit_name,
-          requires_prescription, storage_class, requires_secured_storage
+          requires_prescription, storage_class, requires_secured_storage,
+          hs_code, tax_rate, fbr_uom, fbr_sale_type
         ) values (
           ${input.sku ?? null}, ${input.name}, ${input.genericName ?? null},
           ${input.strength ?? null}, ${input.dosageForm ?? null}, ${input.packSize},
           ${input.unitName}, ${input.requiresPrescription}, ${input.storageClass},
-          ${input.requiresSecuredStorage}
+          ${input.requiresSecuredStorage}, ${input.hsCode ?? null}, ${input.taxRate},
+          ${input.fbrUom}, ${input.fbrSaleType}
         ) returning id::text
       `;
       if (!medicine) throw new Error('Medicine creation did not return an identifier');
@@ -95,7 +100,11 @@ export class AdministrationService {
           requires_prescription = case when ${input.requiresPrescription !== undefined} then ${input.requiresPrescription ?? false} else requires_prescription end,
           storage_class = case when ${input.storageClass !== undefined} then ${input.storageClass ?? null} else storage_class end,
           requires_secured_storage = case when ${input.requiresSecuredStorage !== undefined} then ${input.requiresSecuredStorage ?? false} else requires_secured_storage end,
-          is_active = case when ${input.isActive !== undefined} then ${input.isActive ?? true} else is_active end
+          is_active = case when ${input.isActive !== undefined} then ${input.isActive ?? true} else is_active end,
+          hs_code = case when ${input.hsCode !== undefined} then ${input.hsCode ?? null} else hs_code end,
+          tax_rate = case when ${input.taxRate !== undefined} then ${input.taxRate ?? '0'}::numeric else tax_rate end,
+          fbr_uom = case when ${input.fbrUom !== undefined} then ${input.fbrUom ?? null} else fbr_uom end,
+          fbr_sale_type = case when ${input.fbrSaleType !== undefined} then ${input.fbrSaleType ?? null} else fbr_sale_type end
         where id = ${id}
       `;
       if (input.barcode !== undefined) {
@@ -354,6 +363,48 @@ export class AdministrationService {
         fields: Object.keys(input),
       });
       return { updated: true };
+    });
+  }
+
+  async fiscalSettings(user: AuthenticatedUser) {
+    const [settings] = await this.database<Array<Record<string, unknown>>>`
+      select seller_ntn_cnic as "sellerNtnCnic", seller_strn as "sellerStrn",
+        fbr_pos_registration_number as "posRegistrationNumber",
+        coalesce(fbr_business_name, name) as "businessName",
+        fbr_province as province, fbr_scenario_id as "scenarioId"
+      from branches where id = ${user.branchId}
+    `;
+    if (!settings) throw new NotFoundException('Branch not found');
+    return settings;
+  }
+
+  async updateFiscalSettings(user: AuthenticatedUser, input: UpdateFiscalSettingsRequest) {
+    return this.database.begin(async (transaction) => {
+      const [updated] = await transaction<Array<Record<string, unknown>>>`
+        update branches set
+          seller_ntn_cnic = case when ${input.sellerNtnCnic !== undefined}
+            then ${input.sellerNtnCnic ?? null} else seller_ntn_cnic end,
+          seller_strn = case when ${input.sellerStrn !== undefined}
+            then ${input.sellerStrn ?? null} else seller_strn end,
+          fbr_pos_registration_number = case when ${input.posRegistrationNumber !== undefined}
+            then ${input.posRegistrationNumber ?? null} else fbr_pos_registration_number end,
+          fbr_business_name = case when ${input.businessName !== undefined}
+            then ${input.businessName ?? null} else fbr_business_name end,
+          fbr_province = case when ${input.province !== undefined}
+            then ${input.province ?? null} else fbr_province end,
+          fbr_scenario_id = case when ${input.scenarioId !== undefined}
+            then ${input.scenarioId ?? null} else fbr_scenario_id end
+        where id = ${user.branchId}
+        returning seller_ntn_cnic as "sellerNtnCnic", seller_strn as "sellerStrn",
+          fbr_pos_registration_number as "posRegistrationNumber",
+          coalesce(fbr_business_name, name) as "businessName",
+          fbr_province as province, fbr_scenario_id as "scenarioId"
+      `;
+      if (!updated) throw new NotFoundException('Branch not found');
+      await this.audit(transaction, user, 'SETTINGS.FISCAL_UPDATED', 'branch', user.branchId, {
+        fields: Object.keys(input),
+      });
+      return updated;
     });
   }
 

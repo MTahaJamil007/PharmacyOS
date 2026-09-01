@@ -153,20 +153,14 @@ export class DurableWorker {
       return { status: 'COMPLETED' };
     }
 
-    if (this.environment.FBR_MODE === 'SANDBOX') {
-      await this.database`
-        update fbr_invoices
-        set status = 'SUBMITTED', fiscal_invoice_number = concat('SANDBOX-', id), submitted_at = now(),
-            last_error_code = null, last_error_message = null
-        where id = ${String(invoiceId)}
-      `;
-      return { status: 'COMPLETED' };
-    }
-
-    return {
-      status: 'RETRYABLE',
-      error: `FBR adapter ${this.environment.FBR_MODE} is not configured`,
-    };
+    const recorded = await this.recordBlockedFiscalAttempt(
+      String(invoiceId),
+      'FBR_OUTBOUND_APPROVAL_REQUIRED',
+      'Outbound fiscal submission is disabled pending explicit operator approval',
+    );
+    return recorded
+      ? { status: 'COMPLETED' }
+      : { status: 'RETRYABLE', error: `Fiscal invoice ${String(invoiceId)} was not found` };
   }
 
   private async handleFbrReturn(job: OutboxJob): Promise<JobOutcome> {
@@ -174,18 +168,61 @@ export class DurableWorker {
     if (typeof invoiceId !== 'string' && typeof invoiceId !== 'number') {
       return { status: 'RETRYABLE', error: 'FBR return job is missing fbrInvoiceId' };
     }
-    if (this.environment.FBR_MODE === 'DISABLED' || this.environment.FBR_MODE === 'SANDBOX') {
+    if (this.environment.FBR_MODE === 'DISABLED') {
       await this.database`
-        update fbr_invoices set status = ${this.environment.FBR_MODE === 'DISABLED' ? 'NOT_REQUIRED' : 'SUBMITTED'},
+        update fbr_invoices set status = 'NOT_REQUIRED',
           last_error_code = null, last_error_message = null
         where id = ${String(invoiceId)}
       `;
       return { status: 'COMPLETED' };
     }
-    return {
-      status: 'RETRYABLE',
-      error: `FBR return adapter ${this.environment.FBR_MODE} is not configured`,
-    };
+    const recorded = await this.recordBlockedFiscalAttempt(
+      String(invoiceId),
+      'FBR_RETURN_MAPPING_REQUIRED',
+      'Fiscal credit-note mapping requires licensed-integrator approval',
+    );
+    return recorded
+      ? { status: 'COMPLETED' }
+      : { status: 'RETRYABLE', error: `Fiscal invoice ${String(invoiceId)} was not found` };
+  }
+
+  private async recordBlockedFiscalAttempt(
+    invoiceId: string,
+    errorCode: string,
+    errorMessage: string,
+  ): Promise<boolean> {
+    return this.database.begin(async (transaction) => {
+      const [invoice] = await transaction<
+        Array<{ id: string; payload_text: string; status: string }>
+      >`
+        select id::text, payload::text as payload_text, status
+        from fbr_invoices where id = ${invoiceId} for update
+      `;
+      if (!invoice) return false;
+      if (invoice.status === 'SUBMITTED') return true;
+      const [attempt] = await transaction<Array<{ attempt_number: number }>>`
+        select coalesce(max(attempt_number), 0)::int + 1 as attempt_number
+        from fbr_invoice_attempts where fbr_invoice_id = ${invoiceId}
+      `;
+      if (!attempt) throw new Error('Fiscal attempt sequence could not be allocated');
+      await transaction`
+        insert into fbr_invoice_attempts (
+          fbr_invoice_id, attempt_number, operation, request_payload, response_payload,
+          outcome, error_message, duration_ms
+        ) values (
+          ${invoiceId}, ${attempt.attempt_number}, 'SUBMIT',
+          ${invoice.payload_text}::jsonb,
+          ${transaction.json({ blocked: true, errorCode })},
+          'PERMANENT_FAILURE', ${errorMessage}, 0
+        )
+      `;
+      await transaction`
+        update fbr_invoices set status = 'FAILED_NEEDS_REVIEW',
+          last_error_code = ${errorCode}, last_error_message = ${errorMessage}
+        where id = ${invoiceId}
+      `;
+      return true;
+    });
   }
 
   private async enqueueOperationalJobs(): Promise<void> {

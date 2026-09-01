@@ -250,6 +250,8 @@ All three were in the MVP's own "included" list and silently disappeared.
 
 ### Phase 5 — Fiscal, observability & pilot · ~4 weeks
 
+**Execution status (2026-09-01):** repository-controlled fiscal/tax, observability, alerting, hot-path, performance, and pilot-preparation work is implemented; focused software/performance gates pass. The overall exit gate remains blocked on explicit outbound-data approval, licensed-integrator and tax-adviser validation, real FBR sandbox evidence, physical hardware/LAN/external-disk tests, and the 14-day pharmacy pilot. See `docs/PHASE_5_EXECUTION.md` and `docs/PILOT_RUNBOOK.md`.
+
 **5.1 FBR.** Build the `FiscalInvoiceGateway` interface the architecture specifies verbatim (`validateInvoice` / `submitInvoice` / `getReferenceData`) — it does not exist. Add the tax fields the current model lacks entirely: seller NTN/STRN, POS registration number, per-item HS codes, tax rates. `tax_total` and `tax_amount` are hardcoded `0` today. Persist every attempt to `fbr_invoice_attempts` (currently written by nothing). **Make `SANDBOX` call a real sandbox instead of fabricating `SANDBOX-<id>` and marking the invoice `SUBMITTED`.** Fix the compose `internal: true` network that blocks the egress this needs. Engage a licensed integrator — FBR requires one — and confirm with a Pakistani tax professional whether printing before fiscalization is acceptable for the pharmacy's tier, as the architecture doc itself flags.
 
 **5.2 Observability.** Structured logging in production (currently Fastify logs only in development, so production logs almost nothing), correlation IDs, `/metrics`, error tracking, and alerting on: failed jobs, failed fiscal submissions, cash variances over threshold, and **backup/restore failures**.

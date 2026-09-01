@@ -25,4 +25,17 @@ describe('authentication environment policy', () => {
       }),
     ).toThrow('SESSION_ABSOLUTE_TTL_MINUTES');
   });
+
+  it('requires an API token for every enabled fiscal adapter', () => {
+    expect(() => parseEnvironment({ ...BASE_ENVIRONMENT, FBR_MODE: 'SANDBOX' })).toThrow(
+      'FBR_API_TOKEN',
+    );
+    expect(
+      parseEnvironment({
+        ...BASE_ENVIRONMENT,
+        FBR_MODE: 'SANDBOX',
+        FBR_API_TOKEN: 'sandbox-token-with-safe-length',
+      }).FBR_MODE,
+    ).toBe('SANDBOX');
+  });
 });

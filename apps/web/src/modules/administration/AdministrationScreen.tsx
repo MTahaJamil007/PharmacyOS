@@ -21,9 +21,27 @@ interface OperationalPolicies {
   readonly cashVarianceApprovalThreshold: string;
 }
 
+interface FiscalSettings {
+  readonly sellerNtnCnic: string | null;
+  readonly sellerStrn: string | null;
+  readonly posRegistrationNumber: string | null;
+  readonly businessName: string;
+  readonly province: string | null;
+  readonly scenarioId: string | null;
+}
+
+const fiscalFields = [
+  ['sellerNtnCnic', 'Seller NTN/CNIC'],
+  ['sellerStrn', 'Seller STRN'],
+  ['posRegistrationNumber', 'POS registration'],
+  ['businessName', 'Registered business name'],
+  ['province', 'Province'],
+  ['scenarioId', 'Sandbox scenario (SN###)'],
+] as const satisfies ReadonlyArray<readonly [keyof FiscalSettings, string]>;
+
 const labels: Record<Resource, readonly string[]> = {
   users: ['username', 'displayName', 'password', 'role'],
-  medicines: ['name', 'sku', 'barcode'],
+  medicines: ['name', 'sku', 'barcode', 'hsCode', 'taxRate'],
   suppliers: ['name', 'code', 'phone'],
   shelves: ['name', 'code', 'rack'],
   terminals: ['name', 'code', 'terminalType'],
@@ -55,6 +73,11 @@ export function AdministrationScreen(): React.JSX.Element {
     queryFn: () => adminGet<OperationalPolicies>(token, '/policies'),
     enabled: canSystem,
   });
+  const fiscalSettings = useQuery({
+    queryKey: ['admin', 'fiscal-settings'],
+    queryFn: () => adminGet<FiscalSettings>(token, '/fiscal-settings'),
+    enabled: canSystem,
+  });
 
   const body = (): Record<string, unknown> => {
     switch (resource) {
@@ -70,6 +93,8 @@ export function AdministrationScreen(): React.JSX.Element {
           name: form.name,
           ...(form.sku ? { sku: form.sku } : {}),
           ...(form.barcode ? { barcode: form.barcode } : {}),
+          ...(form.hsCode ? { hsCode: form.hsCode } : {}),
+          taxRate: form.taxRate || '0',
           packSize: '1',
           unitName: 'unit',
         };
@@ -134,6 +159,29 @@ export function AdministrationScreen(): React.JSX.Element {
       setMessage('Branch policies updated');
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'Policy update failed');
+    }
+  };
+  const updateFiscalSettings = async (): Promise<void> => {
+    try {
+      const current = fiscalSettings.data;
+      const optionalText = (value: string | null | undefined): string | null => {
+        const normalized = value?.trim();
+        return normalized ? normalized : null;
+      };
+      await adminPatch(token, '/fiscal-settings', {
+        sellerNtnCnic: optionalText(form.sellerNtnCnic ?? current?.sellerNtnCnic),
+        sellerStrn: optionalText(form.sellerStrn ?? current?.sellerStrn),
+        posRegistrationNumber: optionalText(
+          form.posRegistrationNumber ?? current?.posRegistrationNumber,
+        ),
+        businessName: optionalText(form.businessName ?? current?.businessName),
+        province: optionalText(form.province ?? current?.province),
+        scenarioId: optionalText(form.scenarioId ?? current?.scenarioId)?.toUpperCase() ?? null,
+      });
+      await client.invalidateQueries({ queryKey: ['admin', 'fiscal-settings'] });
+      setMessage('Fiscal settings updated');
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Fiscal settings update failed');
     }
   };
 
@@ -323,6 +371,32 @@ export function AdministrationScreen(): React.JSX.Element {
                 </label>
                 <button className="secondary-button" onClick={() => void updatePolicies()}>
                   Update policies
+                </button>
+              </div>
+            </article>
+          ) : null}
+          {canSystem ? (
+            <article className="work-panel compact-form-panel">
+              <header>
+                <div>
+                  <p className="eyebrow">FBR readiness</p>
+                  <h2>Fiscal identity</h2>
+                </div>
+              </header>
+              <div className="form-grid single-column">
+                {fiscalFields.map(([field, fieldLabel]) => (
+                  <label key={field}>
+                    {fieldLabel}
+                    <input
+                      value={form[field] ?? String(fiscalSettings.data?.[field] ?? '')}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, [field]: event.target.value }))
+                      }
+                    />
+                  </label>
+                ))}
+                <button className="secondary-button" onClick={() => void updateFiscalSettings()}>
+                  Update fiscal identity
                 </button>
               </div>
             </article>

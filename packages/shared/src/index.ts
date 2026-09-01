@@ -5,3 +5,5 @@ export * from './schemas.js';
 export * from './budget-regimen.js';
 export * from './client-request-id.js';
 export * from './api-contracts.js';
+export * from './tax.js';
+export * from './fiscal.js';

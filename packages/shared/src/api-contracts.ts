@@ -50,6 +50,21 @@ export interface FailedJobsResponse {
   }>;
 }
 
+export interface OperationalAlertsResponse {
+  readonly summary: { readonly total: number; readonly critical: number };
+  readonly alerts: ReadonlyArray<{
+    readonly id: string;
+    readonly alertType:
+      'FAILED_JOB' | 'FAILED_FISCAL_SUBMISSION' | 'CASH_VARIANCE' | 'BACKUP_RESTORE_FAILURE';
+    readonly severity: 'WARNING' | 'CRITICAL';
+    readonly status: 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED';
+    readonly title: string;
+    readonly details: Record<string, unknown>;
+    readonly firstObservedAt: string;
+    readonly lastObservedAt: string;
+  }>;
+}
+
 export interface ExpiryRiskItem {
   readonly batch_id: string;
   readonly medicine_name: string;

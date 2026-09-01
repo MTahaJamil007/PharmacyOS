@@ -31,6 +31,10 @@ export const positiveMoneySchema = moneySchema.refine(
   (value) => moneyToMinorUnits(value) > 0n,
   'Amount must be greater than zero',
 );
+export const taxRateSchema = z
+  .string()
+  .regex(/^\d{1,3}(?:\.\d{1,2})?$/)
+  .refine((value) => decimalToScaledInteger(value, 2) <= 10_000n, 'Tax rate cannot exceed 100%');
 export const clientRequestIdSchema = z.string().trim().min(8).max(128);
 
 export const loginSchema = z.object({
@@ -222,6 +226,14 @@ export const createMedicineSchema = z.object({
   requiresPrescription: z.boolean().default(false),
   storageClass: z.enum(['AMBIENT', 'COLD', 'FROZEN', 'OTHER']).default('AMBIENT'),
   requiresSecuredStorage: z.boolean().default(false),
+  hsCode: z
+    .string()
+    .trim()
+    .regex(/^\d{4}\.\d{4}$/)
+    .optional(),
+  taxRate: taxRateSchema.default('0'),
+  fbrUom: z.string().trim().min(1).max(120).default('Numbers, pieces, units'),
+  fbrSaleType: z.string().trim().min(1).max(200).default('Goods at standard rate (default)'),
 });
 
 export const updateMedicineSchema = z
@@ -238,6 +250,15 @@ export const updateMedicineSchema = z
     storageClass: z.enum(['AMBIENT', 'COLD', 'FROZEN', 'OTHER']).optional(),
     requiresSecuredStorage: z.boolean().optional(),
     isActive: z.boolean().optional(),
+    hsCode: z
+      .string()
+      .trim()
+      .regex(/^\d{4}\.\d{4}$/)
+      .nullable()
+      .optional(),
+    taxRate: taxRateSchema.optional(),
+    fbrUom: z.string().trim().min(1).max(120).optional(),
+    fbrSaleType: z.string().trim().min(1).max(200).optional(),
   })
   .refine((input) => Object.keys(input).length > 0, 'At least one field is required');
 
@@ -362,6 +383,27 @@ export const updateOperationalPoliciesSchema = z
       });
     }
   });
+
+export const updateFiscalSettingsSchema = z
+  .object({
+    sellerNtnCnic: z
+      .string()
+      .trim()
+      .regex(/^\d{7}(?:\d{2}|\d{6})?$/)
+      .nullable()
+      .optional(),
+    sellerStrn: z.string().trim().min(1).max(64).nullable().optional(),
+    posRegistrationNumber: z.string().trim().min(1).max(120).nullable().optional(),
+    businessName: z.string().trim().min(2).max(200).nullable().optional(),
+    province: z.string().trim().min(2).max(120).nullable().optional(),
+    scenarioId: z
+      .string()
+      .trim()
+      .regex(/^SN\d{3}$/)
+      .nullable()
+      .optional(),
+  })
+  .refine((input) => Object.keys(input).length > 0, 'At least one field is required');
 
 const customerFields = {
   address: z.string().trim().max(500).optional(),
@@ -645,6 +687,11 @@ export const failedJobsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+export const operationalAlertsQuerySchema = z.object({
+  status: z.enum(['OPEN', 'ACKNOWLEDGED', 'RESOLVED']).default('OPEN'),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export type LoginRequest = z.infer<typeof loginSchema>;
 export type CreateDraftRequest = z.infer<typeof createDraftSchema>;
 export type FinalizeSaleRequest = z.infer<typeof finalizeSaleSchema>;
@@ -663,6 +710,7 @@ export type AssignShelfRequest = z.infer<typeof assignShelfSchema>;
 export type CreateTerminalRequest = z.infer<typeof createTerminalSchema>;
 export type UpdateTerminalRequest = z.infer<typeof updateTerminalSchema>;
 export type UpdateOperationalPoliciesRequest = z.infer<typeof updateOperationalPoliciesSchema>;
+export type UpdateFiscalSettingsRequest = z.infer<typeof updateFiscalSettingsSchema>;
 export type CreateCustomerRequest = z.infer<typeof createCustomerSchema>;
 export type UpdateCustomerRequest = z.infer<typeof updateCustomerSchema>;
 export type CustomerPaymentRequest = z.infer<typeof customerPaymentSchema>;

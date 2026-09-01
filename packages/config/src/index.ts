@@ -32,6 +32,10 @@ const environmentSchema = z
     FBR_MODE: z
       .enum(['DISABLED', 'SANDBOX', 'PRAL_DI_API', 'LICENSED_INTEGRATOR_API', 'WINDOWS_IMS_BRIDGE'])
       .default('DISABLED'),
+    FBR_API_BASE_URL: z.string().url().default('https://gw.fbr.gov.pk'),
+    FBR_API_TOKEN: z.string().min(16).optional().or(z.literal('')),
+    FBR_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60_000).default(10_000),
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     TRUST_PROXY: booleanFromString.default(false),
     AI_ENABLED: booleanFromString.default(false),
     AI_PROVIDER: z.enum(['disabled', 'gemini']).default('disabled'),
@@ -47,6 +51,13 @@ const environmentSchema = z
         code: 'custom',
         message: 'must be greater than or equal to SESSION_TTL_MINUTES',
         path: ['SESSION_ABSOLUTE_TTL_MINUTES'],
+      });
+    }
+    if (environment.FBR_MODE !== 'DISABLED' && !environment.FBR_API_TOKEN) {
+      context.addIssue({
+        code: 'custom',
+        message: 'is required when FBR_MODE is enabled',
+        path: ['FBR_API_TOKEN'],
       });
     }
   });

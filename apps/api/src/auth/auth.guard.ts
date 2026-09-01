@@ -56,20 +56,15 @@ export class AuthGuard implements CanActivate {
         sessions.terminal_id::text as terminal_id,
         users.username,
         users.display_name,
-        coalesce(array_agg(distinct permissions.code) filter (where permissions.code is not null), '{}') as permissions
+        sessions.permission_snapshot as permissions
       from sessions
       join users on users.id = sessions.user_id
-      join user_branch_roles on user_branch_roles.user_id = users.id
-        and user_branch_roles.branch_id = sessions.branch_id
-      left join role_permissions on role_permissions.role_id = user_branch_roles.role_id
-      left join permissions on permissions.id = role_permissions.permission_id
       where sessions.token_hash = ${tokenHash}
         and sessions.revoked_at is null
         and sessions.expires_at > now()
         and sessions.absolute_expires_at > now()
         and users.is_active = true
         and users.deleted_at is null
-      group by sessions.id, users.id
     `;
 
     if (!row) throw new UnauthorizedException('Session expired or revoked');

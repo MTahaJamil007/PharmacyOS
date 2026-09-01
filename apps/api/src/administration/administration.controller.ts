@@ -20,6 +20,7 @@ import {
   PERMISSIONS,
   updateMedicineSchema,
   updateOperationalPoliciesSchema,
+  updateFiscalSettingsSchema,
   updateShelfSchema,
   updateSupplierSchema,
   updateTerminalSchema,
@@ -163,6 +164,20 @@ export class AdministrationController {
     const parsed = updateOperationalPoliciesSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
     return this.admin.updatePolicies(user, parsed.data);
+  }
+
+  @Get('fiscal-settings')
+  @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_SYSTEM)
+  fiscalSettings(@CurrentUser() user: AuthenticatedUser) {
+    return this.admin.fiscalSettings(user);
+  }
+
+  @Patch('fiscal-settings')
+  @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_SYSTEM)
+  updateFiscalSettings(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
+    const parsed = updateFiscalSettingsSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
+    return this.admin.updateFiscalSettings(user, parsed.data);
   }
 
   private withId<T>(

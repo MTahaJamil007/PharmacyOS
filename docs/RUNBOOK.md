@@ -148,7 +148,27 @@ Before changing data manually:
 
 The worker automatically schedules reservation expiry every minute and reclaims `PROCESSING` locks older than five minutes using bounded, skip-locked batches.
 
-## 9. Upgrade and rollback
+## 9. Fiscal activation and observability
+
+Keep `FBR_MODE=DISABLED` until every external activation condition in `docs/decisions/0004-phase-5-fiscal-observability.md` is signed. Enabling a mode transmits configured seller identity plus invoice and possible buyer fields; do not treat possession of a token as approval.
+
+Before an approved sandbox session:
+
+1. Confirm the integrator and tax adviser approved the endpoint, scenario, HS/rate/UOM/sale-type catalog, retry/reconciliation behavior, credit-note path, and receipt policy.
+2. Set `FBR_API_TOKEN` only in the host `.env`/secret store. Never paste it into commands, logs, screenshots, issues, or execution records.
+3. Set `FBR_MODE=SANDBOX`, the approved `FBR_API_BASE_URL`, and a bounded `FBR_REQUEST_TIMEOUT_MS`; restart only the API/worker during a controlled window.
+4. Complete one identified sandbox sale and retain the local `fbr_invoices`, `fbr_invoice_attempts`, outbox/job-attempt, correlation-ID, official response, and invoice/QR evidence without exposing buyer data.
+5. Reconcile any ambiguous submission with the licensed integrator. Never retry it using a new client request ID or by editing the status.
+
+Operational endpoints:
+
+- `GET /api/v1/metrics` exposes aggregate Prometheus text and no credentials or invoice/customer payloads.
+- `GET /api/v1/operations/alerts?status=OPEN&limit=20` requires `settings.manage_system`.
+- `POST /api/v1/operations/alerts/:id/acknowledge` records the responsible user in the audit ledger.
+
+An alert acknowledgement means an owner accepted responsibility; it does not resolve the underlying job, fiscal, cash, or backup state.
+
+## 10. Upgrade and rollback
 
 ### Upgrade
 
@@ -170,7 +190,7 @@ The worker automatically schedules reservation expiry every minute and reclaims 
 
 Earlier Compose files initialized `pharmacy_app` as the PostgreSQL superuser. The Phase 1 stack deliberately separates a `postgres` administrator from the non-superuser `pharmacy_app` role. An old volume is not directly compatible with the new initialization contract. Back it up under the old stack, restore into a fresh Phase 1 cluster, validate counts and ledgers, then switch over. Do not use `down --volumes` on the old installation.
 
-## 10. Incident response
+## 11. Incident response
 
 | Symptom                         | Immediate action                                                                                                                    |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |

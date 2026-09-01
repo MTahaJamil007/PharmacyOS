@@ -19,5 +19,6 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/packages/config/dist packages/config/dist
 COPY --from=build /app/packages/database/dist packages/database/dist
+COPY --from=build /app/packages/shared/dist packages/shared/dist
 USER node
 CMD ["node", "apps/worker/dist/main.js"]

@@ -103,16 +103,69 @@ export class CashSessionsService {
   async pendingVariance(
     user: AuthenticatedUser,
   ): Promise<{ readonly data: readonly CashSummaryRow[] }> {
-    const sessions = await this.database<Array<{ id: string }>>`
-      select id::text from cash_sessions
-      where branch_id = ${user.branchId} and status = 'CLOSING'
-      order by opened_at asc, id asc limit 50
+    const data = await this.database<CashSummaryRow[]>`
+      with target as materialized (
+        select cash_sessions.*, users.display_name as cashier_name,
+          coalesce(policies.cash_variance_approval_threshold, 100) as variance_threshold
+        from cash_sessions
+        join users on users.id = cash_sessions.cashier_user_id
+        left join operational_intelligence_policies policies
+          on policies.branch_id = cash_sessions.branch_id
+        where cash_sessions.branch_id = ${user.branchId} and cash_sessions.status = 'CLOSING'
+        order by cash_sessions.opened_at, cash_sessions.id limit 50
+      ), payment_totals as (
+        select payments.cash_session_id,
+          coalesce(sum(payments.amount) filter (
+            where payments.method = 'CASH' and payments.status = 'CAPTURED'
+          ), 0) as cash_sales
+        from payments join target on target.id = payments.cash_session_id
+        group by payments.cash_session_id
+      ), account_totals as (
+        select entries.cash_session_id,
+          coalesce(-sum(entries.amount_delta) filter (
+            where entries.entry_type = 'PAYMENT' and entries.payment_method = 'CASH'
+          ), 0) as account_payments
+        from customer_ledger_entries entries join target on target.id = entries.cash_session_id
+        group by entries.cash_session_id
+      ), refund_totals as (
+        select refunds.cash_session_id,
+          coalesce(sum(refunds.amount) filter (where refunds.method = 'CASH'), 0) as cash_refunds
+        from refunds join target on target.id = refunds.cash_session_id
+        group by refunds.cash_session_id
+      ), movement_totals as (
+        select movements.cash_session_id,
+          coalesce(sum(movements.amount) filter (where movements.movement_type = 'CASH_IN'), 0)
+            as cash_in,
+          coalesce(sum(movements.amount) filter (where movements.movement_type = 'CASH_OUT'), 0)
+            as cash_out
+        from cash_movements movements join target on target.id = movements.cash_session_id
+        group by movements.cash_session_id
+      )
+      select target.id::text as id, target.status,
+        target.cashier_user_id::text as "cashierUserId", target.cashier_name as "cashierName",
+        target.opening_float::text as "openingFloat",
+        coalesce(payment_totals.cash_sales, 0)::text as "cashSales",
+        coalesce(account_totals.account_payments, 0)::text as "accountPayments",
+        coalesce(refund_totals.cash_refunds, 0)::text as "cashRefunds",
+        coalesce(movement_totals.cash_in, 0)::text as "cashIn",
+        coalesce(movement_totals.cash_out, 0)::text as "cashOut",
+        (target.opening_float + coalesce(payment_totals.cash_sales, 0)
+          + coalesce(account_totals.account_payments, 0)
+          - coalesce(refund_totals.cash_refunds, 0)
+          + coalesce(movement_totals.cash_in, 0)
+          - coalesce(movement_totals.cash_out, 0))::text as "expectedCash",
+        target.counted_cash::text as "countedCash", target.variance::text as variance,
+        target.variance_threshold::text as "varianceApprovalThreshold",
+        target.opened_at as "openedAt", target.closed_at as "closedAt",
+        target.closing_notes as "closingNotes"
+      from target
+      left join payment_totals on payment_totals.cash_session_id = target.id
+      left join account_totals on account_totals.cash_session_id = target.id
+      left join refund_totals on refund_totals.cash_session_id = target.id
+      left join movement_totals on movement_totals.cash_session_id = target.id
+      order by target.opened_at, target.id
     `;
-    return {
-      data: await Promise.all(
-        sessions.map((session) => this.summaryWith(this.database, session.id, user.branchId)),
-      ),
-    };
+    return { data };
   }
 
   async summary(user: AuthenticatedUser, sessionId: bigint): Promise<CashSummaryRow> {

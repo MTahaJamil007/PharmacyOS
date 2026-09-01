@@ -10,6 +10,8 @@ import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
 import {
   decimalToScaledInteger,
+  allocateMoneyProportionally,
+  calculateInclusiveTax,
   minorUnitsToMoney,
   moneyToMinorUnits,
   multiplyMoneyByQuantity,
@@ -19,6 +21,7 @@ import {
   type ApplySaleDiscountRequest,
   type CreateDraftRequest,
   type FinalizeSaleRequest,
+  type FiscalInvoice,
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
@@ -67,6 +70,24 @@ interface ReservedLineRow {
   readonly cost_price: string;
   readonly reservation_status: string;
   readonly expires_at: Date;
+  readonly medicine_name: string;
+  readonly hs_code: string | null;
+  readonly tax_rate: string;
+  readonly fbr_uom: string;
+  readonly fbr_sale_type: string;
+}
+
+interface FiscalHeaderRow {
+  readonly invoice_date: string;
+  readonly seller_ntn_cnic: string | null;
+  readonly seller_strn: string | null;
+  readonly fbr_pos_registration_number: string | null;
+  readonly seller_business_name: string;
+  readonly seller_province: string | null;
+  readonly seller_address: string;
+  readonly scenario_id: string | null;
+  readonly buyer_business_name: string;
+  readonly buyer_address: string;
 }
 
 const DUMMY_PASSWORD_HASH =
@@ -176,7 +197,8 @@ export class PosService {
       select sale_items.id::text, medicines.name, medicines.strength,
         inventory_batches.batch_number, inventory_batches.expiry_date,
         sale_items.quantity::text, sale_items.unit_price::text,
-        sale_items.discount_amount::text, sale_items.line_total::text
+        sale_items.discount_amount::text, sale_items.tax_rate::text,
+        sale_items.tax_amount::text, sale_items.line_total::text
       from sale_items
       join medicines on medicines.id = sale_items.medicine_id
       join inventory_batches on inventory_batches.id = sale_items.inventory_batch_id
@@ -569,10 +591,13 @@ export class PosService {
           sale_draft_items.discount_amount::text,
           inventory_batches.cost_price::text,
           stock_reservations.status as reservation_status,
-          stock_reservations.expires_at
+          stock_reservations.expires_at, medicines.name as medicine_name,
+          medicines.hs_code, medicines.tax_rate::text,
+          medicines.fbr_uom, medicines.fbr_sale_type
         from stock_reservations
         join sale_draft_items on sale_draft_items.id = stock_reservations.sale_draft_item_id
         join inventory_batches on inventory_batches.id = stock_reservations.inventory_batch_id
+        join medicines on medicines.id = sale_draft_items.medicine_id
         where sale_draft_items.sale_draft_id = ${draft.id}
           and stock_reservations.status = 'ACTIVE'
         order by inventory_batches.id, stock_reservations.id
@@ -730,10 +755,13 @@ export class PosService {
           sale_draft_items.discount_amount::text,
           inventory_batches.cost_price::text,
           stock_reservations.status as reservation_status,
-          stock_reservations.expires_at
+          stock_reservations.expires_at,
+          medicines.name as medicine_name, medicines.hs_code,
+          medicines.tax_rate::text, medicines.fbr_uom, medicines.fbr_sale_type
         from stock_reservations
         join sale_draft_items on sale_draft_items.id = stock_reservations.sale_draft_item_id
         join inventory_batches on inventory_batches.id = stock_reservations.inventory_batch_id
+        join medicines on medicines.id = sale_draft_items.medicine_id
         where sale_draft_items.sale_draft_id = ${draft.id}
           and stock_reservations.status = 'ACTIVE'
         order by inventory_batches.id, stock_reservations.id
@@ -766,6 +794,26 @@ export class PosService {
         throw new ConflictException('Sale discount cannot exceed the finalized subtotal');
       }
       const finalizedTotal = minorUnitsToMoney(finalizedTotalMinor);
+      const invoiceDiscountAllocations = allocateMoneyProportionally(
+        draft.discount_total,
+        finalizedLines.map((line) => line.lineTotal),
+      );
+      const fiscalizedLines = finalizedLines.map((line, index) => {
+        const invoiceDiscount = invoiceDiscountAllocations[index] ?? '0.00';
+        const taxableGross = minorUnitsToMoney(
+          moneyToMinorUnits(line.lineTotal) - moneyToMinorUnits(invoiceDiscount),
+        );
+        return {
+          ...line,
+          invoiceDiscount,
+          totalDiscount: sumMoney([line.discountAmount, invoiceDiscount]),
+          tax: calculateInclusiveTax(taxableGross, line.tax_rate),
+        };
+      });
+      if (sumMoney(fiscalizedLines.map((line) => line.tax.gross)) !== finalizedTotal) {
+        throw new Error('Fiscal line allocation does not reconcile to the sale total');
+      }
+      const taxTotal = sumMoney(fiscalizedLines.map((line) => line.tax.tax));
       const paymentTotal = sumMoney(input.payments.map((payment) => payment.amount));
       if (moneyToMinorUnits(paymentTotal) !== finalizedTotalMinor) {
         throw new ConflictException({
@@ -773,6 +821,23 @@ export class PosService {
           expected: finalizedTotal,
         });
       }
+
+      const [fiscalHeader] = await transaction<FiscalHeaderRow[]>`
+        select (now() at time zone branches.timezone)::date::text as invoice_date,
+          branches.seller_ntn_cnic, branches.seller_strn,
+          branches.fbr_pos_registration_number,
+          coalesce(branches.fbr_business_name, branches.name) as seller_business_name,
+          branches.fbr_province as seller_province,
+          coalesce(branches.address, '') as seller_address,
+          branches.fbr_scenario_id as scenario_id,
+          coalesce(customers.name, 'Walk-in Customer') as buyer_business_name,
+          coalesce(customers.address, branches.address, '') as buyer_address
+        from branches
+        left join customers on customers.id = ${customerId}::bigint
+          and customers.branch_id = branches.id and customers.deleted_at is null
+        where branches.id = ${user.branchId}
+      `;
+      if (!fiscalHeader) throw new Error('Fiscal branch snapshot could not be created');
 
       const [invoice] = await transaction<Array<{ invoice_number: string }>>`
         select next_invoice_number(${user.branchId}) as invoice_number
@@ -786,7 +851,7 @@ export class PosService {
         ) values (
           ${user.branchId}, ${user.terminalId}, ${user.id}, ${cashSessionId}, ${draft.id},
           ${customerId}, ${invoice.invoice_number}, ${input.clientRequestId}, 'PAID',
-          ${finalizedSubtotal}, ${draft.discount_total}, 0, ${finalizedTotal},
+          ${finalizedSubtotal}, ${draft.discount_total}, ${taxTotal}, ${finalizedTotal},
           ${draft.discount_approval_id}
         )
         returning id::text
@@ -798,14 +863,17 @@ export class PosService {
       `;
       if (!returnLookup) throw new Error('Receipt return lookup token creation failed');
 
-      for (const line of finalizedLines) {
+      for (const line of fiscalizedLines) {
         const [saleItem] = await transaction<Array<{ id: string }>>`
           insert into sale_items (
             sale_id, medicine_id, inventory_batch_id, quantity,
-            unit_price, unit_cost, discount_amount, tax_amount, line_total
+            unit_price, unit_cost, discount_amount, tax_rate, tax_amount, line_total,
+            hs_code, fbr_uom, fbr_sale_type
           ) values (
             ${sale.id}, ${line.medicine_id}, ${line.inventory_batch_id}, ${line.quantity},
-            ${line.unit_price}, ${line.cost_price}, ${line.discountAmount}, 0, ${line.lineTotal}
+            ${line.unit_price}, ${line.cost_price}, ${line.discountAmount}, ${line.tax.rate},
+            ${line.tax.tax}, ${line.lineTotal}, ${line.hs_code}, ${line.fbr_uom},
+            ${line.fbr_sale_type}
           )
           returning id::text
         `;
@@ -872,11 +940,52 @@ export class PosService {
       `;
 
       const fiscalStatus = this.environment.FBR_MODE === 'DISABLED' ? 'NOT_REQUIRED' : 'PENDING';
+      const fiscalPayload: FiscalInvoice = {
+        invoiceType: 'Sale Invoice',
+        invoiceDate: fiscalHeader.invoice_date,
+        sellerNTNCNIC: fiscalHeader.seller_ntn_cnic,
+        sellerSTRN: fiscalHeader.seller_strn,
+        sellerPOSRegistrationNumber: fiscalHeader.fbr_pos_registration_number,
+        sellerBusinessName: fiscalHeader.seller_business_name,
+        sellerProvince: fiscalHeader.seller_province,
+        sellerAddress: fiscalHeader.seller_address,
+        buyerNTNCNIC: '',
+        buyerBusinessName: fiscalHeader.buyer_business_name,
+        buyerProvince: fiscalHeader.seller_province ?? '',
+        buyerAddress: fiscalHeader.buyer_address,
+        buyerRegistrationType: 'Unregistered',
+        invoiceRefNo: '',
+        ...(this.environment.FBR_MODE === 'SANDBOX' && fiscalHeader.scenario_id
+          ? { scenarioId: fiscalHeader.scenario_id }
+          : {}),
+        items: fiscalizedLines.map((line) => ({
+          hsCode: line.hs_code,
+          productDescription: line.medicine_name,
+          rate: line.tax.rate,
+          uoM: line.fbr_uom,
+          quantity: line.quantity,
+          totalValues: line.tax.gross,
+          valueSalesExcludingST: line.tax.net,
+          fixedNotifiedValueOrRetailPrice: '0.00',
+          salesTaxApplicable: line.tax.tax,
+          salesTaxWithheldAtSource: '0.00',
+          extraTax: '0.00',
+          furtherTax: '0.00',
+          sroScheduleNo: '',
+          fedPayable: '0.00',
+          discount: line.totalDiscount,
+          saleType: line.fbr_sale_type,
+          sroItemSerialNo: '',
+        })),
+      };
       const [fbrInvoice] = await transaction<Array<{ id: string }>>`
         insert into fbr_invoices (sale_id, mode, status, payload)
         values (
           ${sale.id}, ${this.environment.FBR_MODE}, ${fiscalStatus},
-          ${transaction.json({ saleId: sale.id, invoiceNumber: invoice.invoice_number, total: finalizedTotal, currency: 'PKR' })}
+          ${transaction.json({
+            ...fiscalPayload,
+            items: fiscalPayload.items.map((item) => ({ ...item })),
+          })}
         )
         returning id::text
       `;
@@ -898,7 +1007,7 @@ export class PosService {
         ) values (
           ${user.branchId}, ${user.id}, ${user.terminalId},
           'SALE.FINALIZED', 'sale', ${sale.id}, ${input.clientRequestId},
-          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: finalizedTotal, paymentTotal, customerId, creditAmount })}
+          ${transaction.json({ invoiceNumber: invoice.invoice_number, total: finalizedTotal, taxTotal, paymentTotal, customerId, creditAmount })}
         )
       `;
 

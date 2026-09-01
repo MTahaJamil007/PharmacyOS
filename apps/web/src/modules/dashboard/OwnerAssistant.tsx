@@ -2,7 +2,13 @@ import { useQuery } from '@tanstack/react-query';
 import { PERMISSIONS } from '@pharmacy/shared';
 import { useMemo, useState } from 'react';
 
-import { askOwnerAssistant, getFailedJobs, type OwnerAnswer, type OwnerTool } from '../../api';
+import {
+  askOwnerAssistant,
+  getFailedJobs,
+  getOperationalAlerts,
+  type OwnerAnswer,
+  type OwnerTool,
+} from '../../api';
 import { usePharmacyStore } from '../../store';
 
 const ownerQuestions: ReadonlyArray<{ readonly question: string; readonly tool: OwnerTool }> = [
@@ -27,6 +33,12 @@ export function OwnerAssistant(): React.JSX.Element {
   const failedJobs = useQuery({
     queryKey: ['operations', 'failed-jobs'],
     queryFn: () => getFailedJobs(token),
+    enabled: canViewSystemHealth && Boolean(token),
+    refetchInterval: 60_000,
+  });
+  const operationalAlerts = useQuery({
+    queryKey: ['operations', 'alerts'],
+    queryFn: () => getOperationalAlerts(token),
     enabled: canViewSystemHealth && Boolean(token),
     refetchInterval: 60_000,
   });
@@ -96,6 +108,13 @@ export function OwnerAssistant(): React.JSX.Element {
           ) : (
             <p className="job-health-latest">No failed background jobs require review.</p>
           )}
+          <p className="job-health-latest">
+            Operational alerts: <strong>{operationalAlerts.data?.summary.total ?? '—'}</strong> open
+            · <strong>{operationalAlerts.data?.summary.critical ?? '—'}</strong> critical
+            {operationalAlerts.data?.alerts[0]
+              ? ` · ${operationalAlerts.data.alerts[0].title}`
+              : ''}
+          </p>
         </section>
       ) : null}
       <section className="assistant-layout">

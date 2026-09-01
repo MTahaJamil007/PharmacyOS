@@ -232,12 +232,23 @@ export class AuthService {
           locked_until = null, last_login_at = now()
         where id = ${account.user_id}
       `;
+      const permissionRows = await transaction<Array<{ code: string }>>`
+        select distinct permissions.code
+        from user_branch_roles
+        join role_permissions on role_permissions.role_id = user_branch_roles.role_id
+        join permissions on permissions.id = role_permissions.permission_id
+        where user_branch_roles.user_id = ${account.user_id}
+          and user_branch_roles.branch_id = ${account.branch_id}
+        order by permissions.code
+      `;
+      const permissionSnapshot = permissionRows.map((permission) => permission.code);
       const rows = await transaction<Array<{ session_id: string }>>`
         insert into sessions (
-          user_id, branch_id, terminal_id, token_hash, expires_at, absolute_expires_at
+          user_id, branch_id, terminal_id, token_hash, expires_at, absolute_expires_at,
+          permission_snapshot
         ) values (
           ${account.user_id}, ${account.branch_id}, ${account.terminal_id}, ${tokenHash},
-          ${expiresAt}, ${absoluteExpiresAt}
+          ${expiresAt}, ${absoluteExpiresAt}, ${permissionSnapshot}
         )
         returning id::text as session_id
       `;
@@ -253,17 +264,8 @@ export class AuthService {
           where scope_type = 'USERNAME' and scope_hash = ${usernameScope.hash}
         `;
       }
-      return session;
+      return { ...session, permissions: permissionSnapshot };
     });
-    const permissionRows = await this.database<Array<{ code: string }>>`
-      select distinct permissions.code
-      from user_branch_roles
-      join role_permissions on role_permissions.role_id = user_branch_roles.role_id
-      join permissions on permissions.id = role_permissions.permission_id
-      where user_branch_roles.user_id = ${account.user_id}
-        and user_branch_roles.branch_id = ${account.branch_id}
-      order by permissions.code
-    `;
 
     return {
       accessToken: rawToken,
@@ -279,7 +281,7 @@ export class AuthService {
         terminalId: account.terminal_id,
         terminalCode: account.terminal_code,
         terminalName: account.terminal_name,
-        permissions: permissionRows.map((permission) => permission.code),
+        permissions: session.permissions,
       },
     };
   }
