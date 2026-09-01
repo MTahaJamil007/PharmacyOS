@@ -68,6 +68,7 @@
 | `npx vitest run --config vitest.config.ts tests/integration/phase4-owner-day.integration.test.ts`  |    0 | 2/2 real-database scenarios passed: the complete owner day plus every Phase 4.4 administration resource.                                    |
 | `npx playwright test tests/e2e/phase4-owner-day.spec.ts`                                           |    0 | Owner-facing customer payment, cycle count, and deterministic dashboard screen workflow passed.                                             |
 | `npm run verify` under Node `24.19.0` / npm `10.9.3`                                               |    0 | Formatting, lint, typecheck, 69 unit tests, 55 Docker/PostgreSQL integration tests, 9 browser workflows, and every production build passed. |
+| GitHub Actions `Quality gate` run `33463951177`                                                    |    0 | Clean-clone hosted verification passed for Phase 4 implementation commit `4b4651e`.                                                         |
 | `git diff --check`                                                                                 |    0 | No whitespace errors.                                                                                                                       |
 
 The Windows npm launcher is installed beside Node 22.20.0 and emits engine warnings even when the shell resolves Node 24.19.0. The authoritative gate invoked that npm CLI through the Node 24.19.0 executable; application scripts and tests therefore ran on the required runtime.
