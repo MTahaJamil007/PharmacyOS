@@ -4,14 +4,16 @@ PharmacyOS is a single-shop, on-premise pharmacy operations platform for Pakista
 
 ## Current status
 
-| Area                 | Verified status                                                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Engineering gate     | Phases 0–4 and repository-controlled Phase 5 work are implemented on `development`; current command evidence is in the phase execution records.                                 |
-| Pilot deployment     | Phase 1 code and an isolated Docker-host build/start/backup/restore are verified. Second-terminal sale/receipt, trusted client TLS, and physical external-disk evidence remain. |
-| Receipts             | Sale lookup/reprint, opaque return-token QR, tax snapshots, and 80 mm browser rendering exist; physical printer/QR evidence remains a pilot prerequisite.                       |
-| Fiscal integration   | Exact tax snapshots and a real FBR DI gateway exist. Outbound transmission stays disabled pending explicit approval, licensed-integrator review, and real sandbox evidence.     |
-| Owner reporting      | Deterministic reports/dashboard, operational alerts, metrics, and the optional read-only AI explanation boundary are implemented.                                               |
-| Production readiness | Blocked until the active phase exit gates in `docs/DEVELOPMENT_PLAN.md` have on-site evidence.                                                                                  |
+| Area                 | Verified status                                                                                                                                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engineering gate     | Phases 0–4 and repository-controlled Phase 5 work are implemented on `development`; current command evidence is in the phase execution records.                                                                                                       |
+| Pilot deployment     | Phase 1 code and an isolated Docker-host build/start/backup/restore are verified. Second-terminal sale/receipt, trusted client TLS, and physical external-disk evidence remain.                                                                       |
+| Receipts             | Sale lookup/reprint, opaque return-token QR, tax snapshots, and 80 mm browser rendering exist; physical printer/QR evidence remains a pilot prerequisite.                                                                                             |
+| Fiscal integration   | Exact tax snapshots, a real FBR DI gateway, and an operator surface for submission status, attempt history, and guarded retry. Outbound transmission stays disabled pending explicit approval, licensed-integrator review, and real sandbox evidence. |
+| Onboarding           | Bulk medicine catalog import validates every row and reports issues before anything is written; a partial import is never applied.                                                                                                                    |
+| Purchasing           | Supplier orders, order approval, and multi-line goods receipt into batches are usable from the web client; goods receipt is the only path by which stock enters the system.                                                                           |
+| Owner reporting      | Deterministic reports/dashboard, a reports workspace with CSV export, operational alerts, metrics, and the optional read-only AI explanation boundary are implemented.                                                                                |
+| Production readiness | Blocked until the active phase exit gates in `docs/DEVELOPMENT_PLAN.md` have on-site evidence.                                                                                                                                                        |
 
 ## Prerequisites
 
@@ -62,4 +64,4 @@ Follow `docs/RUNBOOK.md`; do not improvise a production installation from the Co
 - Database constraints enforce invariants; controllers validate and services coordinate use cases.
 - Inventory locks follow deterministic ordering.
 
-The sequencing and objective release gates are defined in `docs/DEVELOPMENT_PLAN.md`. Phase execution evidence is stored beside it in `docs/PHASE_0_EXECUTION.md` through `docs/PHASE_5_EXECUTION.md`; the on-site process is `docs/PILOT_RUNBOOK.md`.
+Sequencing and objective release gates for Phases 0-5 are in `docs/DEVELOPMENT_PLAN.md`, and for Phases 6-9 in `docs/PHARMACY_OS_COMPLETION_ROADMAP.md`. The current build audit is `docs/SYSTEM_AUDIT_2026-09-21.md`. Phase execution evidence is stored in `docs/PHASE_0_EXECUTION.md` through `docs/PHASE_5_EXECUTION.md`; the on-site process is `docs/PILOT_RUNBOOK.md`.

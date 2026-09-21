@@ -319,3 +319,179 @@ export interface DashboardSnapshot {
   };
   readonly updatedAt: string;
 }
+
+export type PurchaseOrderStatus =
+  'DRAFT' | 'ORDERED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
+
+export interface PurchaseOrderSummary {
+  readonly id: string;
+  readonly order_number: string;
+  readonly status: PurchaseOrderStatus;
+  readonly supplier_invoice_number: string | null;
+  readonly total_cost: string;
+  readonly supplier_id: string;
+  readonly supplier_name: string;
+  readonly ordered_at: string | null;
+  readonly received_at: string | null;
+  readonly created_at: string;
+  readonly line_count: number;
+  readonly ordered_quantity: string;
+  readonly received_quantity: string;
+}
+
+export interface PurchaseOrderLine {
+  readonly id: string;
+  readonly medicine_id: string;
+  readonly medicine_name: string;
+  readonly ordered_qty: string;
+  readonly received_qty: string;
+  readonly bonus_qty: string;
+  readonly received_bonus_qty: string;
+  readonly unit_cost: string;
+  readonly line_discount: string;
+  readonly base_units_per_order_unit: string;
+}
+
+export interface PurchaseOrderReceiptSummary {
+  readonly id: string;
+  readonly supplier_invoice_number: string | null;
+  readonly received_at: string;
+  readonly received_by: string;
+  readonly received_base_quantity: string;
+}
+
+export interface PurchaseOrderDetail {
+  readonly id: string;
+  readonly order_number: string;
+  readonly status: PurchaseOrderStatus;
+  readonly supplier_invoice_number: string | null;
+  readonly total_cost: string;
+  readonly supplier_id: string;
+  readonly supplier_name: string;
+  readonly ordered_at: string | null;
+  readonly received_at: string | null;
+  readonly created_at: string;
+  readonly items: readonly PurchaseOrderLine[];
+  readonly receipts: readonly PurchaseOrderReceiptSummary[];
+}
+
+export interface SupplierSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly code: string | null;
+  readonly phone: string | null;
+  readonly leadTimeDays: number;
+  readonly isActive: boolean;
+}
+
+export type DeterministicReportName =
+  | 'sales'
+  | 'profit'
+  | 'low-stock'
+  | 'expiry-risk'
+  | 'purchase-suggestions'
+  | 'returns'
+  | 'cash-reconciliation';
+
+export interface DeterministicReport {
+  readonly facts: unknown;
+  readonly dataBasis: string;
+  readonly reportPath: string;
+}
+
+export type FiscalInvoiceStatus =
+  | 'NOT_REQUIRED'
+  | 'PENDING'
+  | 'VALIDATING'
+  | 'VALIDATED'
+  | 'SUBMITTING'
+  | 'SUBMITTED'
+  | 'FAILED_RETRYABLE'
+  | 'FAILED_NEEDS_REVIEW'
+  | 'VOID_OR_CREDIT_NOTE_PENDING';
+
+export interface FiscalInvoiceSummary {
+  readonly id: string;
+  readonly saleId: string;
+  readonly invoiceNumber: string;
+  readonly mode: string;
+  readonly status: FiscalInvoiceStatus;
+  readonly fiscalInvoiceNumber: string | null;
+  readonly submittedAt: string | null;
+  readonly lastErrorCode: string | null;
+  readonly lastErrorMessage: string | null;
+  readonly attemptCount: number;
+  readonly total: string;
+  readonly saleCreatedAt: string;
+  readonly updatedAt: string;
+  readonly retryable: boolean;
+}
+
+export interface FiscalInvoiceAttempt {
+  readonly id: string;
+  readonly attemptNumber: number;
+  readonly operation: string;
+  readonly outcome: 'SUCCESS' | 'RETRYABLE_FAILURE' | 'PERMANENT_FAILURE';
+  readonly httpStatus: number | null;
+  readonly durationMs: number | null;
+  readonly correlationId: string | null;
+  readonly errorMessage: string | null;
+  readonly attemptedAt: string;
+}
+
+export interface FiscalOverview {
+  readonly mode: string;
+  readonly outboundEnabled: boolean;
+  readonly counts: Readonly<Record<FiscalInvoiceStatus, number>>;
+  readonly invoices: readonly FiscalInvoiceSummary[];
+}
+
+export interface BackupRunSummary {
+  readonly id: string;
+  readonly backupType: 'LOGICAL' | 'PHYSICAL' | 'RESTORE_DRILL';
+  readonly status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  readonly destination: string;
+  readonly encrypted: boolean;
+  readonly sizeBytes: string | null;
+  readonly checksum: string | null;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+  readonly durationSeconds: number | null;
+  readonly errorMessage: string | null;
+}
+
+export interface BackupOverview {
+  readonly lastSuccessfulBackup: BackupRunSummary | null;
+  readonly lastSuccessfulRestoreDrill: BackupRunSummary | null;
+  readonly runs: readonly BackupRunSummary[];
+}
+
+export interface AiAssistantAudit {
+  readonly id: string;
+  readonly userDisplayName: string;
+  readonly toolName: string;
+  readonly provider: string;
+  readonly model: string | null;
+  readonly status: 'SUCCEEDED' | 'DISABLED' | 'RATE_LIMITED' | 'FAILED' | 'TIMED_OUT';
+  readonly latencyMs: number;
+  readonly errorCode: string | null;
+  readonly createdAt: string;
+}
+
+export interface CatalogImportIssue {
+  readonly row: number;
+  readonly field: string;
+  readonly message: string;
+}
+
+export interface CatalogImportResult {
+  readonly mode: 'VALIDATE' | 'APPLY';
+  readonly applied: boolean;
+  readonly totalRows: number;
+  readonly created: number;
+  readonly updated: number;
+  readonly unchanged: number;
+  readonly rejected: number;
+  readonly issues: readonly CatalogImportIssue[];
+  readonly idempotentReplay: boolean;
+}

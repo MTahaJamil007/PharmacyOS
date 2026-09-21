@@ -5,6 +5,7 @@ import { AuthGuard } from './auth/auth.guard.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
 import { DatabaseModule } from './database.module.js';
+import { FiscalModule } from './fiscal/fiscal.module.js';
 import { HealthModule } from './health/health.module.js';
 import { PosModule } from './pos/pos.module.js';
 import { BudgetRegimenModule } from './budget-regimen/budget-regimen.module.js';
@@ -41,6 +42,7 @@ import { ObservabilityModule } from './observability/observability.module.js';
     DashboardModule,
     InventoryOperationsModule,
     AdministrationModule,
+    FiscalModule,
     ObservabilityModule,
   ],
   providers: [

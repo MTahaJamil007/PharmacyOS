@@ -13,6 +13,9 @@ const ReturnsRoute = lazy(() => import('./modules/returns/ReturnsRoute'));
 const BudgetRoute = lazy(() => import('./modules/dashboard/BudgetRoute'));
 const OwnerRoute = lazy(() => import('./modules/dashboard/OwnerRoute'));
 const CustomersRoute = lazy(() => import('./modules/customers/CustomersRoute'));
+const ProcurementRoute = lazy(() => import('./modules/procurement/ProcurementRoute'));
+const ReportsRoute = lazy(() => import('./modules/reports/ReportsRoute'));
+const OperationsRoute = lazy(() => import('./modules/operations/OperationsRoute'));
 const AdministrationRoute = lazy(() => import('./modules/administration/AdministrationRoute'));
 
 function RoutedWorkspace(): React.JSX.Element {
@@ -37,6 +40,9 @@ function RoutedWorkspace(): React.JSX.Element {
           <Route path="/returns" element={<ReturnsRoute />} />
           <Route path="/owner" element={<OwnerRoute />} />
           <Route path="/customers" element={<CustomersRoute />} />
+          <Route path="/purchasing" element={<ProcurementRoute />} />
+          <Route path="/reports" element={<ReportsRoute />} />
+          <Route path="/operations" element={<OperationsRoute />} />
           <Route path="/admin" element={<AdministrationRoute />} />
           <Route path="*" element={<Navigate replace to="/pos" />} />
         </Routes>

@@ -692,6 +692,73 @@ export const operationalAlertsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+export const fiscalInvoiceStatusSchema = z.enum([
+  'NOT_REQUIRED',
+  'PENDING',
+  'VALIDATING',
+  'VALIDATED',
+  'SUBMITTING',
+  'SUBMITTED',
+  'FAILED_RETRYABLE',
+  'FAILED_NEEDS_REVIEW',
+  'VOID_OR_CREDIT_NOTE_PENDING',
+]);
+
+export const fiscalInvoiceQuerySchema = paginationSchema.extend({
+  status: fiscalInvoiceStatusSchema.optional(),
+});
+
+export const retryFiscalInvoiceSchema = z.object({
+  reason: z.string().trim().min(10).max(500),
+  clientRequestId: clientRequestIdSchema,
+});
+
+export const backupRunQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const aiAuditQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+/**
+ * One catalog row as it arrives from a spreadsheet export. Every field is validated
+ * with the same rules as `createMedicineSchema`, but rows are parsed individually so
+ * an import reports which lines are wrong instead of rejecting the whole file.
+ */
+export const catalogImportRowSchema = z.object({
+  sku: z.string().trim().min(1).max(100).optional(),
+  name: z.string().trim().min(2).max(200),
+  genericName: z.string().trim().max(200).optional(),
+  strength: z.string().trim().max(100).optional(),
+  dosageForm: z.string().trim().max(100).optional(),
+  packSize: positiveQuantitySchema.default('1'),
+  unitName: z.string().trim().min(1).max(50).default('unit'),
+  barcode: z.string().trim().min(3).max(120).optional(),
+  requiresPrescription: z.boolean().default(false),
+  storageClass: z.enum(['AMBIENT', 'COLD', 'FROZEN', 'OTHER']).default('AMBIENT'),
+  requiresSecuredStorage: z.boolean().default(false),
+  hsCode: z
+    .string()
+    .trim()
+    .regex(/^\d{4}\.\d{4}$/)
+    .optional(),
+  taxRate: taxRateSchema.default('0'),
+  fbrUom: z.string().trim().min(1).max(120).default('Numbers, pieces, units'),
+  fbrSaleType: z.string().trim().min(1).max(200).default('Goods at standard rate (default)'),
+});
+
+export const catalogImportSchema = z.object({
+  mode: z.enum(['VALIDATE', 'APPLY']),
+  clientRequestId: clientRequestIdSchema,
+  rows: z.array(z.record(z.string(), z.unknown())).min(1).max(2000),
+});
+
+export type FiscalInvoiceQuery = z.infer<typeof fiscalInvoiceQuerySchema>;
+export type RetryFiscalInvoiceRequest = z.infer<typeof retryFiscalInvoiceSchema>;
+export type CatalogImportRequest = z.infer<typeof catalogImportSchema>;
+export type CatalogImportRow = z.infer<typeof catalogImportRowSchema>;
+
 export type LoginRequest = z.infer<typeof loginSchema>;
 export type CreateDraftRequest = z.infer<typeof createDraftSchema>;
 export type FinalizeSaleRequest = z.infer<typeof finalizeSaleSchema>;

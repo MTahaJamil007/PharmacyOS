@@ -2,7 +2,9 @@
 
 ## Source of truth
 
-- Use `docs/DEVELOPMENT_PLAN.md` for sequencing, severity, and exit gates.
+- Use `docs/DEVELOPMENT_PLAN.md` for sequencing, severity, and exit gates through Phase 5.
+- Use `docs/PHARMACY_OS_COMPLETION_ROADMAP.md` for Phases 6-9 and the current build audit in
+  `docs/SYSTEM_AUDIT_2026-09-21.md`.
 - Do not start a roadmap phase until the preceding phase's exit gate has objective evidence.
 - Treat older completion plans as historical context when they conflict with the active plan.
 

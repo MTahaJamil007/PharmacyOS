@@ -3,6 +3,7 @@ import { PERMISSIONS } from '@pharmacy/shared';
 import { useState } from 'react';
 
 import { adminGet, adminPatch, adminPost } from '../../api';
+import { CatalogImportPanel } from './CatalogImportPanel';
 import { usePharmacyStore } from '../../store';
 
 type Resource = 'users' | 'medicines' | 'suppliers' | 'shelves' | 'terminals';
@@ -401,6 +402,7 @@ export function AdministrationScreen(): React.JSX.Element {
               </div>
             </article>
           ) : null}
+          <CatalogImportPanel />
         </aside>
       </section>
     </main>

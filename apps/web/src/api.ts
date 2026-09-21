@@ -1,18 +1,30 @@
 import {
   createClientRequestId,
+  type AiAssistantAudit,
+  type BackupOverview,
   type BudgetRegimenResult,
   type CashSessionSummary,
+  type CatalogImportResult,
   type CustomerStatement,
   type CustomerSummary,
   type DashboardSnapshot,
+  type DeterministicReport,
+  type DeterministicReportName,
   type ExpiryRiskItem,
   type FailedJobsResponse,
   type FinalizedSale,
+  type FiscalInvoiceAttempt,
+  type FiscalInvoiceStatus,
+  type FiscalInvoiceSummary,
+  type FiscalOverview,
   type LoginResponse,
   type MedicineSearchResult,
   type OwnerAnswer,
   type OperationalAlertsResponse,
   type OwnerTool,
+  type PurchaseOrderDetail,
+  type PurchaseOrderStatus,
+  type PurchaseOrderSummary,
   type ReorderSuggestion,
   type ReservedSaleDraft,
   type ReturnCommandResult,
@@ -22,22 +34,37 @@ import {
   type SaleReceipt,
   type SaleReceiptSearchResult,
   type ShelfRecommendation,
+  type SupplierSummary,
+  type BackupRunSummary,
 } from '@pharmacy/shared';
 
 export type {
+  AiAssistantAudit,
+  BackupOverview,
+  BackupRunSummary,
   BudgetRegimenResult,
   CashSessionSummary,
+  CatalogImportResult,
   CustomerStatement,
   CustomerSummary,
   DashboardSnapshot,
+  DeterministicReport,
+  DeterministicReportName,
   ExpiryRiskItem,
   FailedJobsResponse,
   FinalizedSale,
+  FiscalInvoiceAttempt,
+  FiscalInvoiceStatus,
+  FiscalInvoiceSummary,
+  FiscalOverview,
   LoginResponse,
   MedicineSearchResult,
   OwnerAnswer,
   OperationalAlertsResponse,
   OwnerTool,
+  PurchaseOrderDetail,
+  PurchaseOrderStatus,
+  PurchaseOrderSummary,
   ReorderSuggestion,
   ReservedSaleDraft,
   ReturnCommandResult,
@@ -45,6 +72,7 @@ export type {
   SaleDraftResult,
   SaleReceipt,
   ShelfRecommendation,
+  SupplierSummary,
 };
 
 const runtimeEnvironment = import.meta.env as unknown as { readonly VITE_API_URL?: string };
@@ -507,4 +535,174 @@ export async function findSalesForReceipt(
 
 export function reprintSaleReceipt(token: string, saleId: string): Promise<SaleReceipt> {
   return authenticatedRequest(token, `/pos/sales/${saleId}/reprint`, { method: 'POST' });
+}
+
+export async function listSuppliers(token: string): Promise<readonly SupplierSummary[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly SupplierSummary[] }>(
+    token,
+    '/admin/suppliers',
+  );
+  return response.data;
+}
+
+export async function listPurchaseOrders(
+  token: string,
+  status?: PurchaseOrderStatus,
+): Promise<readonly PurchaseOrderSummary[]> {
+  const query = status ? `?status=${status}&limit=50` : '?limit=50';
+  const response = await authenticatedRequest<{ readonly data: readonly PurchaseOrderSummary[] }>(
+    token,
+    `/purchase-orders${query}`,
+  );
+  return response.data;
+}
+
+export function getPurchaseOrder(
+  token: string,
+  purchaseOrderId: string,
+): Promise<PurchaseOrderDetail> {
+  return authenticatedRequest(token, `/purchase-orders/${purchaseOrderId}`);
+}
+
+export interface PurchaseOrderDraftLine {
+  readonly medicineId: string;
+  readonly orderedQuantity: string;
+  readonly unitCost: string;
+  readonly lineDiscount: string;
+  readonly bonusQuantity: string;
+  readonly baseUnitsPerOrderUnit: string;
+}
+
+export function createPurchaseOrder(
+  token: string,
+  input: {
+    readonly supplierId: string;
+    readonly supplierInvoiceNumber?: string;
+    readonly items: readonly PurchaseOrderDraftLine[];
+  },
+  clientRequestId: string,
+): Promise<Omit<PurchaseOrderDetail, 'receipts'>> {
+  return authenticatedRequest(token, '/purchase-orders', {
+    method: 'POST',
+    body: JSON.stringify({ ...input, clientRequestId }),
+  });
+}
+
+export function markPurchaseOrderOrdered(
+  token: string,
+  purchaseOrderId: string,
+  clientRequestId: string,
+): Promise<Record<string, unknown>> {
+  return authenticatedRequest(token, `/purchase-orders/${purchaseOrderId}/order`, {
+    method: 'POST',
+    body: JSON.stringify({ clientRequestId }),
+  });
+}
+
+export interface GoodsReceiptLineInput {
+  readonly purchaseOrderItemId: string;
+  readonly receivedQuantity: string;
+  readonly receivedBonusQuantity: string;
+  readonly batchNumber: string;
+  readonly expiryDate: string;
+  readonly salePricePerBaseUnit: string;
+}
+
+export function receivePurchaseOrder(
+  token: string,
+  purchaseOrderId: string,
+  input: {
+    readonly supplierInvoiceNumber?: string;
+    readonly lines: readonly GoodsReceiptLineInput[];
+  },
+  clientRequestId: string,
+): Promise<Record<string, unknown>> {
+  return authenticatedRequest(token, `/purchase-orders/${purchaseOrderId}/receive`, {
+    method: 'POST',
+    body: JSON.stringify({ ...input, clientRequestId }),
+  });
+}
+
+export function addSupplierQuote(
+  token: string,
+  input: {
+    readonly supplierId: string;
+    readonly medicineId: string;
+    readonly quotedUnitCost: string;
+    readonly quoteUnit: string;
+    readonly baseUnitsPerQuoteUnit: string;
+    readonly source: string;
+  },
+): Promise<Record<string, unknown>> {
+  return authenticatedRequest(token, '/supplier-quotes', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function getDeterministicReport(
+  token: string,
+  report: DeterministicReportName,
+  range: { readonly from?: string; readonly to?: string; readonly limit?: number },
+): Promise<DeterministicReport> {
+  const parameters = new URLSearchParams();
+  if (range.from) parameters.set('from', range.from);
+  if (range.to) parameters.set('to', range.to);
+  if (range.limit) parameters.set('limit', String(range.limit));
+  const query = parameters.toString();
+  return authenticatedRequest(token, `/reports/${report}${query ? `?${query}` : ''}`);
+}
+
+export function getFiscalOverview(
+  token: string,
+  status?: FiscalInvoiceStatus,
+): Promise<FiscalOverview> {
+  const query = status ? `?status=${status}&limit=50` : '?limit=50';
+  return authenticatedRequest(token, `/fiscal/invoices${query}`);
+}
+
+export function getFiscalAttempts(
+  token: string,
+  fiscalInvoiceId: string,
+): Promise<{
+  readonly invoice: FiscalInvoiceSummary;
+  readonly attempts: readonly FiscalInvoiceAttempt[];
+}> {
+  return authenticatedRequest(token, `/fiscal/invoices/${fiscalInvoiceId}/attempts`);
+}
+
+export function retryFiscalInvoice(
+  token: string,
+  fiscalInvoiceId: string,
+  reason: string,
+  clientRequestId: string,
+): Promise<{ readonly id: string; readonly status: string }> {
+  return authenticatedRequest(token, `/fiscal/invoices/${fiscalInvoiceId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({ reason, clientRequestId }),
+  });
+}
+
+export function getBackupOverview(token: string): Promise<BackupOverview> {
+  return authenticatedRequest(token, '/operations/backups?limit=20');
+}
+
+export async function getAiAudits(token: string): Promise<readonly AiAssistantAudit[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly AiAssistantAudit[] }>(
+    token,
+    '/owner-ai/audits?limit=50',
+  );
+  return response.data;
+}
+
+export function importCatalog(
+  token: string,
+  mode: 'VALIDATE' | 'APPLY',
+  rows: readonly Record<string, unknown>[],
+  clientRequestId: string,
+): Promise<CatalogImportResult> {
+  return authenticatedRequest(token, '/admin/medicines/import', {
+    method: 'POST',
+    body: JSON.stringify({ mode, rows, clientRequestId }),
+  });
 }

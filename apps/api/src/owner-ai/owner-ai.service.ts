@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
-import type { OwnerAiChatRequest } from '@pharmacy/shared';
+import type { AiAssistantAudit, OwnerAiChatRequest } from '@pharmacy/shared';
 import { createHash } from 'node:crypto';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
@@ -50,6 +50,54 @@ export class OwnerAiService {
     @Inject(GeminiProvider) private readonly geminiProvider: GeminiProvider,
     @Inject(OwnerToolsService) private readonly tools: OwnerToolsService,
   ) {}
+
+  /**
+   * Read-only assistant usage history. Question text is never stored — only its hash —
+   * so this surface exposes who used which deterministic tool, not what they typed.
+   */
+  async audits(
+    user: AuthenticatedUser,
+    limit: number,
+  ): Promise<{
+    readonly data: readonly AiAssistantAudit[];
+  }> {
+    const rows = await this.database<
+      Array<{
+        id: string;
+        user_display_name: string;
+        tool_name: string;
+        provider: string;
+        model: string | null;
+        status: AiAssistantAudit['status'];
+        latency_ms: number;
+        error_code: string | null;
+        created_at: string;
+      }>
+    >`
+      select ai_assistant_audits.id::text, users.display_name as user_display_name,
+        ai_assistant_audits.tool_name, ai_assistant_audits.provider, ai_assistant_audits.model,
+        ai_assistant_audits.status, ai_assistant_audits.latency_ms,
+        ai_assistant_audits.error_code, ai_assistant_audits.created_at::text
+      from ai_assistant_audits
+      join users on users.id = ai_assistant_audits.user_id
+      where ai_assistant_audits.branch_id = ${user.branchId}
+      order by ai_assistant_audits.created_at desc, ai_assistant_audits.id desc
+      limit ${limit}
+    `;
+    return {
+      data: rows.map((row) => ({
+        id: row.id,
+        userDisplayName: row.user_display_name,
+        toolName: row.tool_name,
+        provider: row.provider,
+        model: row.model,
+        status: row.status,
+        latencyMs: row.latency_ms,
+        errorCode: row.error_code,
+        createdAt: row.created_at,
+      })),
+    };
+  }
 
   async chat(
     user: AuthenticatedUser,

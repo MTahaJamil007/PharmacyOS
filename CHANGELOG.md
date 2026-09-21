@@ -6,6 +6,18 @@ All notable changes to PharmacyOS are recorded in this file. The format follows 
 
 ### Added
 
+- Phase 6 fiscal operations surface: branch-scoped submission status counts, per-invoice attempt history from `fbr_invoice_attempts`, and a reason-required, idempotent, audited retry that re-queues the durable outbox row instead of calling the gateway inline. An invoice that already holds an official fiscal number can never be retried.
+- Backup and restore-drill evidence surface reading `backup_runs`, deliberately read-only; a restore is still run from the host with the runbook.
+- Owner-assistant usage audit exposing who used which deterministic tool, without exposing question text.
+- Bulk medicine catalog import with a validate-before-write contract: `VALIDATE` never writes and returns per-row issues, `APPLY` refuses to write at all if any row is still rejected, matches existing medicines by SKU or barcode, and is idempotent on the client request id.
+- Operations workspace at `/operations` and a catalog import panel in Administration.
+- Phase 6 evidence and operator checklists in `docs/PHASE_6_EXECUTION.md`, plus ADR 0006.
+
+- Purchasing workspace covering supplier selection, exact purchase-order arithmetic, order approval, multi-line goods receipt into batches, receipt history, and supplier quote capture. Goods receipt is the only path by which stock enters the system and previously had no user interface.
+- Deterministic reports workspace for the seven owner reports, with date ranges, a generic table renderer for aggregate and row-list payloads, CSV export, and the data basis shown beside every figure.
+- Permission-aware primary navigation, so an operator no longer sees destinations that can only answer 403.
+- Build audit in `docs/SYSTEM_AUDIT_2026-09-21.md`, the Phase 6-9 plan in `docs/PHARMACY_OS_COMPLETION_ROADMAP.md`, and ADR 0005 for the purchasing and reporting surfaces.
+
 - Phase 3 counter-grade scanner/keyboard operation, split tender and change, resilient checkout recovery, receipt search/reprint, and optional Web Serial ESC/POS printing with drawer control.
 - Lazy domain routes, shared web/API contracts, persisted carts, render recovery, in-place re-authentication, live LAN/terminal state, and an English/Urdu RTL foundation.
 - Database-enforced cash tender/change constraints plus branch-scoped receipt-reprint audit evidence.
@@ -24,6 +36,9 @@ All notable changes to PharmacyOS are recorded in this file. The format follows 
 - Phase 0 implementation evidence in `docs/PHASE_0_EXECUTION.md`.
 
 ### Changed
+
+- Every genuinely orphaned permission is now enforced: `fbr.view_status`, `fbr.retry`, `backup.restore`, `ai.audit.read`, and `returns.refund_cash`. A cash refund now requires `returns.refund_cash` in addition to `returns.refund`.
+- The owner dashboard accepts `analytics.owner.read` as an alternative to `reports.view_financial`, through a new any-of permission decorator.
 
 - Split the monolithic operations workspace into POS, cash, inventory, returns, and dashboard modules with route-level code splitting.
 - Replaced client-side floating-point totals and duplicate API interfaces with shared exact arithmetic and compile-time contracts.

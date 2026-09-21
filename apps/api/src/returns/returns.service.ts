@@ -1,6 +1,17 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Database } from '@pharmacy/database';
-import { sumMoney, type CreateReturnRequest, type RefundReturnRequest } from '@pharmacy/shared';
+import {
+  PERMISSIONS,
+  sumMoney,
+  type CreateReturnRequest,
+  type RefundReturnRequest,
+} from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { lockIdempotencyKey } from '../common/idempotency.js';
@@ -151,6 +162,11 @@ export class ReturnsService {
     returnId: bigint,
     input: RefundReturnRequest,
   ): Promise<Record<string, unknown>> {
+    // Handing physical cash back across the counter is a separate authority from
+    // approving a card or bank reversal, so the cash path needs its own permission.
+    if (input.method === 'CASH' && !user.permissions.includes(PERMISSIONS.RETURNS_REFUND_CASH)) {
+      throw new ForbiddenException('This account may not issue a cash refund');
+    }
     return this.database.begin(async (transaction) => {
       const [row] = await transaction<ReturnRow[]>`
         select id::text, branch_id::text, sale_id::text, status from returns

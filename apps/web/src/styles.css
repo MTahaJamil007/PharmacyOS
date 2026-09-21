@@ -1440,6 +1440,231 @@ kbd {
   }
 }
 
+.procurement-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(260px, 0.7fr) minmax(0, 1.2fr) minmax(0, 1.3fr);
+}
+.purchase-order-index,
+.purchase-order-builder,
+.purchase-order-detail {
+  padding: 16px;
+}
+.purchase-row {
+  display: flex;
+  width: 100%;
+  padding: 11px 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  background: #fff;
+  text-align: left;
+}
+.purchase-row span,
+.purchase-row small {
+  display: block;
+}
+.purchase-row small {
+  margin-top: 3px;
+  color: #6b7a76;
+  font-size: 10px;
+}
+.purchase-row.selected {
+  box-shadow: inset 5px 0 0 var(--amber);
+  background: #fffdf5;
+}
+.filter-row {
+  display: flex;
+  margin-bottom: 12px;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.filter-row select {
+  flex: 1;
+}
+.data-list.compact {
+  max-height: 220px;
+  padding: 0;
+  overflow-y: auto;
+}
+.draft-line-list {
+  display: flex;
+  margin: 12px 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.draft-line {
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: #fff;
+}
+.draft-line > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.draft-line-fields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  align-items: end;
+}
+.draft-line-fields label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.draft-line-total {
+  align-self: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.purchase-detail-actions {
+  display: flex;
+  margin: 12px 0;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.purchase-line-table,
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.purchase-line-table th,
+.purchase-line-table td,
+.report-table th,
+.report-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+}
+.purchase-line-table th,
+.report-table th {
+  color: #4d5c58;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.purchase-line-table td:not(:first-child),
+.report-table td:not(:first-child) {
+  font-variant-numeric: tabular-nums;
+}
+.goods-receipt-form {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 2px solid var(--rule);
+}
+.goods-receipt-form h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.goods-receipt-form > label {
+  display: flex;
+  margin-bottom: 12px;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.report-controls {
+  display: flex;
+  padding: 16px;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.report-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.report-output {
+  margin-top: 18px;
+  padding: 16px;
+  overflow-x: auto;
+}
+.data-basis {
+  margin: 0 0 12px;
+  color: #5c6b67;
+  font-size: 11px;
+}
+[dir='rtl'] .purchase-row,
+[dir='rtl'] .purchase-line-table th,
+[dir='rtl'] .purchase-line-table td,
+[dir='rtl'] .report-table th,
+[dir='rtl'] .report-table td {
+  text-align: right;
+}
+@media (max-width: 1180px) {
+  .procurement-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.operations-console > .work-panel {
+  margin-top: 18px;
+  padding: 16px;
+}
+.operations-console .work-panel > header {
+  display: flex;
+  margin-bottom: 12px;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.operations-console .report-table tr.selected {
+  background: #fffdf5;
+}
+.fiscal-attempts {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 2px solid var(--rule);
+}
+.fiscal-attempts h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.retry-form {
+  display: flex;
+  margin-top: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.retry-form label {
+  display: flex;
+  min-width: 260px;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.catalog-import-panel .report-table {
+  margin-top: 12px;
+}
+.catalog-import-panel input[type='file'] {
+  padding: 6px 0;
+  font-size: 12px;
+}
+
 @media (max-width: 760px) {
   .login-shell {
     grid-template-columns: 1fr;

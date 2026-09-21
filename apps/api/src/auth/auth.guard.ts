@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
-import { PERMISSION_METADATA_KEY } from './auth.decorators.js';
+import { ANY_PERMISSION_METADATA_KEY, PERMISSION_METADATA_KEY } from './auth.decorators.js';
 import type { AuthenticatedRequest, AuthenticatedUser } from './auth.types.js';
 
 @Injectable()
@@ -95,6 +95,17 @@ export class AuthGuard implements CanActivate {
       context.getClass(),
     ]);
     if (required?.some((permission) => !user.permissions.includes(permission))) {
+      throw new ForbiddenException('This account lacks the required permission');
+    }
+    const requiredAny = this.reflector.getAllAndOverride<string[]>(ANY_PERMISSION_METADATA_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (
+      requiredAny &&
+      requiredAny.length > 0 &&
+      !requiredAny.some((permission) => user.permissions.includes(permission))
+    ) {
       throw new ForbiddenException('This account lacks the required permission');
     }
     return true;

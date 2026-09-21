@@ -1,3 +1,4 @@
+import { PERMISSIONS } from '@pharmacy/shared';
 import { NavLink } from 'react-router-dom';
 
 import { logout } from '../api';
@@ -5,15 +6,62 @@ import { useLanStatus } from '../hooks/useLanStatus';
 import { useI18n } from '../i18n';
 import { usePharmacyStore } from '../store';
 
+/**
+ * A destination is shown only when the session actually carries a permission it
+ * needs; otherwise the operator reaches a screen that can only answer 403.
+ */
 const navigation = [
-  { key: 'nav.counter', to: '/pos' },
-  { key: 'nav.cash', to: '/cash' },
-  { key: 'nav.customers', to: '/customers' },
-  { key: 'nav.inventory', to: '/inventory' },
-  { key: 'nav.budget', to: '/budget' },
-  { key: 'nav.returns', to: '/returns' },
-  { key: 'nav.owner', to: '/owner' },
-  { key: 'nav.admin', to: '/admin' },
+  { key: 'nav.counter', permissions: [PERMISSIONS.POS_SEARCH], to: '/pos' },
+  {
+    key: 'nav.cash',
+    permissions: [PERMISSIONS.CASH_OPEN_SESSION, PERMISSIONS.CASH_CLOSE_SESSION],
+    to: '/cash',
+  },
+  { key: 'nav.customers', permissions: [PERMISSIONS.CUSTOMER_READ], to: '/customers' },
+  {
+    key: 'nav.inventory',
+    permissions: [
+      PERMISSIONS.INVENTORY_ADJUST,
+      PERMISSIONS.INVENTORY_EXPIRY_READ,
+      PERMISSIONS.INVENTORY_SHELF_READ,
+    ],
+    to: '/inventory',
+  },
+  { key: 'nav.purchasing', permissions: [PERMISSIONS.INVENTORY_PURCHASE], to: '/purchasing' },
+  {
+    key: 'nav.budget',
+    permissions: [PERMISSIONS.SALES_BUDGET_REGIMEN_CALCULATE],
+    to: '/budget',
+  },
+  {
+    key: 'nav.returns',
+    permissions: [PERMISSIONS.RETURNS_LOOKUP, PERMISSIONS.RETURNS_REQUEST],
+    to: '/returns',
+  },
+  {
+    key: 'nav.reports',
+    permissions: [PERMISSIONS.REPORTS_VIEW_BASIC, PERMISSIONS.REPORTS_VIEW_FINANCIAL],
+    to: '/reports',
+  },
+  { key: 'nav.owner', permissions: [PERMISSIONS.REPORTS_VIEW_FINANCIAL], to: '/owner' },
+  {
+    key: 'nav.operations',
+    permissions: [
+      PERMISSIONS.FBR_VIEW_STATUS,
+      PERMISSIONS.BACKUP_RESTORE,
+      PERMISSIONS.AI_AUDIT_READ,
+    ],
+    to: '/operations',
+  },
+  {
+    key: 'nav.admin',
+    permissions: [
+      PERMISSIONS.SETTINGS_MANAGE_USERS,
+      PERMISSIONS.SETTINGS_MANAGE_SYSTEM,
+      PERMISSIONS.INVENTORY_SHELF_MANAGE,
+    ],
+    to: '/admin',
+  },
 ] as const;
 
 export function AppShell({ children }: { readonly children: React.ReactNode }) {
@@ -45,11 +93,9 @@ export function AppShell({ children }: { readonly children: React.ReactNode }) {
           {navigation
             .filter(
               (item) =>
-                item.to !== '/admin' ||
-                Boolean(
-                  session?.user.permissions.includes('settings.manage_users') ||
-                  session?.user.permissions.includes('settings.manage_system') ||
-                  session?.user.permissions.includes('inventory.shelf.manage'),
+                !session ||
+                item.permissions.some((permission) =>
+                  session.user.permissions.includes(permission),
                 ),
             )
             .map((item) => (

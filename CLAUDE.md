@@ -1,6 +1,7 @@
 # Claude Code Instructions
 
-Read and follow `AGENTS.md` before changing this repository. The active roadmap and its exit gates are in `docs/DEVELOPMENT_PLAN.md`.
+Read and follow `AGENTS.md` before changing this repository. Exit gates through Phase 5 are in
+`docs/DEVELOPMENT_PLAN.md`; Phases 6-9 are in `docs/PHARMACY_OS_COMPLETION_ROADMAP.md`.
 
 Before completing a task:
 

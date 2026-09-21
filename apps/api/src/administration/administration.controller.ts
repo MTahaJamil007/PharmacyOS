@@ -15,6 +15,7 @@ import {
   createShelfSchema,
   createSupplierSchema,
   createTerminalSchema,
+  catalogImportSchema,
   customerSearchSchema,
   idSchema,
   PERMISSIONS,
@@ -29,10 +30,22 @@ import {
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AdministrationService } from './administration.service.js';
+import { CatalogImportService } from './catalog-import.service.js';
 
 @Controller('admin')
 export class AdministrationController {
-  constructor(@Inject(AdministrationService) private readonly admin: AdministrationService) {}
+  constructor(
+    @Inject(AdministrationService) private readonly admin: AdministrationService,
+    @Inject(CatalogImportService) private readonly catalogImport: CatalogImportService,
+  ) {}
+
+  @Post('medicines/import')
+  @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_SYSTEM)
+  importMedicines(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
+    const parsed = catalogImportSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
+    return this.catalogImport.import(user, parsed.data);
+  }
 
   @Get('medicines')
   @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_SYSTEM)
