@@ -1,3 +1,6 @@
+// Loads the repository .env like the other database scripts do.
+import '@pharmacy/config';
+
 import { hash } from 'argon2';
 import { createDatabase } from '@pharmacy/database';
 
