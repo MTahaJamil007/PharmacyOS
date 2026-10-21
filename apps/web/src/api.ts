@@ -141,7 +141,9 @@ async function request<T>(path: string, init: RequestInit, token?: string): Prom
     response = await fetch(`${API_URL}${path}`, {
       ...init,
       headers: {
-        'content-type': 'application/json',
+        // Fastify rejects an empty body declared as JSON, so commands without a payload
+        // (reserve, approve, reprint, sign out) must not send the header.
+        ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...init.headers,
       },

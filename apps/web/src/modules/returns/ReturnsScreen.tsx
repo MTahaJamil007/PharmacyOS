@@ -615,6 +615,7 @@ function RefundDialog({
 }) {
   const can = usePermissions();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const drawer = useQuery({ queryKey: ['cash-session-current'], queryFn: getCurrentCashSession });
   const amount = moneyToMinorUnits(row.refundAmount);
   const fits = (limit: string): boolean => moneyToMinorUnits(limit) >= amount;
@@ -675,6 +676,9 @@ function RefundDialog({
         ...(method === 'CASH' && drawer.data ? { cashSessionId: drawer.data.id } : {}),
         ...(reference.trim() ? { reference: reference.trim() } : {}),
       });
+      if (method === 'CASH') {
+        void queryClient.invalidateQueries({ queryKey: ['cash-session-current'] });
+      }
       toast.success(
         `Refunded ${formatMoney(result.refundAmount ?? row.refundAmount)}`,
         METHOD_LABELS[method],

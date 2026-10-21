@@ -462,12 +462,21 @@ function CloseDialog({
         countedCash: counted,
         ...(notes.trim() ? { closingNotes: notes.trim() } : {}),
       });
-      toast.success(
-        result.status === 'CLOSED' ? 'Drawer closed' : 'Count recorded',
-        result.status === 'CLOSED'
-          ? 'The day is reconciled.'
-          : 'A supervisor must approve the difference.',
-      );
+      const difference = result.variance ?? '0.00';
+      const balanced = isZero(difference);
+      const differenceText = isNegative(difference)
+        ? `short by ${formatMoney(difference.slice(1))}`
+        : `over by ${formatMoney(difference)}`;
+      if (result.status !== 'CLOSED') {
+        toast.info('Count recorded', `Drawer is ${differenceText}. A supervisor must approve it.`);
+      } else if (balanced) {
+        toast.success('Drawer closed', 'The count matches exactly.');
+      } else {
+        toast.info(
+          'Drawer closed with a difference',
+          `Drawer is ${differenceText}, within the allowed limit. It is recorded against this shift.`,
+        );
+      }
       await onDone();
       onClose();
     } catch (cause) {
@@ -479,7 +488,7 @@ function CloseDialog({
   return (
     <Dialog
       title="Count and close the drawer"
-      description="Count the physical cash before looking at the expected figure."
+      description="Count every note and coin in the drawer, then enter the amount you counted."
       size="lg"
       onClose={onClose}
       footer={

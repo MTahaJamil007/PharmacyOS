@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createClientRequestId,
   minorUnitsToMoney,
@@ -413,6 +413,7 @@ export function PosScreen(): React.JSX.Element {
     updateAttempt,
   ]);
 
+  const queryClient = useQueryClient();
   const completePayment = useCallback(
     async (payments: readonly SalePaymentInput[]): Promise<void> => {
       if (!session || !attempt?.cashSessionId || !attempt.draftId) return;
@@ -432,6 +433,8 @@ export function PosScreen(): React.JSX.Element {
         clearCart();
         setSelectedCustomer(null);
         setDiscount(null);
+        // The till chip and drawer screen show expected cash; a sale changes it.
+        void queryClient.invalidateQueries({ queryKey: ['cash-session-current'] });
         await recoverReceipt(finalized.id);
       } catch (cause) {
         setCheckoutError(describeCheckoutError(cause, cart));
@@ -440,7 +443,7 @@ export function PosScreen(): React.JSX.Element {
         setCheckoutPending(false);
       }
     },
-    [attempt, cart, clearCart, recoverReceipt, session, updateAttempt],
+    [attempt, cart, clearCart, queryClient, recoverReceipt, session, updateAttempt],
   );
 
   useEffect(() => {
