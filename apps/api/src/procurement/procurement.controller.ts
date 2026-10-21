@@ -9,6 +9,7 @@ import {
   Query,
 } from '@nestjs/common';
 import {
+  cancelPurchaseOrderSchema,
   createPurchaseOrderSchema,
   createDraftPurchaseOrderSchema,
   idSchema,
@@ -37,6 +38,26 @@ export class ProcurementController {
     const parsed = supplierQuoteSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
     return this.procurementService.addSupplierQuote(user, parsed.data);
+  }
+
+  @Get('suppliers')
+  @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
+  suppliers(@CurrentUser() user: AuthenticatedUser) {
+    return this.procurementService.listActiveSuppliers(user.branchId);
+  }
+
+  @Post('purchase-orders/:id/cancel')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_PURCHASE_DRAFT_APPROVE)
+  cancelPurchaseOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const parsedId = idSchema.safeParse(id);
+    const parsedBody = cancelPurchaseOrderSchema.safeParse(body);
+    if (!parsedId.success || !parsedBody.success)
+      throw new BadRequestException('Give a reason for cancelling this order');
+    return this.procurementService.cancelPurchaseOrder(user, parsedId.data, parsedBody.data);
   }
 
   @Get('purchase-orders')

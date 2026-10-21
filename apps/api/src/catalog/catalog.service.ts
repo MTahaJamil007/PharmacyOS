@@ -81,7 +81,8 @@ export class CatalogService {
       select matched.id::text as id, medicines.name, medicines.generic_name as "genericName",
         medicines.strength, manufacturers.name as manufacturer,
         barcode.barcode, shelf.location as shelf,
-        coalesce(stock.available_quantity, 0)::text as "availableQuantity",
+        greatest(coalesce(stock.available_quantity, 0) - coalesce(held.quantity, 0), 0)::text
+          as "availableQuantity",
         stock.nearest_expiry::text as "nearestExpiry",
         (stock.nearest_expiry - branch_clock.local_date)::integer as "daysToExpiry",
         stock.sale_price::text as "salePrice"
@@ -114,6 +115,13 @@ export class CatalogService {
           and inventory_batches.deleted_at is null
           and inventory_batches.expiry_date >= branch_clock.local_date
       ) stock on true
+      left join lateral (
+        select sum(reservations.quantity) as quantity
+        from stock_reservations reservations
+        join inventory_batches batches on batches.id = reservations.inventory_batch_id
+        where batches.medicine_id = medicines.id and batches.branch_id = ${branchId}
+          and reservations.status = 'ACTIVE' and reservations.expires_at > now()
+      ) held on true
       order by matched.match_rank, matched.score desc, matched.id
     `;
   }

@@ -1,20 +1,82 @@
-import { BadRequestException, Controller, Get, Inject, Param, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  ForbiddenException,
+  Get,
+  Inject,
+  NotFoundException,
+  Param,
+  Query,
+} from '@nestjs/common';
 import {
   idSchema,
   PERMISSIONS,
   reportQuerySchema,
+  tabularReportQuerySchema,
   type OwnerAiChatRequest,
+  type TabularReport,
+  type TabularReportName,
 } from '@pharmacy/shared';
 
-import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
+import { CurrentUser, RequireAnyPermission, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { OwnerToolsService } from '../owner-ai/owner-tools.service.js';
+import { ReportsService } from './reports.service.js';
+
+/** Reports that expose cost, margin, or cash need financial authority. */
+const TABULAR_REPORTS: Readonly<Record<TabularReportName, string>> = {
+  'cash-sessions': PERMISSIONS.REPORTS_VIEW_FINANCIAL,
+  'daily-sales': PERMISSIONS.REPORTS_VIEW_BASIC,
+  expiry: PERMISSIONS.REPORTS_VIEW_BASIC,
+  'item-sales': PERMISSIONS.REPORTS_VIEW_BASIC,
+  profit: PERMISSIONS.REPORTS_VIEW_FINANCIAL,
+  purchases: PERMISSIONS.REPORTS_VIEW_FINANCIAL,
+  'returns-register': PERMISSIONS.REPORTS_VIEW_BASIC,
+  'stock-losses': PERMISSIONS.REPORTS_VIEW_FINANCIAL,
+  'stock-valuation': PERMISSIONS.REPORTS_VIEW_FINANCIAL,
+};
+const COST_COLUMNS = new Set(['costOfGoods', 'grossProfit']);
 
 type ReportTool = OwnerAiChatRequest['tool'];
 
 @Controller('reports')
 export class ReportsController {
-  constructor(@Inject(OwnerToolsService) private readonly reports: OwnerToolsService) {}
+  constructor(
+    @Inject(OwnerToolsService) private readonly reports: OwnerToolsService,
+    @Inject(ReportsService) private readonly tabular: ReportsService,
+  ) {}
+
+  @Get('tables/:report')
+  @RequireAnyPermission(PERMISSIONS.REPORTS_VIEW_BASIC, PERMISSIONS.REPORTS_VIEW_FINANCIAL)
+  async table(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('report') report: string,
+    @Query() query: unknown,
+  ): Promise<TabularReport> {
+    const required = Object.hasOwn(TABULAR_REPORTS, report)
+      ? TABULAR_REPORTS[report as TabularReportName]
+      : undefined;
+    if (!required) throw new NotFoundException('Unknown report');
+    if (!user.permissions.includes(required)) {
+      throw new ForbiddenException('This account lacks the required permission');
+    }
+    const parsed = tabularReportQuerySchema.safeParse(query);
+    if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
+    const result = await this.tabular.run(user.branchId, report as TabularReportName, parsed.data);
+    if (user.permissions.includes(PERMISSIONS.REPORTS_VIEW_FINANCIAL)) return result;
+    return {
+      ...result,
+      columns: result.columns.filter((column) => !COST_COLUMNS.has(column.key)),
+      rows: result.rows.map((row) =>
+        Object.fromEntries(Object.entries(row).filter(([key]) => !COST_COLUMNS.has(key))),
+      ),
+      totals: result.totals
+        ? Object.fromEntries(
+            Object.entries(result.totals).filter(([key]) => !COST_COLUMNS.has(key)),
+          )
+        : null,
+    };
+  }
 
   @Get('sales')
   @RequirePermissions(PERMISSIONS.REPORTS_VIEW_BASIC)

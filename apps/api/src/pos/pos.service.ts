@@ -25,6 +25,7 @@ import {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { recordFailedPassword } from '../auth/password-lockout.js';
 import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
 
@@ -638,6 +639,56 @@ export class PosService {
     });
   }
 
+  /**
+   * A customer can walk away after stock was reserved. Cancelling releases the reservation
+   * immediately instead of leaving the counter locked until the reservation expires.
+   */
+  async cancelDraft(user: AuthenticatedUser, draftId: bigint): Promise<Record<string, unknown>> {
+    return this.database.begin(async (transaction) => {
+      const [draft] = await transaction<DraftRow[]>`
+        select id::text, branch_id::text, terminal_id::text, status,
+          subtotal::text, discount_total::text, total::text, reserved_until,
+          discount_approval_id::text
+        from sale_drafts where id = ${draftId.toString()} for update
+      `;
+      if (!draft || draft.branch_id !== user.branchId)
+        throw new NotFoundException('Draft not found');
+      if (draft.status === 'CANCELLED') {
+        return {
+          id: draft.id,
+          status: 'CANCELLED',
+          releasedReservations: 0,
+          idempotentReplay: true,
+        };
+      }
+      if (draft.status === 'PAID')
+        throw new ConflictException('A paid sale cannot be cancelled; use a return');
+      const released = await transaction<Array<{ id: string }>>`
+        update stock_reservations set status = 'RELEASED', released_at = now()
+        where sale_draft_item_id in (select id from sale_draft_items where sale_draft_id = ${draft.id})
+          and status = 'ACTIVE'
+        returning id::text
+      `;
+      await transaction`
+        update sale_drafts set status = 'CANCELLED', reserved_until = null where id = ${draft.id}
+      `;
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id, metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId}, 'POS.DRAFT_CANCELLED', 'sale_draft',
+          ${draft.id}, ${transaction.json({ previousStatus: draft.status, releasedReservations: released.length })}
+        )
+      `;
+      return {
+        id: draft.id,
+        status: 'CANCELLED',
+        releasedReservations: released.length,
+        idempotentReplay: false,
+      };
+    });
+  }
+
   async finalizeSale(
     user: AuthenticatedUser,
     input: FinalizeSaleRequest,
@@ -1026,12 +1077,20 @@ export class PosService {
   }
 
   private async authenticateDiscountApprover(username: string, password: string) {
-    const [account] = await this.database<Array<{ id: string; password_hash: string }>>`
-      select id::text, password_hash from users
-      where lower(username) = lower(${username}) limit 1
+    const [account] = await this.database<
+      Array<{ id: string; password_hash: string; locked: boolean }>
+    >`
+      select id::text, password_hash,
+        coalesce(locked_until > now(), false) as locked
+      from users
+      where lower(username) = lower(${username}) and deleted_at is null and is_active
+      limit 1
     `;
     const valid = await verify(account?.password_hash ?? DUMMY_PASSWORD_HASH, password);
-    if (!account || !valid) throw new ForbiddenException('Supervisor approval is not valid');
+    if (account && !valid) await recordFailedPassword(this.database, this.environment, account.id);
+    if (!account || !valid || account.locked) {
+      throw new ForbiddenException('Supervisor approval is not valid');
+    }
     return account.id;
   }
 }

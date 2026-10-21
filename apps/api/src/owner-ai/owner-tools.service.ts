@@ -17,7 +17,12 @@ export class OwnerToolsService {
 
   async execute(user: AuthenticatedUser, request: OwnerAiChatRequest): Promise<ToolResult> {
     this.assertToolPermission(user, request.tool);
-    const to = request.arguments.to ?? new Date().toISOString().slice(0, 10);
+    // Business days are branch-local; a UTC "today" is wrong for five hours of every day.
+    const [clock] = await this.database<Array<{ today: string }>>`
+      select (now() at time zone timezone)::date::text as today from branches
+      where id = ${user.branchId}
+    `;
+    const to = request.arguments.to ?? clock?.today ?? new Date().toISOString().slice(0, 10);
     const from = request.arguments.from ?? this.daysBefore(to, 30);
     if (from > to) throw new Error('INVALID_DATE_RANGE');
 
@@ -71,10 +76,19 @@ export class OwnerToolsService {
 
   private async salesSummary(branchId: string, from: string, to: string): Promise<ToolResult> {
     const [facts] = await this.database<Array<Record<string, unknown>>>`
-      select count(*)::text as invoice_count, coalesce(sum(total), 0)::text as gross_sales,
-        coalesce(avg(total), 0)::text as average_ticket
-      from sales where branch_id = ${branchId} and status <> 'VOIDED'
-        and created_at >= ${from}::date and created_at < ${to}::date + interval '1 day'
+      select count(*)::text as invoice_count, coalesce(sum(sales.total), 0)::text as gross_sales,
+        round(coalesce(avg(sales.total), 0), 2)::text as average_ticket,
+        coalesce((select sum(refunds.amount) from refunds
+          join returns on returns.id = refunds.return_id
+          join branches on branches.id = returns.branch_id
+          where returns.branch_id = ${branchId}
+            and refunds.created_at >= (${from}::date::timestamp at time zone branches.timezone)
+            and refunds.created_at < ((${to}::date + 1)::timestamp at time zone branches.timezone)
+        ), 0)::text as refunds
+      from sales join branches on branches.id = sales.branch_id
+      where sales.branch_id = ${branchId} and sales.status <> 'VOIDED'
+        and sales.created_at >= (${from}::date::timestamp at time zone branches.timezone)
+        and sales.created_at < ((${to}::date + 1)::timestamp at time zone branches.timezone)
     `;
     return {
       facts,
@@ -87,14 +101,15 @@ export class OwnerToolsService {
     const [facts] = await this.database<Array<Record<string, unknown>>>`
       select coalesce(sum(sales.total), 0)::text as revenue,
         coalesce(sum(costs.cost_basis), 0)::text as cost_basis,
-        coalesce(sum(sales.total - costs.cost_basis), 0)::text as gross_profit_estimate
-      from sales
+        round(coalesce(sum(sales.total - costs.cost_basis), 0), 2)::text as gross_profit_estimate
+      from sales join branches on branches.id = sales.branch_id
       left join lateral (
-        select coalesce(sum(sale_items.unit_cost * sale_items.quantity), 0) as cost_basis
+        select round(coalesce(sum(sale_items.unit_cost * sale_items.quantity), 0), 2) as cost_basis
         from sale_items where sale_items.sale_id = sales.id
       ) costs on true
       where sales.branch_id = ${branchId} and sales.status <> 'VOIDED'
-        and sales.created_at >= ${from}::date and sales.created_at < ${to}::date + interval '1 day'
+        and sales.created_at >= (${from}::date::timestamp at time zone branches.timezone)
+        and sales.created_at < ((${to}::date + 1)::timestamp at time zone branches.timezone)
     `;
     return {
       facts,
@@ -138,7 +153,7 @@ export class OwnerToolsService {
           when expiry_date <= local_date + 30 then 'DAYS_0_30'
           when expiry_date <= local_date + 60 then 'DAYS_31_60'
           when expiry_date <= local_date + 90 then 'DAYS_61_90' end as bucket,
-        count(*)::text as batch_count, coalesce(sum(current_qty * cost_price), 0)::text as value_at_risk
+        count(*)::text as batch_count, round(coalesce(sum(current_qty * cost_price), 0), 2)::text as value_at_risk
       from inventory_batches join branches on branches.id = inventory_batches.branch_id
       cross join lateral (select (now() at time zone branches.timezone)::date local_date) dates
       where inventory_batches.branch_id = ${branchId} and current_qty > 0 and deleted_at is null
@@ -209,8 +224,10 @@ export class OwnerToolsService {
         coalesce(sum(return_items.refund_amount), 0)::text as requested_value,
         count(*) filter (where returns.status = 'REFUNDED')::text as refunded_item_lines
       from returns left join return_items on return_items.return_id = returns.id
+      join branches on branches.id = returns.branch_id
       where returns.branch_id = ${branchId}
-        and returns.created_at >= ${from}::date and returns.created_at < ${to}::date + interval '1 day'
+        and returns.created_at >= (${from}::date::timestamp at time zone branches.timezone)
+        and returns.created_at < ((${to}::date + 1)::timestamp at time zone branches.timezone)
     `;
     return {
       facts,
@@ -225,8 +242,10 @@ export class OwnerToolsService {
         coalesce(sum(expected_cash), 0)::text as expected_cash,
         coalesce(sum(counted_cash), 0)::text as counted_cash,
         coalesce(sum(variance), 0)::text as net_variance
-      from cash_sessions where branch_id = ${branchId}
-        and opened_at >= ${from}::date and opened_at < ${to}::date + interval '1 day'
+      from cash_sessions join branches on branches.id = cash_sessions.branch_id
+      where cash_sessions.branch_id = ${branchId}
+        and opened_at >= (${from}::date::timestamp at time zone branches.timezone)
+        and opened_at < ((${to}::date + 1)::timestamp at time zone branches.timezone)
     `;
     return {
       facts,

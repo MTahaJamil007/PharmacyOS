@@ -7,6 +7,7 @@ import type { Database } from '@pharmacy/database';
 import type { LoginRequest } from '@pharmacy/shared';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
 import type { AuthenticatedUser } from './auth.types.js';
+import { recordFailedPassword } from './password-lockout.js';
 
 const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=65536,p=1,t=3$Qmtqvlr9uuf0LHmWB9gtWQ$bqjEBg5g/m9jpoCKjF9k6ylMJbHj2GZxzLiSk8jQy3Q';
@@ -125,34 +126,7 @@ export class AuthService {
   }
 
   private async recordFailedPassword(userId: string): Promise<void> {
-    await this.database`
-      with state as (
-        select id,
-          case
-            when failed_login_window_started_at is null
-              or failed_login_window_started_at <= now() -
-                (${this.environment.ACCOUNT_LOCKOUT_MINUTES} * interval '1 minute')
-            then 1 else failed_login_count + 1
-          end as next_count,
-          case
-            when failed_login_window_started_at is null
-              or failed_login_window_started_at <= now() -
-                (${this.environment.ACCOUNT_LOCKOUT_MINUTES} * interval '1 minute')
-            then now() else failed_login_window_started_at
-          end as next_window
-        from users
-        where id = ${userId} and (locked_until is null or locked_until <= now())
-        for update
-      )
-      update users set failed_login_count = state.next_count,
-        failed_login_window_started_at = state.next_window,
-        locked_until = case
-          when state.next_count >= ${this.environment.ACCOUNT_LOCKOUT_FAILURES}
-          then now() + (${this.environment.ACCOUNT_LOCKOUT_MINUTES} * interval '1 minute')
-          else null
-        end
-      from state where users.id = state.id
-    `;
+    await recordFailedPassword(this.database, this.environment, userId);
   }
 
   private async auditRejectedLogin(

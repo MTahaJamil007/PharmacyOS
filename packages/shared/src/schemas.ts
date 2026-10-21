@@ -8,6 +8,8 @@ const MAX_DATABASE_ID = 9_223_372_036_854_775_807n;
 const MAX_MONEY_MINOR_UNITS = 999_999_999_999n;
 const MAX_QUANTITY_MILLI_UNITS = 999_999_999_999n;
 
+export const IMPORT_CHUNK_ROWS = 500;
+
 export const idSchema = z.coerce.bigint().positive().max(MAX_DATABASE_ID);
 export const quantitySchema = z
   .string()
@@ -554,17 +556,34 @@ export const receivePurchaseOrderSchema = z.object({
   supplierInvoiceNumber: z.string().trim().min(1).max(120).optional(),
   lines: z
     .array(
-      z.object({
-        purchaseOrderItemId: idSchema,
-        receivedQuantity: positiveQuantitySchema,
-        receivedBonusQuantity: quantitySchema.default('0'),
-        batchNumber: z.string().trim().min(1).max(120),
-        expiryDate: z.iso.date(),
-        salePricePerBaseUnit: moneySchema,
-      }),
+      z
+        .object({
+          purchaseOrderItemId: idSchema,
+          receivedQuantity: positiveQuantitySchema,
+          receivedBonusQuantity: quantitySchema.default('0'),
+          batchNumber: z.string().trim().min(1).max(120),
+          expiryDate: z.iso.date(),
+          salePricePerBaseUnit: moneySchema,
+          maximumRetailPricePerBaseUnit: moneySchema.optional(),
+        })
+        .refine(
+          (line) =>
+            !line.maximumRetailPricePerBaseUnit ||
+            moneyToMinorUnits(line.salePricePerBaseUnit) <=
+              moneyToMinorUnits(line.maximumRetailPricePerBaseUnit),
+          {
+            message: 'Sale price cannot exceed the maximum retail price',
+            path: ['salePricePerBaseUnit'],
+          },
+        ),
     )
     .min(1)
     .max(500),
+});
+
+export const cancelPurchaseOrderSchema = z.object({
+  clientRequestId: clientRequestIdSchema,
+  reason: z.string().trim().min(3).max(500),
 });
 
 export const reviewReorderSuggestionSchema = z.object({
@@ -784,7 +803,9 @@ export const catalogImportRowSchema = z.object({
 export const catalogImportSchema = z.object({
   mode: z.enum(['VALIDATE', 'APPLY']),
   clientRequestId: clientRequestIdSchema,
-  rows: z.array(z.record(z.string(), z.unknown())).min(1).max(2000),
+  // The global request-safety pipe bounds every body at 1,000 array items and 10,000 nodes;
+  // clients import larger files in validated chunks of this size.
+  rows: z.array(z.record(z.string(), z.unknown())).min(1).max(IMPORT_CHUNK_ROWS),
 });
 
 export type FiscalInvoiceQuery = z.infer<typeof fiscalInvoiceQuerySchema>;
@@ -821,6 +842,7 @@ export type CreateDraftPurchaseOrderRequest = z.infer<typeof createDraftPurchase
 export type CreatePurchaseOrderRequest = z.infer<typeof createPurchaseOrderSchema>;
 export type OrderPurchaseOrderRequest = z.infer<typeof orderPurchaseOrderSchema>;
 export type ReceivePurchaseOrderRequest = z.infer<typeof receivePurchaseOrderSchema>;
+export type CancelPurchaseOrderRequest = z.infer<typeof cancelPurchaseOrderSchema>;
 export type ReviewReorderSuggestionRequest = z.infer<typeof reviewReorderSuggestionSchema>;
 export type BudgetRegimenRequest = z.infer<typeof budgetRegimenSchema>;
 export type CreateReturnRequest = z.infer<typeof createReturnSchema>;
@@ -832,3 +854,96 @@ export type OpenCashSessionRequest = z.infer<typeof openCashSessionSchema>;
 export type CashMovementRequest = z.infer<typeof cashMovementSchema>;
 export type CloseCashSessionRequest = z.infer<typeof closeCashSessionSchema>;
 export type ApproveCashVarianceRequest = z.infer<typeof approveCashVarianceSchema>;
+
+export const stockOverviewQuerySchema = z.object({
+  query: z.string().trim().max(120).default(''),
+  filter: z.enum(['ALL', 'IN_STOCK', 'LOW', 'OUT', 'EXPIRING']).default('ALL'),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+});
+
+export const reorderPolicySchema = z
+  .object({
+    minimumStock: quantitySchema,
+    preferredSupplierId: idSchema.nullable().optional(),
+    leadTimeDays: z.coerce.number().int().min(0).max(120).default(2),
+    safetyDays: z.coerce.number().int().min(0).max(120).default(3),
+    targetCoverageDays: z.coerce.number().int().min(1).max(365).default(30),
+    minimumOrderQuantity: quantitySchema.default('0'),
+    orderMultiple: positiveQuantitySchema.default('1'),
+    isActive: z.boolean().default(true),
+  })
+  .strict();
+
+const optionalText = (max: number) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().trim().min(1).max(max).optional(),
+  );
+
+/**
+ * One line of an opening-stock file: the stock a pharmacy already holds on the day it
+ * starts using the system. The medicine is matched by SKU or barcode from the catalog.
+ */
+export const openingStockRowSchema = z
+  .object({
+    sku: optionalText(64),
+    barcode: optionalText(64),
+    batchNumber: z.string().trim().min(1).max(120),
+    expiryDate: z.iso.date(),
+    quantity: positiveQuantitySchema,
+    costPrice: moneySchema,
+    salePrice: moneySchema,
+    maximumRetailPrice: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      moneySchema.optional(),
+    ),
+  })
+  .refine((row) => Boolean(row.sku ?? row.barcode), {
+    message: 'Each row needs the SKU or the barcode of a catalog medicine',
+    path: ['sku'],
+  })
+  .refine(
+    (row) =>
+      !row.maximumRetailPrice ||
+      moneyToMinorUnits(row.salePrice) <= moneyToMinorUnits(row.maximumRetailPrice),
+    { message: 'Sale price cannot exceed the maximum retail price', path: ['salePrice'] },
+  );
+
+export const openingStockImportSchema = z.object({
+  mode: z.enum(['VALIDATE', 'APPLY']),
+  clientRequestId: clientRequestIdSchema,
+  rows: z.array(z.unknown()).min(1).max(IMPORT_CHUNK_ROWS),
+});
+
+export type StockOverviewQuery = z.infer<typeof stockOverviewQuerySchema>;
+export type ReorderPolicyRequest = z.infer<typeof reorderPolicySchema>;
+export type OpeningStockRow = z.infer<typeof openingStockRowSchema>;
+export type OpeningStockImportRequest = z.infer<typeof openingStockImportSchema>;
+
+export const tabularReportQuerySchema = z
+  .object({
+    from: z.iso.date().optional(),
+    to: z.iso.date().optional(),
+    limit: z.coerce.number().int().min(1).max(500).default(100),
+    days: z.coerce.number().int().min(1).max(365).default(90),
+  })
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: 'The end date must be on or after the start date',
+    path: ['to'],
+  })
+  .refine(
+    (query) =>
+      !query.from ||
+      !query.to ||
+      (Date.parse(query.to) - Date.parse(query.from)) / 86_400_000 <= 366,
+    { message: 'A report covers at most one year', path: ['from'] },
+  );
+
+export const ownerDashboardQuerySchema = z.object({
+  date: z.iso.date().optional(),
+  trendDays: z.coerce.number().int().min(7).max(90).default(14),
+});
+
+export type TabularReportQuery = z.infer<typeof tabularReportQuerySchema>;
+export type OwnerDashboardQuery = z.infer<typeof ownerDashboardQuerySchema>;

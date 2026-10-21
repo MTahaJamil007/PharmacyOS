@@ -50,6 +50,7 @@ export class UsersService {
     const roleCodes = [...new Set(input.roles)];
     return this.database.begin(async (transaction) => {
       const roleIds = await this.resolveRoleIds(transaction, roleCodes);
+      await this.assertRolesWithinAuthority(transaction, user, roleCodes);
       const [created] = await transaction<Array<{ id: string }>>`
         insert into users (username, display_name, password_hash)
         values (${input.username}, ${input.displayName}, ${passwordHash}) returning id::text
@@ -84,6 +85,8 @@ export class UsersService {
         for update
       `;
       if (!target) throw new NotFoundException('User not found');
+      await this.assertUserWithinAuthority(transaction, user, id);
+      if (roleCodes) await this.assertRolesWithinAuthority(transaction, user, roleCodes);
 
       const targetIsOwner = await this.isOwner(transaction, user.branchId, id);
       const keepsOwner = roleCodes?.includes('OWNER') ?? targetIsOwner;
@@ -141,6 +144,7 @@ export class UsersService {
     const passwordHash = await hash(password, HASH_OPTIONS);
     const id = userId.toString();
     return this.database.begin(async (transaction) => {
+      if (id !== user.id) await this.assertUserWithinAuthority(transaction, user, id);
       const [updated] = await transaction<Array<{ id: string }>>`
         update users set password_hash = ${passwordHash}, failed_login_count = 0, locked_until = null
         where id = ${id} and deleted_at is null
@@ -178,6 +182,47 @@ export class UsersService {
       await this.audit(transaction, user, 'USER.PASSWORD_CHANGED', user.id, {});
       return { id: user.id, otherSessionsRevoked: true };
     });
+  }
+
+  /**
+   * An administrator may grant only roles whose permissions they already hold, so the
+   * user-management permission cannot be used to promote oneself or anyone else to owner.
+   */
+  private async assertRolesWithinAuthority(
+    transaction: DatabaseTransaction,
+    actor: AuthenticatedUser,
+    roleCodes: readonly string[],
+  ) {
+    const rows = await transaction<Array<{ code: string }>>`
+      select distinct permissions.code from roles
+      join role_permissions on role_permissions.role_id = roles.id
+      join permissions on permissions.id = role_permissions.permission_id
+      where roles.code in ${transaction(roleCodes)}
+    `;
+    const missing = rows.map((row) => row.code).filter((code) => !actor.permissions.includes(code));
+    if (missing.length > 0) {
+      throw new ForbiddenException('You cannot grant a role with more authority than your own');
+    }
+  }
+
+  /** Managing (or resetting the password of) a more powerful account would be a takeover. */
+  private async assertUserWithinAuthority(
+    transaction: DatabaseTransaction,
+    actor: AuthenticatedUser,
+    targetUserId: string,
+  ) {
+    const rows = await transaction<Array<{ code: string }>>`
+      select distinct permissions.code from user_branch_roles
+      join role_permissions on role_permissions.role_id = user_branch_roles.role_id
+      join permissions on permissions.id = role_permissions.permission_id
+      where user_branch_roles.user_id = ${targetUserId}
+        and user_branch_roles.branch_id = ${actor.branchId}
+    `;
+    if (rows.some((row) => !actor.permissions.includes(row.code))) {
+      throw new ForbiddenException(
+        'You cannot manage an account with more authority than your own',
+      );
+    }
   }
 
   private async resolveRoleIds(transaction: DatabaseTransaction, codes: readonly string[]) {

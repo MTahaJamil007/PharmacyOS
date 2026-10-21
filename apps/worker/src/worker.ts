@@ -445,17 +445,17 @@ export class DurableWorker {
       )
       select ${branchId}, branch_clock.metric_date,
         day_sales.gross_sales - day_refunds.total,
-        day_sales.gross_sales - day_sales.cost_basis - day_refunds.total,
+        round(day_sales.gross_sales - day_sales.cost_basis - day_refunds.total, 2),
         day_payments.cash_sales + account_payments.cash_accounts - day_refunds.cash,
         day_payments.non_cash_sales + account_payments.non_cash_accounts - day_refunds.non_cash,
         day_refunds.total, day_sales.invoice_count,
         jsonb_build_object(
           'receivables', (select coalesce(sum(balance_after), 0)::text from latest_balances),
-          'expiryValueAtRisk', inventory_metrics.expiry_risk::text,
+          'expiryValueAtRisk', round(inventory_metrics.expiry_risk, 2)::text,
           'lowStockCount', operational.low_stock_count,
           'failedFiscalSubmissions', operational.failed_fiscal,
           'netCashVariance', operational.cash_variance,
-          'deadStockValue', inventory_metrics.dead_stock::text,
+          'deadStockValue', round(inventory_metrics.dead_stock, 2)::text,
           'topMovers', top_movers.items,
           'lastSuccessfulBackup', operational.last_backup,
           'lastRestoreDrill', operational.last_restore
@@ -621,6 +621,33 @@ export class DurableWorker {
         on conflict (branch_id, medicine_id, sales_date) do update
           set quantity_sold = excluded.quantity_sold, net_sales = excluded.net_sales, updated_at = now()
       `;
+      // Every medicine the branch has stocked gets a policy, so demand-driven suggestions do
+      // not depend on someone having configured each item first. Defaults never order on
+      // their own: with no minimum stock a suggestion appears only once there is demand.
+      const createdPolicies = await transaction<Array<{ id: string }>>`
+        insert into reorder_policies (
+          branch_id, medicine_id, preferred_supplier_id, lead_time_days, pack_size
+        )
+        select ${branchId}, stocked.medicine_id, last_supplier.supplier_id,
+          coalesce(last_supplier.lead_time_days, 2), medicines.pack_size
+        from (
+          select distinct medicine_id from inventory_batches
+          where branch_id = ${branchId} and deleted_at is null
+        ) stocked
+        join medicines on medicines.id = stocked.medicine_id
+          and medicines.deleted_at is null and medicines.is_active
+        left join lateral (
+          select orders.supplier_id, suppliers.lead_time_days
+          from purchase_order_items items
+          join purchase_orders orders on orders.id = items.purchase_order_id
+          join suppliers on suppliers.id = orders.supplier_id and suppliers.is_active
+          where orders.branch_id = ${branchId} and items.medicine_id = stocked.medicine_id
+            and orders.status in ('PARTIALLY_RECEIVED', 'RECEIVED')
+          order by orders.received_at desc nulls last, orders.id desc limit 1
+        ) last_supplier on true
+        on conflict (branch_id, medicine_id) do nothing
+        returning id::text
+      `;
       await transaction`
         update reorder_suggestions set status = 'SUPERSEDED'
         where branch_id = ${branchId} and status in ('GENERATED', 'REVIEWED')
@@ -727,7 +754,7 @@ export class DurableWorker {
         from quantities where raw_qty > 0
         returning id::text
       `;
-      return { suggestionsGenerated: rows.length };
+      return { policiesCreated: createdPolicies.length, suggestionsGenerated: rows.length };
     });
   }
 

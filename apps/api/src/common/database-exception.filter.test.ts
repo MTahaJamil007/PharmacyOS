@@ -34,6 +34,27 @@ describe('mapDatabaseException', () => {
     expect(mapDatabaseException(databaseError('57014'))?.getStatus()).toBe(503);
   });
 
+  it('names a known constraint so the operator can correct the input', () => {
+    const mapped = mapDatabaseException(
+      Object.assign(new Error('duplicate key value'), {
+        code: '23505',
+        constraint_name: 'users_active_username_uidx',
+      }),
+    );
+    expect(mapped?.message).toBe('That username is already taken');
+  });
+
+  it('passes through messages raised by PharmacyOS integrity triggers', () => {
+    const mapped = mapDatabaseException(
+      Object.assign(new Error('customer credit limit exceeded'), {
+        code: '23514',
+        where: 'PL/pgSQL function enforce_customer_ledger_integrity() line 26 at RAISE',
+      }),
+    );
+    expect(mapped?.getStatus()).toBe(409);
+    expect(mapped?.message).toBe('Customer credit limit exceeded');
+  });
+
   it('delegates errors that do not have an explicit safe mapping', () => {
     expect(mapDatabaseException(databaseError('XX000'))).toBeUndefined();
     expect(mapDatabaseException(new Error('ordinary failure'))).toBeUndefined();

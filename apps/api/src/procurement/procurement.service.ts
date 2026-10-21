@@ -1,6 +1,7 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Database, DatabaseTransaction } from '@pharmacy/database';
 import type {
+  CancelPurchaseOrderRequest,
   CreatePurchaseOrderRequest,
   CreateDraftPurchaseOrderRequest,
   OrderPurchaseOrderRequest,
@@ -338,7 +339,8 @@ export class ProcurementService {
     const [order] = await this.database<Array<Record<string, unknown>>>`
       select orders.id::text, orders.order_number, orders.status, orders.supplier_invoice_number,
         orders.total_cost::text, suppliers.id::text as supplier_id,
-        suppliers.name as supplier_name, orders.ordered_at, orders.received_at, orders.created_at
+        suppliers.name as supplier_name, orders.ordered_at, orders.received_at, orders.created_at,
+        orders.cancelled_at, orders.cancel_reason
       from purchase_orders orders join suppliers on suppliers.id = orders.supplier_id
       where orders.id = ${purchaseOrderId.toString()} and orders.branch_id = ${branchId}
     `;
@@ -534,9 +536,10 @@ export class ProcurementService {
       if (!['ORDERED', 'PARTIALLY_RECEIVED'].includes(order.status)) {
         throw new ConflictException('Purchase order is not open for receipt');
       }
-      const [clock] = await transaction<
-        Array<{ today: string }>
-      >`select current_date::text as today`;
+      const [clock] = await transaction<Array<{ today: string }>>`
+        select (now() at time zone timezone)::date::text as today
+        from branches where id = ${user.branchId}
+      `;
       if (!clock) throw new Error('Database date was unavailable');
       if (sortedLines.some((line) => line.expiryDate <= clock.today)) {
         throw new ConflictException('Expired stock cannot be received into sellable inventory');
@@ -548,6 +551,7 @@ export class ProcurementService {
         batchNumber: line.batchNumber,
         expiryDate: line.expiryDate,
         salePricePerBaseUnit: line.salePricePerBaseUnit,
+        maximumRetailPrice: line.maximumRetailPricePerBaseUnit ?? null,
       }));
       const lockedItems = await transaction<Array<{ id: string }>>`
         select items.id::text
@@ -555,7 +559,7 @@ export class ProcurementService {
         join jsonb_to_recordset(${transaction.json(receiptLines)}) as input(
           "purchaseOrderItemId" text, "receivedQuantity" text,
           "receivedBonusQuantity" text, "batchNumber" text,
-          "expiryDate" text, "salePricePerBaseUnit" text
+          "expiryDate" text, "salePricePerBaseUnit" text, "maximumRetailPrice" text
         ) on input."purchaseOrderItemId"::bigint = items.id
         where items.purchase_order_id = ${order.id}
         order by items.id
@@ -580,11 +584,12 @@ export class ProcurementService {
             "receivedQuantity"::numeric as received_quantity,
             "receivedBonusQuantity"::numeric as received_bonus_quantity,
             "batchNumber" as batch_number, "expiryDate"::date as expiry_date,
-            "salePricePerBaseUnit"::numeric as sale_price
+            "salePricePerBaseUnit"::numeric as sale_price,
+            "maximumRetailPrice"::numeric as maximum_retail_price
           from jsonb_to_recordset(${transaction.json(receiptLines)}) as rows(
             "purchaseOrderItemId" text, "receivedQuantity" text,
             "receivedBonusQuantity" text, "batchNumber" text,
-            "expiryDate" text, "salePricePerBaseUnit" text
+            "expiryDate" text, "salePricePerBaseUnit" text, "maximumRetailPrice" text
           )
         ), updated_items as (
           update purchase_order_items items set
@@ -598,7 +603,8 @@ export class ProcurementService {
           returning items.id, items.medicine_id, items.ordered_qty, items.bonus_qty,
             items.unit_cost, items.line_discount, items.base_units_per_order_unit,
             input.received_quantity, input.received_bonus_quantity,
-            input.batch_number, input.expiry_date, input.sale_price
+            input.batch_number, input.expiry_date, input.sale_price,
+            input.maximum_retail_price
         ), prepared as (
           select updated_items.*,
             (received_quantity + received_bonus_quantity) * base_units_per_order_unit
@@ -610,14 +616,25 @@ export class ProcurementService {
         ), upserted_batches as (
           insert into inventory_batches (
             branch_id, medicine_id, purchase_order_item_id, batch_number, expiry_date,
-            cost_price, sale_price, current_qty, status
+            cost_price, sale_price, maximum_retail_price, current_qty, status
           )
           select ${user.branchId}, medicine_id, id, batch_number, expiry_date,
-            effective_cost, sale_price, received_base_quantity, 'SELLABLE'
+            effective_cost, sale_price, maximum_retail_price, received_base_quantity, 'SELLABLE'
           from prepared order by id
           on conflict on constraint inventory_batches_acquisition_lot_key do update set
             current_qty = inventory_batches.current_qty + excluded.current_qty,
-            sale_price = excluded.sale_price, status = 'SELLABLE', deleted_at = null
+            sale_price = excluded.sale_price,
+            maximum_retail_price = coalesce(
+              excluded.maximum_retail_price, inventory_batches.maximum_retail_price
+            ),
+            -- More units of a lot that was quarantined or recalled must not make the whole
+            -- lot sellable again; only a depleted lot returns to sale.
+            status = case
+              when inventory_batches.status in ('QUARANTINE', 'RECALLED')
+                then inventory_batches.status
+              else 'SELLABLE'
+            end,
+            deleted_at = null
           returning id, purchase_order_item_id, current_qty
         ), receipt_items as (
           insert into goods_receipt_items (
@@ -652,6 +669,31 @@ export class ProcurementService {
       if ((batchResult?.processed_count ?? 0) !== receiptLines.length) {
         throw new ConflictException('Receipt quantity exceeds the outstanding ordered quantity');
       }
+      // Every retail price a batch has carried is on its price history, including the first.
+      await transaction`
+        insert into inventory_batch_price_history (
+          branch_id, inventory_batch_id, old_sale_price, new_sale_price,
+          old_maximum_retail_price, new_maximum_retail_price, change_type, reason,
+          performed_by_user_id
+        )
+        select distinct on (batches.id) batches.branch_id, batches.id,
+          latest.new_sale_price, batches.sale_price,
+          latest.new_maximum_retail_price, batches.maximum_retail_price,
+          case when latest.id is null then 'INITIAL' else 'MANUAL' end,
+          ${`Goods receipt ${receipt.id}`}, ${user.id}
+        from goods_receipt_items receipt_items
+        join inventory_batches batches on batches.id = receipt_items.inventory_batch_id
+        left join lateral (
+          select id, new_sale_price, new_maximum_retail_price
+          from inventory_batch_price_history
+          where inventory_batch_id = batches.id order by id desc limit 1
+        ) latest on true
+        where receipt_items.goods_receipt_id = ${receipt.id}
+          and (latest.id is null
+            or latest.new_sale_price is distinct from batches.sale_price
+            or latest.new_maximum_retail_price is distinct from batches.maximum_retail_price)
+        order by batches.id
+      `;
       const [completion] = await transaction<Array<{ complete: boolean }>>`
         select not exists (
           select 1 from purchase_order_items where purchase_order_id = ${order.id}
@@ -690,6 +732,83 @@ export class ProcurementService {
     });
   }
 
+  /** Suppliers a purchaser may order from; maintained under Administration. */
+  async listActiveSuppliers(
+    branchId: string,
+  ): Promise<{ readonly data: readonly Record<string, unknown>[] }> {
+    const data = await this.database<Array<Record<string, unknown>>>`
+      select id::text, code, name, phone, address, lead_time_days as "leadTimeDays",
+        is_active as "isActive"
+      from suppliers
+      where branch_id = ${branchId} and deleted_at is null and is_active
+      order by name, id
+    `;
+    return { data };
+  }
+
+  async cancelPurchaseOrder(
+    user: AuthenticatedUser,
+    purchaseOrderId: bigint,
+    input: CancelPurchaseOrderRequest,
+  ): Promise<Record<string, unknown>> {
+    return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'PROCUREMENT.CANCEL_PURCHASE_ORDER',
+        user.branchId,
+        input.clientRequestId,
+      );
+      const order = await this.lockPurchaseOrder(transaction, user.branchId, purchaseOrderId);
+      const [replay] = await transaction<Array<{ id: string }>>`
+        select id::text from purchase_orders
+        where id = ${order.id} and cancel_client_request_id = ${input.clientRequestId}
+      `;
+      if (replay) {
+        return {
+          ...(await this.getPurchaseOrderWith(transaction, user.branchId, order.id)),
+          idempotentReplay: true,
+        };
+      }
+      if (order.status !== 'DRAFT' && order.status !== 'ORDERED') {
+        throw new ConflictException(
+          'Only an order with nothing received can be cancelled; close it by receiving the rest',
+        );
+      }
+      const [received] = await transaction<Array<{ any_received: boolean }>>`
+        select exists (select 1 from goods_receipts where purchase_order_id = ${order.id})
+          as any_received
+      `;
+      if (received?.any_received) {
+        throw new ConflictException('Goods have been received against this order');
+      }
+      await transaction`
+        update purchase_orders set status = 'CANCELLED', cancelled_at = now(),
+          cancelled_by_user_id = ${user.id}, cancel_reason = ${input.reason},
+          cancel_client_request_id = ${input.clientRequestId}
+        where id = ${order.id}
+      `;
+      await transaction`
+        update reorder_suggestions set status = 'SUPERSEDED'
+        where draft_purchase_order_id = ${order.id}
+          and status in ('DRAFT_PO', 'APPROVED', 'ORDERED')
+      `;
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id, request_id,
+          metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId}, 'PURCHASE_ORDER.CANCELLED',
+          'purchase_order', ${order.id}, ${input.clientRequestId},
+          ${transaction.json({ reason: input.reason, previousStatus: order.status })}
+        )
+      `;
+      return {
+        ...(await this.getPurchaseOrderWith(transaction, user.branchId, order.id)),
+        idempotentReplay: false,
+      };
+    });
+  }
+
   private async lockPurchaseOrder(
     transaction: DatabaseTransaction,
     branchId: string,
@@ -712,7 +831,8 @@ export class ProcurementService {
     const [order] = await transaction<Array<Record<string, unknown>>>`
       select orders.id::text, orders.order_number, orders.status, orders.supplier_invoice_number,
         orders.total_cost::text, suppliers.id::text as supplier_id,
-        suppliers.name as supplier_name, orders.ordered_at, orders.received_at, orders.created_at
+        suppliers.name as supplier_name, orders.ordered_at, orders.received_at, orders.created_at,
+        orders.cancelled_at, orders.cancel_reason
       from purchase_orders orders join suppliers on suppliers.id = orders.supplier_id
       where orders.id = ${purchaseOrderId} and orders.branch_id = ${branchId}
     `;

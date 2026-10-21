@@ -534,3 +534,184 @@ export interface CatalogImportResult {
   readonly issues: readonly CatalogImportIssue[];
   readonly idempotentReplay: boolean;
 }
+
+export type StockStatus = 'OK' | 'LOW' | 'OUT' | 'EXPIRING';
+
+export interface StockOverviewRow {
+  readonly medicineId: string;
+  readonly name: string;
+  readonly genericName: string | null;
+  readonly strength: string | null;
+  readonly manufacturer: string | null;
+  readonly sku: string | null;
+  readonly barcode: string | null;
+  /** Sellable, unexpired stock on hand. */
+  readonly sellableQuantity: string;
+  /** Held by open counter reservations; not yet sold. */
+  readonly reservedQuantity: string;
+  readonly availableQuantity: string;
+  readonly quarantinedQuantity: string;
+  readonly expiredQuantity: string;
+  readonly nearestExpiry: string | null;
+  readonly daysToExpiry: number | null;
+  readonly salePrice: string | null;
+  readonly valueAtCost: string;
+  readonly valueAtRetail: string;
+  readonly minimumStock: string | null;
+  readonly averageDailySales: string;
+  readonly daysOfCover: string | null;
+  readonly status: StockStatus;
+}
+
+export interface StockOverview {
+  readonly data: readonly StockOverviewRow[];
+  readonly totals: {
+    readonly matching: number;
+    readonly valueAtCost: string;
+    readonly valueAtRetail: string;
+    readonly low: number;
+    readonly out: number;
+    readonly expiring: number;
+  };
+}
+
+export interface MedicineStockDetail {
+  readonly medicine: StockOverviewRow & { readonly unitName: string; readonly packSize: string };
+  readonly policy: {
+    readonly minimumStock: string;
+    readonly preferredSupplierId: string | null;
+    readonly preferredSupplierName: string | null;
+    readonly leadTimeDays: number;
+    readonly safetyDays: number;
+    readonly targetCoverageDays: number;
+    readonly minimumOrderQuantity: string;
+    readonly orderMultiple: string;
+    readonly isActive: boolean;
+  } | null;
+  readonly batches: ReadonlyArray<{
+    readonly id: string;
+    readonly batchNumber: string;
+    readonly expiryDate: string;
+    readonly daysToExpiry: number;
+    readonly status: string;
+    readonly currentQuantity: string;
+    readonly costPrice: string;
+    readonly salePrice: string;
+    readonly maximumRetailPrice: string | null;
+    readonly receivedAt: string;
+    readonly source: string;
+  }>;
+  readonly movements: ReadonlyArray<{
+    readonly id: string;
+    readonly batchNumber: string;
+    readonly movementType: string;
+    readonly quantityDelta: string;
+    readonly quantityAfter: string;
+    readonly reason: string | null;
+    readonly performedBy: string | null;
+    readonly createdAt: string;
+  }>;
+}
+
+export interface ImportIssue {
+  readonly row: number;
+  readonly field: string;
+  readonly message: string;
+}
+
+export interface OpeningStockImportResult {
+  readonly mode: 'VALIDATE' | 'APPLY';
+  readonly applied: boolean;
+  readonly totalRows: number;
+  readonly accepted: number;
+  readonly rejected: number;
+  readonly totalQuantity: string;
+  readonly valueAtCost: string;
+  readonly issues: readonly ImportIssue[];
+  readonly idempotentReplay: boolean;
+}
+
+export type ReportColumnType =
+  'text' | 'date' | 'datetime' | 'money' | 'quantity' | 'count' | 'percent';
+
+export interface ReportColumn {
+  readonly key: string;
+  readonly label: string;
+  readonly type: ReportColumnType;
+}
+
+export type ReportCell = string | number | boolean | null;
+
+/**
+ * Every operational report has the same shape so it renders, totals, and exports the same
+ * way. Money and quantities are exact decimal strings; dates are branch-local.
+ */
+export interface TabularReport {
+  readonly report: string;
+  readonly title: string;
+  readonly dataBasis: string;
+  readonly from: string | null;
+  readonly to: string | null;
+  readonly columns: readonly ReportColumn[];
+  readonly rows: ReadonlyArray<Readonly<Record<string, ReportCell>>>;
+  readonly totals: Readonly<Record<string, ReportCell>> | null;
+}
+
+export type TabularReportName =
+  | 'daily-sales'
+  | 'profit'
+  | 'item-sales'
+  | 'returns-register'
+  | 'cash-sessions'
+  | 'stock-valuation'
+  | 'expiry'
+  | 'purchases'
+  | 'stock-losses';
+
+export interface OwnerDashboard {
+  readonly date: string;
+  readonly generatedAt: string;
+  readonly sales: {
+    readonly invoiceCount: number;
+    readonly grossSales: string;
+    readonly discounts: string;
+    readonly refunds: string;
+    readonly netSales: string;
+    readonly costOfGoods: string;
+    readonly grossProfit: string;
+    readonly averageTicket: string;
+    readonly cash: string;
+    readonly card: string;
+    readonly bankTransfer: string;
+    readonly credit: string;
+    readonly creditCollected: string;
+  };
+  readonly trend: ReadonlyArray<{
+    readonly date: string;
+    readonly netSales: string;
+    readonly grossProfit: string;
+    readonly invoiceCount: number;
+  }>;
+  readonly topItems: ReadonlyArray<{
+    readonly medicineId: string;
+    readonly name: string;
+    readonly quantity: string;
+    readonly netSales: string;
+  }>;
+  readonly position: {
+    readonly receivables: string;
+    readonly stockValueAtCost: string;
+    readonly expiryValueAtRisk: string;
+    readonly lowStockCount: number;
+    readonly outOfStockCount: number;
+    readonly openCashSessions: number;
+    readonly pendingReturns: number;
+    readonly pendingVariances: number;
+    readonly failedFiscalSubmissions: number;
+    readonly openAlerts: number;
+  };
+  readonly continuity: {
+    readonly lastSuccessfulBackupAt: string | null;
+    readonly lastRestoreDrillAt: string | null;
+  };
+}

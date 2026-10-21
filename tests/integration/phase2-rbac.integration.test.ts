@@ -7,7 +7,7 @@ import { createIntegrationApi, type IntegrationApi } from './harness/api.js';
 import { createIsolatedDatabase, type IsolatedDatabase } from './harness/database.js';
 
 interface RouteCase {
-  readonly method: 'GET' | 'POST';
+  readonly method: 'GET' | 'POST' | 'PUT';
   readonly name: string;
   readonly payload?: Record<string, unknown>;
   readonly url: string;
@@ -135,6 +135,51 @@ const routes: readonly RouteCase[] = [
     url: '/api/v1/owner-ai/chat',
   },
   { method: 'GET', name: 'failed jobs', url: '/api/v1/operations/jobs/failed' },
+  { method: 'GET', name: 'return queue', url: '/api/v1/returns' },
+  { method: 'GET', name: 'return by invoice', url: '/api/v1/returns/invoices/NONE-0001' },
+  {
+    method: 'POST',
+    name: 'return rejection',
+    payload: { reason: 'P0 matrix' },
+    url: '/api/v1/returns/1/reject',
+  },
+  { method: 'GET', name: 'purchasable suppliers', url: '/api/v1/suppliers' },
+  {
+    method: 'POST',
+    name: 'purchase-order cancel',
+    payload: { clientRequestId: 'p0-cancel-po', reason: 'P0 matrix' },
+    url: '/api/v1/purchase-orders/1/cancel',
+  },
+  { method: 'GET', name: 'stock overview', url: '/api/v1/stock' },
+  { method: 'GET', name: 'medicine stock detail', url: '/api/v1/stock/medicines/1' },
+  {
+    method: 'PUT',
+    name: 'reorder policy',
+    payload: { minimumStock: '1' },
+    url: '/api/v1/stock/medicines/1/reorder-policy',
+  },
+  {
+    method: 'POST',
+    name: 'opening stock import',
+    payload: {
+      clientRequestId: 'p0-opening-stock',
+      mode: 'VALIDATE',
+      rows: [
+        {
+          batchNumber: 'B',
+          costPrice: '1',
+          expiryDate: '2030-01-01',
+          quantity: '1',
+          salePrice: '1',
+          sku: 'X',
+        },
+      ],
+    },
+    url: '/api/v1/stock/opening-stock/import',
+  },
+  { method: 'POST', name: 'cancel counter draft', url: '/api/v1/pos/drafts/1/cancel' },
+  { method: 'GET', name: 'tabular report', url: '/api/v1/reports/tables/daily-sales' },
+  { method: 'GET', name: 'live owner dashboard', url: '/api/v1/dashboard/overview' },
 ];
 
 describe('Phase 2 endpoint RBAC matrix', () => {
