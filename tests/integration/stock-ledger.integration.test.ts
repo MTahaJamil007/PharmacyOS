@@ -36,7 +36,8 @@ async function seedIdentity(database: IsolatedDatabase): Promise<LedgerFixture> 
       branchId: branch.id,
       displayName: 'Ledger Actor',
       id: actor.id,
-      permissions: [],
+      // Cash refunds need their own authority; the refund tests exercise that path.
+      permissions: ['returns.refund_cash'],
       sessionId: 'direct-ledger-integration-test',
       terminalId: terminal.id,
       username: 'ledger-actor',
@@ -93,6 +94,50 @@ describe('stock ledger integrity', () => {
 
   afterAll(async () => {
     await database.dispose();
+  });
+
+  it('accepts a batch changed more than once in one transaction when the final state reconciles', async () => {
+    const medicineId = await createMedicine(database, 'Ledger Multi Change Medicine');
+    const batchId = await database.admin.begin(async (transaction) => {
+      const [batch] = await transaction<{ id: string }[]>`
+        insert into inventory_batches (
+          branch_id, medicine_id, batch_number, expiry_date, cost_price, sale_price, current_qty
+        ) values (
+          ${fixture.branchId}, ${medicineId}, 'LEDGER-MULTI', current_date + 365, 10, 20, 5
+        ) returning id::text
+      `;
+      if (!batch) throw new Error('Failed to create multi-change fixture');
+      await transaction`
+        insert into stock_movements (
+          branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after
+        ) values (${fixture.branchId}, ${batch.id}, 'ADJUSTMENT_IN', 5, 5)
+      `;
+      for (const after of ['4', '3']) {
+        await transaction`update inventory_batches set current_qty = ${after} where id = ${batch.id}`;
+        await transaction`
+          insert into stock_movements (
+            branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after
+          ) values (${fixture.branchId}, ${batch.id}, 'SALE', -1, ${after})
+        `;
+      }
+      return batch.id;
+    });
+    const [batch] = await database.admin<{ current_qty: string }[]>`
+      select current_qty::text from inventory_batches where id = ${batchId}
+    `;
+    expect(batch?.current_qty).toBe('3.000');
+
+    await expect(
+      database.admin.begin(async (transaction) => {
+        await transaction`update inventory_batches set current_qty = 2 where id = ${batchId}`;
+        await transaction`
+          insert into stock_movements (
+            branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after
+          ) values (${fixture.branchId}, ${batchId}, 'SALE', -1, 2)
+        `;
+        await transaction`update inventory_batches set current_qty = 1 where id = ${batchId}`;
+      }),
+    ).rejects.toMatchObject({ code: '23514' });
   });
 
   it('rejects arithmetic, sign, and direct batch-balance violations in the database', async () => {

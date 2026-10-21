@@ -88,7 +88,7 @@ describe('Phase 6 operations surfaces', () => {
     ] as const) {
       const [terminal] = await database.admin<{ id: string }[]>`
         insert into terminals (branch_id, code, name, terminal_type)
-        values (${branchId}, ${`P6-${token.slice(-6)}`}, 'Phase 6 Terminal', 'CASHIER')
+        values (${branchId}, ${token === OPERATOR_TOKEN ? 'P6-OPERATOR' : 'P6-LIMITED'}, 'Phase 6 Terminal', 'CASHIER')
         returning id::text
       `;
       if (!terminal) throw new Error('Phase 6 terminal fixture failed');
@@ -115,18 +115,62 @@ describe('Phase 6 operations surfaces', () => {
         status: 'FAILED_RETRYABLE',
       },
     ] as const;
+    const [otherTerminal] = await database.admin<{ id: string }[]>`
+      insert into terminals (branch_id, code, name, terminal_type)
+      values (${otherBranch.id}, 'P6B-COUNTER', 'Phase 6 Other Counter', 'CASHIER')
+      returning id::text
+    `;
+    if (!otherTerminal) throw new Error('Phase 6 other-branch terminal fixture failed');
+    const [medicine] = await database.admin<{ id: string }[]>`
+      insert into medicines (name) values ('Phase 6 Fixture Medicine') returning id::text
+    `;
+    if (!medicine) throw new Error('Phase 6 medicine fixture failed');
     const created: string[] = [];
     for (const fixture of fixtures) {
-      const [sale] = await database.admin<{ id: string }[]>`
-        insert into sales (
-          branch_id, terminal_id, invoice_number, status, subtotal, discount_total,
-          tax_total, total
-        ) values (
-          ${fixture.branch},
-          (select id from terminals where branch_id = ${fixture.branch} limit 1),
-          ${fixture.invoice}, 'FINALIZED', 100, 0, 0, 100
-        ) returning id::text
-      `;
+      // A sale must carry its cashier, till, draft, and at least one reconciled line.
+      const sale = await database.admin.begin(async (transaction) => {
+        const [terminal] = await transaction<{ id: string }[]>`
+          select id::text from terminals where branch_id = ${fixture.branch} order by id limit 1
+        `;
+        if (!terminal) throw new Error('Phase 6 terminal lookup failed');
+        const [batch] = await transaction<{ id: string }[]>`
+          insert into inventory_batches (
+            branch_id, medicine_id, batch_number, expiry_date, cost_price, sale_price, current_qty
+          ) values (
+            ${fixture.branch}, ${medicine.id}, ${`B-${fixture.invoice}`},
+            current_date + 365, 50, 100, 0
+          ) returning id::text
+        `;
+        const [cashSession] = await transaction<{ id: string }[]>`
+          insert into cash_sessions (
+            branch_id, terminal_id, cashier_user_id, opening_float, status, closed_at
+          ) values (${fixture.branch}, ${terminal.id}, ${operator.id}, 0, 'CLOSED', now())
+          returning id::text
+        `;
+        const [draft] = await transaction<{ id: string }[]>`
+          insert into sale_drafts (
+            branch_id, terminal_id, salesperson_user_id, status, subtotal, total
+          ) values (${fixture.branch}, ${terminal.id}, ${operator.id}, 'PAID', 100, 100)
+          returning id::text
+        `;
+        if (!batch || !cashSession || !draft) throw new Error('Phase 6 sale fixture failed');
+        const [inserted] = await transaction<{ id: string }[]>`
+          insert into sales (
+            branch_id, terminal_id, cashier_user_id, cash_session_id, sale_draft_id,
+            invoice_number, client_request_id, status, subtotal, discount_total, tax_total, total
+          ) values (
+            ${fixture.branch}, ${terminal.id}, ${operator.id}, ${cashSession.id}, ${draft.id},
+            ${fixture.invoice}, ${`request-${fixture.invoice}`}, 'PAID', 100, 0, 0, 100
+          ) returning id::text
+        `;
+        if (!inserted) throw new Error('Phase 6 sale fixture failed');
+        await transaction`
+          insert into sale_items (
+            sale_id, medicine_id, inventory_batch_id, quantity, unit_price, unit_cost, line_total
+          ) values (${inserted.id}, ${medicine.id}, ${batch.id}, 1, 100, 50, 100)
+        `;
+        return inserted;
+      });
       if (!sale) throw new Error('Phase 6 sale fixture failed');
       const [invoice] = await database.admin<{ id: string }[]>`
         insert into fbr_invoices (sale_id, mode, status, payload, fiscal_invoice_number)
