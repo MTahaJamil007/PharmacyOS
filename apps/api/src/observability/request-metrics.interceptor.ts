@@ -2,6 +2,7 @@ import {
   type CallHandler,
   type ExecutionContext,
   HttpException,
+  Inject,
   Injectable,
   type NestInterceptor,
 } from '@nestjs/common';
@@ -13,7 +14,9 @@ import { MetricsService } from './metrics.service.js';
 
 @Injectable()
 export class RequestMetricsInterceptor implements NestInterceptor {
-  constructor(private readonly metrics: MetricsService) {}
+  // Injected by token: the dev and test runners transpile without decorator metadata, so a
+  // constructor type alone would resolve to undefined and the response would never complete.
+  constructor(@Inject(MetricsService) private readonly metrics: MetricsService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const started = process.hrtime.bigint();

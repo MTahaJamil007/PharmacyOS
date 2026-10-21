@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { LoginResponse, MedicineSearchResult } from './api';
+import { rememberDeviceTerminalCode } from './deviceTerminal';
 
 const SESSION_KEY = 'pharmacy-session';
 const CART_KEY = 'pharmacy-counter-cart-v1';
@@ -83,8 +84,10 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
   session: storedSession,
   ...storedCart,
   setSession: (session) => {
-    if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    else localStorage.removeItem(SESSION_KEY);
+    if (session) {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      rememberDeviceTerminalCode(session.user.terminalCode);
+    } else localStorage.removeItem(SESSION_KEY);
     set({ session });
   },
   addMedicine: (medicine, quantity = 1) =>

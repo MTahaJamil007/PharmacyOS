@@ -1,0 +1,13 @@
+Item Code,Brand Name,Generic,Strength,Form,Pack,Unit,MRP,Trade Price,Company,Rx,Tax
+PK-0001,Panadol Tablets,Paracetamol,500 mg,tablet,20,tablet,75.36,60.29,GSK Pakistan,no,0
+PK-0002,Augmentin 625mg Tablets,Amoxicillin + Clavulanic Acid,625 mg,tablet,6,tablet,486.50,389.20,GSK Pakistan,yes,0
+PK-0003,Brufen Tablets,Ibuprofen,400 mg,tablet,20,tablet,168.00,134.40,Abbott Pakistan,no,0
+PK-0004,Risek Capsules,Omeprazole,20 mg,capsule,14,capsule,338.94,271.15,Getz Pharma,no,0
+PK-0005,Glucophage Tablets,Metformin,500 mg,tablet,50,tablet,215.60,172.48,Merck Pakistan,yes,0
+PK-0006,Ventolin Inhaler,Salbutamol,100 mcg,inhaler,1,inhaler,499.00,399.20,GSK Pakistan,yes,0
+PK-0007,Calpol Syrup,Paracetamol,120 mg/5 ml,syrup,1,bottle,124.50,99.60,GSK Pakistan,no,0
+PK-0008,Flagyl Tablets,Metronidazole,400 mg,tablet,30,tablet,198.75,159.00,Sanofi Pakistan,yes,0
+PK-0009,Zantac Tablets,Ranitidine,150 mg,tablet,20,tablet,145.20,116.16,GSK Pakistan,no,0
+PK-0010,Amoxil Capsules,Amoxicillin,500 mg,capsule,12,capsule,289.30,231.44,GSK Pakistan,yes,0
+PK-0011,Lipitor Tablets,Atorvastatin,20 mg,tablet,14,tablet,612.00,489.60,Viatris Pakistan,yes,0
+PK-0012,Concor Tablets,Bisoprolol,5 mg,tablet,20,tablet,374.15,299.32,Merck Pakistan,yes,0

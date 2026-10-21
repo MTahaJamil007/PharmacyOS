@@ -42,6 +42,9 @@
 ## Quality and security
 
 - Do not weaken lint, type, test, or build gates to make a change pass.
+- Nest-managed constructors must name their dependency with `@Inject(Token)`. The development and
+  test runners transpile with esbuild, which emits no `design:paramtypes`, so a parameter typed only
+  by its class resolves to `undefined` at runtime even though `tsc` builds it correctly.
 - Pin production-path dependencies exactly.
 - Prefer the smallest compatible dependency set; document version constraints.
 - Rotate local secrets with `npm run secrets:rotate-local`; never print their values.

@@ -88,17 +88,58 @@ export class ApiError extends Error {
   }
 }
 
+interface ErrorBody {
+  readonly message?: unknown;
+  readonly formErrors?: unknown;
+  readonly fieldErrors?: unknown;
+}
+
+function messageList(value: unknown): readonly string[] {
+  if (typeof value === 'string') return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * Turns a rejected response into something an operator can act on. A validated endpoint answers
+ * with Zod's flattened field errors and no `message`, so reporting only `message` would hide the
+ * one thing the operator needs to change.
+ */
+export function describeApiError(body: ErrorBody | null, status: number): string {
+  const fieldErrors =
+    typeof body?.fieldErrors === 'object' && body.fieldErrors !== null
+      ? (body.fieldErrors as Record<string, unknown>)
+      : {};
+  const details = [
+    ...messageList(body?.formErrors),
+    ...Object.entries(fieldErrors).flatMap(([field, messages]) =>
+      messageList(messages).map((message) => `${field}: ${message}`),
+    ),
+  ];
+  if (details.length > 0) return details.join('; ');
+  const message = messageList(body?.message);
+  return message.length > 0 ? message.join('; ') : `Request failed (${status})`;
+}
+
 async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...init.headers },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: { 'content-type': 'application/json', ...init.headers },
+    });
+  } catch {
+    throw new ApiError(
+      `Cannot reach the pharmacy service at ${API_URL}. Check that it is running.`,
+      0,
+    );
+  }
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as { message?: string } | null;
+    const error = (await response.json().catch(() => null)) as ErrorBody | null;
     if (response.status === 401 && path !== '/auth/login') {
       window.dispatchEvent(new CustomEvent('pharmacy:unauthorized'));
     }
-    throw new ApiError(error?.message ?? `Request failed (${response.status})`, response.status);
+    throw new ApiError(describeApiError(error, response.status), response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -110,14 +151,21 @@ function authenticatedRequest<T>(token: string, path: string, init: RequestInit 
   });
 }
 
+export interface TerminalPreference {
+  /** Binds the session to exactly this terminal; sign-in fails when it cannot be used. */
+  readonly terminalCode?: string;
+  /** Terminal this device opened last; the server chooses another when it no longer applies. */
+  readonly preferredTerminalCode?: string;
+}
+
 export function login(
   username: string,
   password: string,
-  terminalCode: string,
+  terminal: TerminalPreference = {},
 ): Promise<LoginResponse> {
   return request<LoginResponse>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password, terminalCode }),
+    body: JSON.stringify({ username, password, ...terminal }),
   });
 }
 

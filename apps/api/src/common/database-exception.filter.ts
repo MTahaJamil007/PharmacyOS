@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Catch,
   ConflictException,
+  Inject,
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -43,7 +44,9 @@ export function mapDatabaseException(error: unknown): HttpException | undefined 
 @Catch()
 @Injectable()
 export class DatabaseExceptionFilter extends BaseExceptionFilter {
-  constructor(adapterHost: HttpAdapterHost) {
+  // Injected by token: the dev and test runners transpile without decorator metadata, so
+  // constructor types alone would resolve to undefined.
+  constructor(@Inject(HttpAdapterHost) adapterHost: HttpAdapterHost) {
     super(adapterHost.httpAdapter);
   }
 

@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 
 import { importCatalog, type CatalogImportResult } from '../../api';
 import { usePharmacyStore } from '../../store';
-import { parseCatalogFile, type CatalogFileParseResult } from './catalog-csv';
+import { parseCatalogFile, type CatalogFileParseResult } from '@pharmacy/shared';
 
 const MAX_ROWS = 2000;
 

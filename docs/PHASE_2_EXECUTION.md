@@ -123,3 +123,134 @@ On this Windows host, Playwright used the installed Chrome binary because the pi
 ## Gate status
 
 The Phase 2 exit gate is **passed**. The complete P0 suite passed locally and in [GitHub Actions run 33427582589](https://github.com/MTahaJamil007/PharmacyOS/actions/runs/33427582589) from a clean Ubuntu clone at commit `4f549af7fe38e0ccf4ad46402871578e18290261`. The first hosted run exposed a web workspace alias that depended on generated local output; commit `4f549af` made that dependency explicit and the repeated hosted gate exited `0`.
+
+## Post-gate change record — 2026-09-26: automatic terminal selection and dependency recovery
+
+### Sign-in no longer asks for a terminal code
+
+`loginSchema` now treats `terminalCode` as optional and accepts an optional `preferredTerminalCode`.
+`AuthService.login` authenticates the account first, then resolves the terminal in a fixed order:
+
+1. `terminalCode`, when supplied, binds the session to exactly that terminal and fails the sign-in
+   when the account may not use it. The response stays the generic `Invalid credentials or terminal`.
+2. `preferredTerminalCode` — the terminal the browser last opened — is used when it still resolves
+   and is silently ignored when it does not, so a renamed or deactivated terminal cannot lock a
+   device out.
+3. Otherwise the terminal is chosen for the account: the terminal it opened most recently, then the
+   first active terminal ordered by type (`SALES_COUNTER`, `CASHIER`, other), code, branch, and
+   terminal id.
+
+Every path still requires an active terminal in an active branch where the account holds a
+`user_branch_roles` row, and duplicate terminal codes still bind deterministically by branch and
+terminal id. An authenticated account with no usable terminal receives `401` with
+`No active terminal is available for this account`. `AUTH.LOGIN_FAILED` and
+`AUTH.LOGIN_RATE_LIMITED` metadata now records `terminalSelection` (`EXPLICIT`, `REMEMBERED`, or
+`AUTOMATIC`) beside the submitted code.
+
+The web client asks only for username and password. It remembers the terminal a device opened in
+`localStorage` under `pharmacy-device-terminal`, sends it as a preference, and keeps a
+`Change terminal` control for the multi-terminal case. The re-authentication dialog binds to the
+terminal that already holds the counter's work instead of offering an editable field.
+
+### Dependency recovery
+
+`npm audit fix --force` had moved `@nestjs/platform-fastify` to `12.1.0` against NestJS 11, which
+broke API boot with `ERR_MODULE_NOT_FOUND` for `@nestjs/common/internal`. The dependency is pinned
+back to `11.2.3`. No `11.x` release ships a patched Fastify, so `fastify` is pinned to `5.12.5` in
+`apps/api` with a root `overrides` entry that also replaces the copy `@nestjs/platform-fastify`
+pins; this closes GHSA-w2qp-rph6-63g4 and GHSA-3m5p-2c4r-xxw2 without a major NestJS change.
+`@nestjs/platform-fastify@11.2.3` is now a root `devDependency` because
+`tests/integration/harness/api.ts` imports it directly and previously relied on hoisting.
+
+### Development boot fix
+
+`DatabaseExceptionFilter` injected `HttpAdapterHost` by constructor type only. `tsx` and Vitest
+transpile with esbuild, which emits no `design:paramtypes` metadata, so Nest injected `undefined`
+and `npm run dev` aborted with `Cannot read properties of undefined (reading 'httpAdapter')` even
+though the `tsc` build worked. The dependency is now injected by token, matching the rest of the
+application.
+
+### Commands and exit codes
+
+| Command                    | Exit code | Notes                                                               |
+| -------------------------- | --------- | ------------------------------------------------------------------- |
+| `npm install`              | 0         | `found 0 vulnerabilities`                                           |
+| `npm audit`                | 0         | No advisories reported                                              |
+| `npm run format:check`     | 0         |                                                                     |
+| `npm run lint`             | 0         |                                                                     |
+| `npm run typecheck`        | 0         |                                                                     |
+| `npm run test:unit`        | 0         | 103 tests, including four new `LoginScreen` cases                   |
+| `npm run test:e2e`         | 0         | 14 Playwright tests                                                 |
+| `npm run build`            | 0         |                                                                     |
+| `npm run test:integration` | 1         | No container runtime on this host; Docker Desktop was not available |
+
+`npm run verify` was therefore not completed end to end: its `test:integration` stage cannot run
+without a container runtime.
+
+### Unverified operational assumptions
+
+- The four new cases in `tests/integration/auth-hardening.integration.test.ts` — automatic
+  selection, fallback from an unusable remembered code, rejection of an explicit terminal the
+  account may not use, and the no-terminal message — are written but **not executed**. They require
+  Docker.
+- A live sign-in against the local PostgreSQL instance was not exercised: the host's PostgreSQL 18
+  installation was still in progress, so `/health/ready` and `/auth/login` returned `500` from
+  `ECONNREFUSED`. The API itself booted and mapped every route after the dependency and injection
+  fixes.
+- Terminal memory lives in the browser profile. A shared browser profile moved between physical
+  counters will offer the wrong terminal as its preference until an operator uses
+  `Change terminal`.
+
+## Post-gate change record — 2026-09-26 (second pass): local cluster bootstrap and DI metadata
+
+Signing in on a native (non-container) PostgreSQL installation failed with `500 Internal Server
+Error`. Two further defects were behind it, both independent of the terminal-selection work above.
+
+### The local cluster was never provisioned
+
+`.env` names `pharmacy_app` and database `pharmacy_os`, and the Compose stack creates the role from
+`infra/docker/postgres-init-app-role.sh`. A native PostgreSQL 18 installation has no equivalent
+hook, and the documented steps went straight from "Start PostgreSQL" to `npm run db:migrate`. On
+this host neither the role nor the database existed, so the API failed with `28P01` and the worker
+logged the same error on every loop. `packages/database/src/bootstrap-cluster.ts`
+(`npm run db:bootstrap:local`) now creates the login role and database that `DATABASE_URL` names,
+administering through `DATABASE_ADMIN_URL`. It is idempotent, drops nothing, aligns only the
+password of an existing role, refuses to run with `NODE_ENV=production`, and lets PostgreSQL's own
+`format('%I'/'%L')` quote every identifier and the password, because a utility statement cannot bind
+them as parameters. README step 3 now names the command.
+
+### Successful responses never completed
+
+`RequestMetricsInterceptor` took `MetricsService` as a constructor type without `@Inject`, the same
+defect found in `DatabaseExceptionFilter`. Under `tsx` and Vitest the dependency resolved to
+`undefined`, so `finalize()` threw inside the RxJS pipeline and the reply was never sent: every
+successful request hung, while failures still answered through the exception filter. This is why the
+earlier `500` responses arrived but `/health/live` did not. Both are now injected by token, and
+`AGENTS.md` records the rule. A sweep of `apps/api/src` and `apps/worker/src` found no other
+Nest-managed constructor relying on implicit metadata; `StructuredLogger`, `GeminiProvider`, and the
+worker classes are constructed explicitly.
+
+### Commands and exit codes
+
+| Command                                             | Exit code | Result                                                 |
+| --------------------------------------------------- | --------- | ------------------------------------------------------ |
+| `npm run db:bootstrap:local`                        | 0         | Created role `pharmacy_app` and database `pharmacy_os` |
+| `npm run db:migrate`                                | 0         | Applied migrations 001–015                             |
+| `npm run db:seed`                                   | 0         | Seeded roles and permissions                           |
+| `npm run bootstrap:owner --workspace @pharmacy/api` | 0         | Owner ready on terminal `ADMIN-01` in branch `MAIN`    |
+| `GET /api/v1/health/ready`                          | —         | `{"status":"ready","database":"connected"}`            |
+
+### Live sign-in evidence
+
+Against this cluster, `POST /api/v1/auth/login` behaved as designed:
+
+| Request                          | Response                                                 |
+| -------------------------------- | -------------------------------------------------------- |
+| username and password only       | `201`, opened `ADMIN-01` ("Owner / admin") in branch `1` |
+| `preferredTerminalCode: GONE-99` | `201`, fell back to the automatic choice                 |
+| `terminalCode: GONE-99`          | `401 Invalid credentials or terminal`                    |
+| wrong password                   | `401 Invalid credentials or terminal`                    |
+
+This closes the "live sign-in was not exercised" limitation recorded in the first pass above. The
+integration suite remains unexecuted: it provisions disposable containers and this host has no
+container runtime.

@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 
 import { login } from './api';
+import { forgetDeviceTerminalCode, readDeviceTerminalCode } from './deviceTerminal';
 import { usePharmacyStore } from './store';
 
 export function LoginScreen(): React.JSX.Element {
@@ -8,7 +9,9 @@ export function LoginScreen(): React.JSX.Element {
   const setSession = usePharmacyStore((state) => state.setSession);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [terminalCode, setTerminalCode] = useState('COUNTER-01');
+  const [deviceTerminal, setDeviceTerminal] = useState(() => readDeviceTerminalCode());
+  const [terminalCode, setTerminalCode] = useState('');
+  const [choosingTerminal, setChoosingTerminal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -16,12 +19,37 @@ export function LoginScreen(): React.JSX.Element {
     usernameInput.current?.focus();
   }, []);
 
+  function chooseTerminal(): void {
+    setTerminalCode(deviceTerminal ?? '');
+    setChoosingTerminal(true);
+  }
+
+  function useAutomaticTerminal(): void {
+    setChoosingTerminal(false);
+    setTerminalCode('');
+    setDeviceTerminal(null);
+    forgetDeviceTerminalCode();
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setBusy(true);
     setError(null);
+    const chosen = terminalCode.trim();
     try {
-      setSession(await login(username, password, terminalCode));
+      // An explicitly chosen code binds the session; otherwise this device's last terminal is a
+      // preference only, so the server still opens a working counter when it has moved.
+      setSession(
+        await login(
+          username,
+          password,
+          choosingTerminal && chosen.length > 0
+            ? { terminalCode: chosen }
+            : deviceTerminal === null
+              ? {}
+              : { preferredTerminalCode: deviceTerminal },
+        ),
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Login failed');
     } finally {
@@ -90,10 +118,31 @@ export function LoginScreen(): React.JSX.Element {
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>
-          <label>
-            Terminal code
-            <input value={terminalCode} onChange={(event) => setTerminalCode(event.target.value)} />
-          </label>
+          {choosingTerminal ? (
+            <>
+              <label>
+                Terminal code
+                <input
+                  value={terminalCode}
+                  onChange={(event) => setTerminalCode(event.target.value)}
+                />
+              </label>
+              <p className="form-note">
+                <button className="link-button" type="button" onClick={useAutomaticTerminal}>
+                  Select the terminal automatically
+                </button>
+              </p>
+            </>
+          ) : (
+            <p className="form-note">
+              {deviceTerminal === null
+                ? 'Terminal is selected automatically for this device.'
+                : `This device opens ${deviceTerminal}.`}{' '}
+              <button className="link-button" type="button" onClick={chooseTerminal}>
+                Change terminal
+              </button>
+            </p>
+          )}
           {error ? (
             <p className="form-error" role="alert">
               {error}

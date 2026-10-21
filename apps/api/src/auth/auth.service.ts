@@ -17,6 +17,27 @@ interface LoginThrottleScope {
   readonly type: 'IP' | 'USERNAME';
 }
 
+interface AccountRow {
+  readonly user_id: string;
+  readonly username: string;
+  readonly display_name: string;
+  readonly password_hash: string;
+  readonly locked_until: Date | null;
+}
+
+interface TerminalBinding {
+  readonly branch_id: string;
+  readonly branch_timezone: string;
+  readonly terminal_id: string;
+  readonly terminal_code: string;
+  readonly terminal_name: string;
+}
+
+function terminalSelection(input: LoginRequest): 'EXPLICIT' | 'REMEMBERED' | 'AUTOMATIC' {
+  if (input.terminalCode !== undefined) return 'EXPLICIT';
+  return input.preferredTerminalCode === undefined ? 'AUTOMATIC' : 'REMEMBERED';
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -164,9 +185,94 @@ export class AuthService {
       insert into audit_events (event_type, ip_address, metadata)
       values (
         ${eventType}, ${ipAddress ?? null},
-        ${this.database.json({ username: input.username, terminalCode: input.terminalCode })}
+        ${this.database.json({
+          username: input.username,
+          terminalCode: input.terminalCode ?? input.preferredTerminalCode ?? null,
+          terminalSelection: terminalSelection(input),
+        })}
       )
     `;
+  }
+
+  private async findAccount(username: string): Promise<AccountRow | undefined> {
+    const [account] = await this.database<AccountRow[]>`
+      select users.id::text as user_id, users.username, users.display_name,
+        users.password_hash, users.locked_until
+      from users
+      where lower(users.username) = lower(${username})
+        and users.is_active = true and users.deleted_at is null
+      limit 1
+    `;
+    return account;
+  }
+
+  private async findTerminalByCode(
+    userId: string,
+    terminalCode: string,
+  ): Promise<TerminalBinding | undefined> {
+    const [terminal] = await this.database<TerminalBinding[]>`
+      select terminals.branch_id::text as branch_id, branches.timezone as branch_timezone,
+        terminals.id::text as terminal_id, terminals.code as terminal_code,
+        terminals.name as terminal_name
+      from terminals
+      join branches on branches.id = terminals.branch_id and branches.is_active = true
+      where lower(terminals.code) = lower(${terminalCode}) and terminals.is_active = true
+        and exists (
+          select 1 from user_branch_roles
+          where user_branch_roles.user_id = ${userId}
+            and user_branch_roles.branch_id = terminals.branch_id
+        )
+      order by terminals.branch_id, terminals.id
+      limit 1
+    `;
+    return terminal;
+  }
+
+  /**
+   * Chooses the terminal for a sign-in that named none: the terminal this user opened most
+   * recently, otherwise the first active counter in a branch the user is assigned to.
+   */
+  private async findDefaultTerminal(userId: string): Promise<TerminalBinding | undefined> {
+    const [terminal] = await this.database<TerminalBinding[]>`
+      select terminals.branch_id::text as branch_id, branches.timezone as branch_timezone,
+        terminals.id::text as terminal_id, terminals.code as terminal_code,
+        terminals.name as terminal_name
+      from terminals
+      join branches on branches.id = terminals.branch_id and branches.is_active = true
+      left join (
+        select terminal_id, max(created_at) as last_opened_at
+        from sessions where user_id = ${userId} group by terminal_id
+      ) recent on recent.terminal_id = terminals.id
+      where terminals.is_active = true
+        and exists (
+          select 1 from user_branch_roles
+          where user_branch_roles.user_id = ${userId}
+            and user_branch_roles.branch_id = terminals.branch_id
+        )
+      order by recent.last_opened_at desc nulls last,
+        case terminals.terminal_type
+          when 'SALES_COUNTER' then 0
+          when 'CASHIER' then 1
+          else 2
+        end,
+        terminals.code, terminals.branch_id, terminals.id
+      limit 1
+    `;
+    return terminal;
+  }
+
+  private async resolveTerminal(
+    userId: string,
+    input: LoginRequest,
+  ): Promise<TerminalBinding | undefined> {
+    if (input.terminalCode !== undefined) {
+      return this.findTerminalByCode(userId, input.terminalCode);
+    }
+    if (input.preferredTerminalCode !== undefined) {
+      const preferred = await this.findTerminalByCode(userId, input.preferredTerminalCode);
+      if (preferred) return preferred;
+    }
+    return this.findDefaultTerminal(userId);
   }
 
   async login(input: LoginRequest, ipAddress?: string): Promise<Record<string, unknown>> {
@@ -176,38 +282,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials or terminal');
     }
 
-    const [account] = await this.database<
-      Array<{
-        user_id: string;
-        username: string;
-        display_name: string;
-        password_hash: string;
-        branch_id: string;
-        branch_timezone: string;
-        terminal_id: string;
-        terminal_code: string;
-        terminal_name: string;
-        locked_until: Date | null;
-      }>
-    >`
-      select users.id::text as user_id, users.username, users.display_name, users.password_hash,
-        terminals.branch_id::text as branch_id, branches.timezone as branch_timezone,
-        terminals.id::text as terminal_id, terminals.code as terminal_code,
-        terminals.name as terminal_name, users.locked_until
-      from users
-      join terminals on lower(terminals.code) = lower(${input.terminalCode}) and terminals.is_active = true
-      join branches on branches.id = terminals.branch_id and branches.is_active = true
-      where lower(users.username) = lower(${input.username})
-        and users.is_active = true and users.deleted_at is null
-        and exists (
-          select 1 from user_branch_roles
-          where user_branch_roles.user_id = users.id
-            and user_branch_roles.branch_id = terminals.branch_id
-        )
-      order by terminals.branch_id, terminals.id
-      limit 1
-    `;
-
+    const account = await this.findAccount(input.username);
     const valid = await verify(account?.password_hash ?? DUMMY_PASSWORD_HASH, input.password);
     const accountLocked = account
       ? account.locked_until !== null && account.locked_until > new Date()
@@ -216,6 +291,16 @@ export class AuthService {
       if (account && !valid) await this.recordFailedPassword(account.user_id);
       await this.auditRejectedLogin('AUTH.LOGIN_FAILED', input, ipAddress);
       throw new UnauthorizedException('Invalid credentials or terminal');
+    }
+
+    const terminal = await this.resolveTerminal(account.user_id, input);
+    if (!terminal) {
+      await this.auditRejectedLogin('AUTH.LOGIN_FAILED', input, ipAddress);
+      throw new UnauthorizedException(
+        input.terminalCode === undefined
+          ? 'No active terminal is available for this account'
+          : 'Invalid credentials or terminal',
+      );
     }
 
     const rawToken = randomBytes(32).toString('base64url');
@@ -238,7 +323,7 @@ export class AuthService {
         join role_permissions on role_permissions.role_id = user_branch_roles.role_id
         join permissions on permissions.id = role_permissions.permission_id
         where user_branch_roles.user_id = ${account.user_id}
-          and user_branch_roles.branch_id = ${account.branch_id}
+          and user_branch_roles.branch_id = ${terminal.branch_id}
         order by permissions.code
       `;
       const permissionSnapshot = permissionRows.map((permission) => permission.code);
@@ -247,7 +332,7 @@ export class AuthService {
           user_id, branch_id, terminal_id, token_hash, expires_at, absolute_expires_at,
           permission_snapshot
         ) values (
-          ${account.user_id}, ${account.branch_id}, ${account.terminal_id}, ${tokenHash},
+          ${account.user_id}, ${terminal.branch_id}, ${terminal.terminal_id}, ${tokenHash},
           ${expiresAt}, ${absoluteExpiresAt}, ${permissionSnapshot}
         )
         returning id::text as session_id
@@ -256,7 +341,7 @@ export class AuthService {
       if (!session) throw new Error('Session creation did not return an identifier');
       await transaction`
         insert into audit_events (branch_id, user_id, terminal_id, event_type, entity_type, entity_id, ip_address)
-        values (${account.branch_id}, ${account.user_id}, ${account.terminal_id}, 'AUTH.LOGIN_SUCCEEDED', 'session', ${session.session_id}, ${ipAddress ?? null})
+        values (${terminal.branch_id}, ${account.user_id}, ${terminal.terminal_id}, 'AUTH.LOGIN_SUCCEEDED', 'session', ${session.session_id}, ${ipAddress ?? null})
       `;
       if (usernameScope) {
         await transaction`
@@ -276,11 +361,11 @@ export class AuthService {
         id: account.user_id,
         username: account.username,
         displayName: account.display_name,
-        branchId: account.branch_id,
-        branchTimezone: account.branch_timezone,
-        terminalId: account.terminal_id,
-        terminalCode: account.terminal_code,
-        terminalName: account.terminal_name,
+        branchId: terminal.branch_id,
+        branchTimezone: terminal.branch_timezone,
+        terminalId: terminal.terminal_id,
+        terminalCode: terminal.terminal_code,
+        terminalName: terminal.terminal_name,
         permissions: session.permissions,
       },
     };

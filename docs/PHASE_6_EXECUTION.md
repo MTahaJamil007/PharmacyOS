@@ -163,3 +163,64 @@ Commands run from the repository root on 2026-09-21, Windows 11, Node 22.20.0, n
 **It does not mean** Phase 6 is complete. The exit gate is the `DEVELOPMENT_PLAN.md` Phase 5 release gate, unchanged: **BLOCK** on any authorization bypass, duplicate refund, inventory corruption, unsafe shelf placement, money or rounding error, secret leak, or failed restore. **PILOT** only when all P0 pass, critical P1 journeys pass, performance is acceptable at representative volume, and backup/restore is proven from physical media.
 
 None of those conditions has been evaluated.
+
+---
+
+## 5. Post-gate change record — 2026-09-26: catalog file loading and error reporting
+
+### Validation failures now reach the operator
+
+Creating a user from the administration screen showed only `Request failed (400)`. The API had in
+fact answered with Zod's flattened field errors, and the browser client reported `body.message`,
+which a flattened body does not carry. `describeApiError` in `apps/web/src/api.ts` now composes the
+form and field errors into the reported message, so `password: Too small: expected string to have
+
+> =12 characters` reaches the screen. This applies to every validated endpoint, not only user
+> creation. The create form also states the rules it knows about before submission.
+
+Live evidence: `POST /api/v1/admin/users` with an eight-character password answers `400` with
+`{"formErrors":[],"fieldErrors":{"password":["Too small: expected string to have >=12
+characters"]}}`, which the client now renders verbatim.
+
+### Loading a catalog file
+
+`apps/api/src/load-medicine-file.ts` (`npm run load:medicines --workspace @pharmacy/api`) loads a
+pharmacy, supplier, or regulator catalog file. The catalog itself goes through
+`CatalogImportService`, the same path the administration screen uses, in chunks of 2,000 rows with a
+deterministic client request id per file and chunk, so a repeated run replays instead of
+duplicating. Every row is validated locally against `catalogImportRowSchema` first, so one pass
+reports all rejections. A `CATALOG.FILE_LOADED` audit event records the file name and its SHA-256
+next to the counts, which gives a catalog figure its provenance.
+
+The CSV parser moved from `apps/web/src/modules/administration/catalog-csv.ts` to
+`packages/shared/src/catalog-file.ts` so the screen and the loader cannot diverge, and it now also
+recognizes price and company columns (`MRP`, `Maximum Retail Price`, `Trade Price`, `Company`, and
+similar). Those three fields are named in `NON_CONTRACT_FIELDS`: the catalog contract does not carry
+a price, because a sale price belongs to an inventory batch received into a branch.
+
+`--with-demo-stock` creates one opening batch per priced row, recorded through the append-only stock
+ledger as `ADJUSTMENT_IN` and never disturbing a batch that already has movement history. It is a
+development fixture: it requires `ALLOW_DEVELOPMENT_SEED=true` and refuses to run in production.
+Prices loaded this way are the file's figures, not a pharmacy's own agreed prices.
+
+### Evidence
+
+`docs/examples/medicine-catalog-sample.csv` (12 real Pakistani-market brands, with MRP and trade
+price) was loaded against the local cluster:
+
+| Step                                              | Result                                                           |
+| ------------------------------------------------- | ---------------------------------------------------------------- |
+| `--validate-only`                                 | All 12 columns recognized, 0 ignored, 12 rows would be created   |
+| Load with `--with-demo-stock`                     | 12 medicines created, 12 batches, 12 `ADJUSTMENT_IN` movements   |
+| Second run of the same file                       | Replayed as one `CATALOG.IMPORTED` event; no duplicate medicines |
+| `GET /catalog/medicines/search?query=Paracetamol` | 2 results with price, available quantity, and days to expiry     |
+| `GET /catalog/medicines/search?query=augment`     | `Augmentin 625mg Tablets` at `486.50`, 50 available, 67 days     |
+
+The first attempt at the stock step failed with `operator is not unique: date + unknown`, the same
+untyped-parameter behaviour recorded in Phase 2; the expiry offset is now cast explicitly.
+
+### Limitation
+
+A real Pakistani catalog with DRAP-published prices has not been loaded. The published datasets that
+carry those figures sit behind a Kaggle login, so the operator supplies the file; the loader and its
+column mapping are proven against the sample above, not against that file.

@@ -37,10 +37,15 @@ export const taxRateSchema = z
   .refine((value) => decimalToScaledInteger(value, 2) <= 10_000n, 'Tax rate cannot exceed 100%');
 export const clientRequestIdSchema = z.string().trim().min(8).max(128);
 
+export const terminalCodeSchema = z.string().trim().min(2).max(64);
+
 export const loginSchema = z.object({
   username: z.string().trim().min(3).max(100),
   password: z.string().min(8).max(256),
-  terminalCode: z.string().trim().min(2).max(64),
+  /** Binds the session to exactly this terminal; sign-in fails when it cannot be used. */
+  terminalCode: terminalCodeSchema.optional(),
+  /** Terminal this device opened last. Used when available, ignored when it is not. */
+  preferredTerminalCode: terminalCodeSchema.optional(),
 });
 
 export const medicineSearchSchema = z.object({

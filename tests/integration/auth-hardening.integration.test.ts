@@ -222,6 +222,85 @@ describe('authentication hardening', () => {
     expect(rejected.statusCode).toBe(401);
   });
 
+  it('opens a terminal automatically when the sign-in names none', async () => {
+    await database.admin`delete from auth_login_throttles`;
+    const response = await api.app.inject({
+      method: 'POST',
+      payload: { password: PASSWORD, username: 'auth-cashier' },
+      url: '/api/v1/auth/login',
+    });
+    expect(response.statusCode).toBe(201);
+    const loginUser = responseRecord(response.body).user;
+    if (typeof loginUser !== 'object' || loginUser === null || Array.isArray(loginUser)) {
+      throw new TypeError('Expected login user object');
+    }
+    expect(loginUser).toMatchObject({ branchId, terminalCode: 'COUNTER-01', terminalId });
+    const [event] = await database.admin<Array<{ metadata: Record<string, unknown> }>>`
+      select metadata from audit_events
+      where event_type = 'AUTH.LOGIN_SUCCEEDED' order by id desc limit 1
+    `;
+    expect(event).toBeDefined();
+    await database.admin`delete from auth_login_throttles`;
+  });
+
+  it('falls back to an automatic terminal when the remembered device terminal is unusable', async () => {
+    await database.admin`delete from auth_login_throttles`;
+    const response = await api.app.inject({
+      method: 'POST',
+      payload: {
+        password: PASSWORD,
+        preferredTerminalCode: 'RETIRED-COUNTER',
+        username: 'auth-cashier',
+      },
+      url: '/api/v1/auth/login',
+    });
+    expect(response.statusCode).toBe(201);
+    const loginUser = responseRecord(response.body).user;
+    if (typeof loginUser !== 'object' || loginUser === null || Array.isArray(loginUser)) {
+      throw new TypeError('Expected login user object');
+    }
+    expect(loginUser).toMatchObject({ branchId, terminalId });
+    await database.admin`delete from auth_login_throttles`;
+  });
+
+  it('still rejects a sign-in that names a terminal it may not use', async () => {
+    await database.admin`delete from auth_login_throttles`;
+    const response = await api.app.inject({
+      method: 'POST',
+      payload: { password: PASSWORD, terminalCode: 'RETIRED-COUNTER', username: 'auth-cashier' },
+      url: '/api/v1/auth/login',
+    });
+    expect(response.statusCode).toBe(401);
+    expect(responseRecord(response.body)).toMatchObject({
+      message: 'Invalid credentials or terminal',
+    });
+    await database.admin`delete from auth_login_throttles`;
+  });
+
+  it('reports that no terminal is available for an account without a branch assignment', async () => {
+    const passwordHash = await hash(PASSWORD, {
+      memoryCost: 65_536,
+      parallelism: 1,
+      timeCost: 3,
+      type: 2,
+    });
+    await database.admin`
+      insert into users (username, display_name, password_hash)
+      values ('unassigned-user', 'Unassigned User', ${passwordHash})
+    `;
+    await database.admin`delete from auth_login_throttles`;
+    const response = await api.app.inject({
+      method: 'POST',
+      payload: { password: PASSWORD, username: 'unassigned-user' },
+      url: '/api/v1/auth/login',
+    });
+    expect(response.statusCode).toBe(401);
+    expect(responseRecord(response.body)).toMatchObject({
+      message: 'No active terminal is available for this account',
+    });
+    await database.admin`delete from auth_login_throttles`;
+  });
+
   it('authenticates a zero-permission role and rejects the operation with 403', async () => {
     const response = await api.app.inject({
       headers: { authorization: 'Bearer phase-2-empty-role-token' },

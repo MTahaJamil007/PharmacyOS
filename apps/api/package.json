@@ -8,6 +8,7 @@
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
     "bootstrap:owner": "tsx src/bootstrap-owner.ts",
+    "load:medicines": "tsx src/load-medicine-file.ts",
     "seed:development": "tsx src/seed-development.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -22,7 +23,7 @@
     "@pharmacy/shared": "0.1.0",
     "argon2": "0.45.1",
     "dotenv": "17.4.2",
-    "fastify": "5.11.3",
+    "fastify": "5.12.5",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2"
   }

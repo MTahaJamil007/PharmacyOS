@@ -26,11 +26,45 @@ PharmacyOS is a single-shop, on-premise pharmacy operations platform for Pakista
 
 1. Copy `.env.example` to `.env` and replace every placeholder secret.
 2. Install the locked dependency graph with `npm ci`.
-3. Start PostgreSQL, then run `npm run db:migrate` and `npm run db:seed`.
-4. Create the initial owner with `npm run bootstrap:owner --workspace @pharmacy/api`.
-5. Run `npm run dev`.
+3. Start PostgreSQL. On a native installation the cluster has no application role or database yet,
+   so run `npm run db:bootstrap:local` once: it creates the login role and database that
+   `DATABASE_URL` names, using `DATABASE_ADMIN_URL` for administration. The Compose stack does this
+   from `infra/docker/postgres-init-app-role.sh` instead. The command is idempotent and drops
+   nothing; it refuses to run with `NODE_ENV=production`.
+4. Run `npm run db:migrate` and `npm run db:seed`.
+5. Create the initial owner with `npm run bootstrap:owner --workspace @pharmacy/api`.
+6. Run `npm run dev`.
+
+Sign-in asks only for a username and password. The API selects the terminal: the one that account
+opened most recently, otherwise the first active counter in a branch it is assigned to. The browser
+remembers the terminal it opened and offers `Change terminal` when a counter must be named
+explicitly.
 
 The web client defaults to `http://localhost:5173`. The local API defaults to `http://localhost:3001/api/v1`.
+
+### Loading a medicine catalog file
+
+To load a real catalog — a pharmacy export, a supplier list, or a published price list — save it as
+CSV (export an `.xlsx` to CSV first) and run:
+
+```
+npm run load:medicines --workspace @pharmacy/api -- <path-to-file.csv> --validate-only
+npm run load:medicines --workspace @pharmacy/api -- <path-to-file.csv>
+```
+
+The first command writes nothing and reports which columns were recognized, which were ignored, and
+every row the catalog contract rejects. The second applies the file through the same validated
+import path the administration screen uses, in chunks of 2,000 rows, and records the file name and
+its SHA-256 in the audit trail. Re-running the same file replays idempotently instead of duplicating
+rows. `docs/examples/medicine-catalog-sample.csv` shows an accepted file.
+
+Column headings are matched by meaning, so `Brand Name`, `Generic`, `Strength`, `Form`, `Pack`,
+`MRP`, `Trade Price`, `Company`, `Rx` and similar spellings are understood without renaming
+anything. A catalog row carries no price: a sale price belongs to an inventory batch received into a
+branch. For development only, `--with-demo-stock` also creates one opening batch per priced row
+through the append-only stock ledger, so the counter can ring up a sale; it requires
+`ALLOW_DEVELOPMENT_SEED=true` and refuses to run in production. Use `--quantity` to set the opening
+quantity and `--limit` for a trial run.
 
 For representative non-production data, set `ALLOW_DEVELOPMENT_SEED=true` and a 12-or-more-character `DEVELOPMENT_SEED_PASSWORD`, then run `npm run db:seed:development`. The command refuses to run in production. `infra/scripts/smoke-development-seed.ps1` proves migrations and fixtures against an isolated disposable PostgreSQL container.
 

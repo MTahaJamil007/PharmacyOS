@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeHeading, parseCatalogFile, parseCsv } from './catalog-csv';
+import {
+  NON_CONTRACT_FIELDS,
+  normalizeHeading,
+  parseCatalogFile,
+  parseCsv,
+} from './catalog-file.js';
 
 describe('catalog CSV parsing', () => {
   it('splits quoted fields containing commas, quotes, and newlines', () => {
@@ -74,6 +79,41 @@ describe('catalog file mapping', () => {
   it('upper-cases the storage class so a lower-case export still matches the enum', () => {
     const [row] = parseCatalogFile('name,storage\nInsulin,cold').rows;
     expect(row).toMatchObject({ storageClass: 'COLD' });
+  });
+
+  it('reads the price and company columns a supplier or regulator file carries', () => {
+    const result = parseCatalogFile(
+      [
+        'Item Code,Brand Name,Generic,MRP,Trade Price,Company',
+        'PK-1,Panadol,Paracetamol,75.36,60.29,GSK Pakistan',
+      ].join('\n'),
+    );
+    expect(result.ignoredColumns).toEqual([]);
+    expect(result.rows[0]).toMatchObject({
+      costPrice: '60.29',
+      manufacturerName: 'GSK Pakistan',
+      name: 'Panadol',
+      salePrice: '75.36',
+      sku: 'PK-1',
+    });
+  });
+
+  it('names the fields the catalog contract does not carry', () => {
+    expect([...NON_CONTRACT_FIELDS].sort()).toEqual(['costPrice', 'manufacturerName', 'salePrice']);
+    const [row] = parseCatalogFile(['name,price', 'Panadol,75.36'].join('\n')).rows;
+    const contractRow = Object.fromEntries(
+      Object.entries(row ?? {}).filter(([field]) => !NON_CONTRACT_FIELDS.includes(field)),
+    );
+    expect(contractRow).toEqual({ name: 'Panadol' });
+  });
+
+  it('accepts the price spellings a Pakistani price list uses', () => {
+    for (const heading of ['MRP', 'Maximum Retail Price', 'Retail Price', 'Consumer Price']) {
+      expect(normalizeHeading(heading)).toBe('salePrice');
+    }
+    for (const heading of ['Trade Price', 'Purchase Price', 'Cost Price']) {
+      expect(normalizeHeading(heading)).toBe('costPrice');
+    }
   });
 
   it('returns nothing for an empty file', () => {

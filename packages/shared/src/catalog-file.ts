@@ -36,7 +36,30 @@ const COLUMN_ALIASES: Readonly<Record<string, string>> = {
   uom: 'fbrUom',
   fbrsaletype: 'fbrSaleType',
   saletype: 'fbrSaleType',
+  // Price columns are not part of the catalog import contract, which the server validates and
+  // ignores them. They are recognized here so a stock-loading tool can read the same file.
+  price: 'salePrice',
+  mrp: 'salePrice',
+  maximumretailprice: 'salePrice',
+  retailprice: 'salePrice',
+  saleprice: 'salePrice',
+  sellingprice: 'salePrice',
+  consumerprice: 'salePrice',
+  costprice: 'costPrice',
+  purchaseprice: 'costPrice',
+  tradeprice: 'costPrice',
+  manufacturer: 'manufacturerName',
+  manufacturername: 'manufacturerName',
+  company: 'manufacturerName',
+  companyname: 'manufacturerName',
 };
+
+/** Fields this parser recognizes that the catalog import contract does not carry. */
+export const NON_CONTRACT_FIELDS: readonly string[] = [
+  'salePrice',
+  'costPrice',
+  'manufacturerName',
+];
 
 const BOOLEAN_FIELDS = new Set(['requiresPrescription', 'requiresSecuredStorage']);
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'y', 'rx']);

@@ -26,6 +26,7 @@
     "test:performance": "vitest run --config vitest.performance.config.ts",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
+    "db:bootstrap:local": "npm run bootstrap:cluster --workspace @pharmacy/database",
     "db:migrate": "npm run migrate --workspace @pharmacy/database",
     "db:seed": "npm run seed --workspace @pharmacy/database",
     "db:seed:development": "npm run seed:development --workspace @pharmacy/api",
@@ -37,8 +38,12 @@
     "*": "prettier --check --ignore-unknown",
     "*.{js,mjs,cjs,jsx,ts,tsx}": "eslint --max-warnings 0"
   },
+  "overrides": {
+    "fastify": "5.12.5"
+  },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@nestjs/platform-fastify": "11.2.3",
     "@nestjs/testing": "11.2.3",
     "@playwright/test": "1.62.1",
     "@testing-library/react": "16.3.3",

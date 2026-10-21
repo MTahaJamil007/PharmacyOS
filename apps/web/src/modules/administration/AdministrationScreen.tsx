@@ -40,6 +40,14 @@ const fiscalFields = [
   ['scenarioId', 'Sandbox scenario (SN###)'],
 ] as const satisfies ReadonlyArray<readonly [keyof FiscalSettings, string]>;
 
+/** Server-enforced input rules worth stating before an operator submits the form. */
+const fieldHints: Readonly<Record<string, string>> = {
+  password: 'At least 12 characters.',
+  username: 'At least 3 characters, and unique.',
+  displayName: 'At least 2 characters.',
+  taxRate: 'Percentage with up to two decimals, for example 17 or 17.50.',
+};
+
 const labels: Record<Resource, readonly string[]> = {
   users: ['username', 'displayName', 'password', 'role'],
   medicines: ['name', 'sku', 'barcode', 'hsCode', 'taxRate'],
@@ -264,6 +272,9 @@ export function AdministrationScreen(): React.JSX.Element {
                     }
                   />
                 )}
+                {fieldHints[field] ? (
+                  <small className="field-hint">{fieldHints[field]}</small>
+                ) : null}
               </label>
             ))}
             <button className="primary-button" onClick={() => void create()}>
