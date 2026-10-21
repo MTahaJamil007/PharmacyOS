@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js",
+    "build": "node init && tsc -p tsconfig.build.json",
+    "dev": "node init && tsx watch src/main.ts",
+    "start": "node init && node dist/main.js",
     "bootstrap:owner": "tsx src/bootstrap-owner.ts",
     "seed:development": "tsx src/seed-development.ts",
     "test": "vitest run",

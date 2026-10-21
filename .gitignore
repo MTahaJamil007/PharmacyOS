@@ -1,8 +1,6 @@
 node_modules/
 dist/
 coverage/
-.env
-.env.*
 !.env.example
 .npm-cache*/
 *.log
@@ -15,3 +13,4 @@ infra/docker/secrets/*
 apps/web/.vite/
 playwright-report/
 test-results/
+config.bat
