@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Environment } from '@pharmacy/config';
-import type { Database } from '@pharmacy/database';
+import { toJsonValue, type Database } from '@pharmacy/database';
 import type { AiAssistantAudit, OwnerAiChatRequest } from '@pharmacy/shared';
 import { createHash } from 'node:crypto';
 
@@ -193,11 +193,9 @@ export class OwnerAiService {
         provider, model, status, latency_ms, usage_metadata, error_code
       ) values (
         ${user.branchId}, ${user.id}, ${questionHash}, ${request.tool},
-        ${JSON.stringify(request.arguments, (_key, value: unknown) =>
-          typeof value === 'bigint' ? value.toString() : value,
-        )}::jsonb, ${this.environment.AI_PROVIDER},
+        ${this.database.json(toJsonValue(request.arguments))}, ${this.environment.AI_PROVIDER},
         ${this.environment.AI_ENABLED ? (this.environment.GEMINI_MODEL ?? null) : null}, ${status},
-        ${latencyMs}, ${JSON.stringify(usage)}::jsonb, ${errorCode}
+        ${latencyMs}, ${this.database.json(toJsonValue(usage))}, ${errorCode}
       )
     `;
   }

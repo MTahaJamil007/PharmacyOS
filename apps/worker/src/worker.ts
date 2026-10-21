@@ -1,5 +1,5 @@
 import type { Environment } from '@pharmacy/config';
-import type { Database } from '@pharmacy/database';
+import { toJsonValue, type Database } from '@pharmacy/database';
 
 import { retryDelaySeconds } from './backoff.js';
 import { WorkerHeartbeat } from './heartbeat.js';
@@ -290,7 +290,7 @@ export class DurableWorker {
       const summary = await operation();
       await this.database`
         update scheduled_job_runs set status = 'SUCCEEDED', finished_at = now(),
-          duration_ms = ${Date.now() - started}, result_summary = ${JSON.stringify(summary)}::jsonb
+          duration_ms = ${Date.now() - started}, result_summary = ${this.database.json(toJsonValue(summary))}
         where id = ${run.id}
       `;
     } catch (error) {

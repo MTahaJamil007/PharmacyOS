@@ -119,7 +119,7 @@ function StockTab() {
           label="Stock value at cost"
           icon={Boxes}
           value={formatMoney(totals?.valueAtCost)}
-          hint={`Retail value ${formatMoney(totals?.valueAtRetail)}`}
+          hint={`All units on hand, incl. expired · sellable at retail ${formatMoney(totals?.valueAtRetail)}`}
           onClick={() => choose('ALL')}
           selected={filter === 'ALL'}
         />
