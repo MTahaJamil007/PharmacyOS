@@ -97,6 +97,31 @@ describe('production hardening', () => {
     return { id: order.id, itemId: order.items[0]?.id ?? '' };
   }
 
+  it('lets the web origin send edits (PUT/PATCH) and refuses other origins', async () => {
+    const preflight = await api.app.inject({
+      headers: {
+        'access-control-request-headers': 'authorization,content-type',
+        'access-control-request-method': 'PATCH',
+        origin: 'http://127.0.0.1:5173',
+      },
+      method: 'OPTIONS',
+      url: '/api/v1/admin/medicines/1',
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe('http://127.0.0.1:5173');
+    expect(String(preflight.headers['access-control-allow-methods'])).toContain('PATCH');
+    expect(String(preflight.headers['access-control-allow-methods'])).toContain('PUT');
+
+    const foreign = await api.app.inject({
+      headers: { 'access-control-request-method': 'PATCH', origin: 'http://evil.example' },
+      method: 'OPTIONS',
+      url: '/api/v1/admin/medicines/1',
+    });
+    // A single configured origin is always the one advertised; a browser on any other origin
+    // sees the mismatch and blocks the request.
+    expect(foreign.headers['access-control-allow-origin']).not.toBe('http://evil.example');
+  });
+
   it('lets an inventory manager see suppliers to order from without system settings', async () => {
     await createSupplier('Hardening Distributor');
     const manager = await sessionFor(

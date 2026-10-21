@@ -95,7 +95,9 @@ export interface ShelfRecommendation {
 
 export interface ReorderSuggestion {
   readonly id: string;
+  readonly medicine_id: string;
   readonly medicine_name: string;
+  readonly draft_purchase_order_id: string | null;
   readonly status: string;
   readonly current_sellable_stock: string;
   readonly suggested_qty: string;

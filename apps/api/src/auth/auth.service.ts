@@ -201,6 +201,26 @@ export class AuthService {
     const usernameScope = throttleScopes.find((scope) => scope.type === 'USERNAME');
 
     const session = await this.database.begin(async (transaction) => {
+      // Only failed attempts count toward the per-IP limit: a successful sign-in gives back
+      // the attempt it consumed, so staff switching accounts on one terminal never lock that
+      // terminal out. (The username scope is cleared below.) The IP advisory lock sorts first
+      // in consumeLoginAttempt as well, so lock order is unchanged.
+      const ipScope = throttleScopes.find((scope) => scope.type === 'IP');
+      if (ipScope) {
+        await transaction`select pg_advisory_xact_lock(hashtextextended(${ipScope.lockKey}, 0))`;
+        // attempt_count must stay positive, so the last outstanding attempt removes the row.
+        await transaction`
+          delete from auth_login_throttles
+          where scope_type = 'IP' and scope_hash = ${ipScope.hash} and attempt_count <= 1
+            and (blocked_until is null or blocked_until <= now())
+        `;
+        await transaction`
+          update auth_login_throttles
+          set attempt_count = attempt_count - 1, updated_at = now()
+          where scope_type = 'IP' and scope_hash = ${ipScope.hash} and attempt_count > 1
+            and (blocked_until is null or blocked_until <= now())
+        `;
+      }
       await transaction`
         update users set failed_login_count = 0, failed_login_window_started_at = null,
           locked_until = null, last_login_at = now()

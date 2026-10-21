@@ -142,6 +142,41 @@ describe('authentication hardening', () => {
     await database.admin`delete from auth_login_throttles`;
   });
 
+  it('does not count successful sign-ins toward the per-IP limit', async () => {
+    // The limit is 3 attempts per window; six good sign-ins from one terminal must all pass.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const response = await api.app.inject({
+        method: 'POST',
+        payload: { password: PASSWORD, terminalCode: 'COUNTER-01', username: 'auth-cashier' },
+        remoteAddress: '10.0.0.77',
+        url: '/api/v1/auth/login',
+      });
+      expect(response.statusCode, response.body).toBe(201);
+    }
+    // Failures from the same address are still limited.
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const response = await api.app.inject({
+        method: 'POST',
+        payload: {
+          password: 'wrong-password-x',
+          terminalCode: 'COUNTER-01',
+          username: 'nobody-here',
+        },
+        remoteAddress: '10.0.0.77',
+        url: '/api/v1/auth/login',
+      });
+      statuses.push(response.statusCode);
+    }
+    expect(statuses).toEqual([401, 401, 401, 401]);
+    const [limited] = await database.admin<Array<{ count: string }>>`
+      select count(*)::text as count from audit_events
+      where event_type = 'AUTH.LOGIN_RATE_LIMITED' and metadata->>'username' = 'nobody-here'
+    `;
+    expect(limited?.count).toBe('1');
+    await database.admin`delete from auth_login_throttles`;
+  });
+
   it('resets an expired account failure window instead of extending lockout forever', async () => {
     await database.admin`
       update users set failed_login_count = 5,

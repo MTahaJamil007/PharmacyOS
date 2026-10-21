@@ -3,11 +3,10 @@ import type { Environment } from '@pharmacy/config';
 import { parseEnvironment } from '@pharmacy/config';
 import { createDatabase } from '@pharmacy/database';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { VersioningType } from '@nestjs/common';
 
 import { AppModule } from '../../../apps/api/src/app.module.js';
-import { RequestBoundaryPipe } from '../../../apps/api/src/common/request-boundary.pipe.js';
 import { DATABASE, ENVIRONMENT } from '../../../apps/api/src/database.module.js';
+import { configureHttp } from '../../../apps/api/src/http-setup.js';
 
 export interface IntegrationApi {
   readonly app: NestFastifyApplication;
@@ -44,9 +43,7 @@ export async function createIntegrationApi(
     .useValue(environment)
     .compile();
   const app = moduleReference.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  app.setGlobalPrefix('api');
-  app.enableVersioning({ defaultVersion: '1', type: VersioningType.URI });
-  app.useGlobalPipes(new RequestBoundaryPipe());
+  await configureHttp(app, environment);
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
 

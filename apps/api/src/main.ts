@@ -1,7 +1,5 @@
 import 'reflect-metadata';
 
-import helmet from '@fastify/helmet';
-import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { parseEnvironment } from '@pharmacy/config';
@@ -9,8 +7,8 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
 import { AppModule } from './app.module.js';
-import { RequestBoundaryPipe } from './common/request-boundary.pipe.js';
 import { StructuredLogger } from './common/structured-logger.js';
+import { configureHttp } from './http-setup.js';
 
 async function bootstrap(): Promise<void> {
   const environment = parseEnvironment();
@@ -49,15 +47,7 @@ async function bootstrap(): Promise<void> {
     void reply.header('x-request-id', request.id);
   });
 
-  await app.register(helmet, { contentSecurityPolicy: false });
-  const allowedOrigins =
-    environment.NODE_ENV === 'development'
-      ? [environment.WEB_ORIGIN, 'http://127.0.0.1:5173']
-      : environment.WEB_ORIGIN;
-  app.enableCors({ origin: allowedOrigins, credentials: true });
-  app.setGlobalPrefix('api');
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-  app.useGlobalPipes(new RequestBoundaryPipe());
+  await configureHttp(app, environment);
   app.enableShutdownHooks();
 
   await app.listen(environment.API_PORT, environment.HOST);

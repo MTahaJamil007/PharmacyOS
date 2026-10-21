@@ -19,7 +19,8 @@ import {
   Trash2,
   Truck,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import {
   addSupplierQuote,
@@ -146,7 +147,16 @@ export function ProcurementScreen(): React.JSX.Element {
       : []),
   ];
   const [tab, setTab] = useState<ProcurementTab>(tabs[0]?.id ?? 'ORDERS');
-  const [creating, setCreating] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const incoming =
+    (location.state as { readonly reorder?: ReorderPrefill } | null)?.reorder ?? null;
+  const [prefill, setPrefill] = useState<ReorderPrefill | null>(incoming);
+  const [creating, setCreating] = useState(incoming !== null);
+  useEffect(() => {
+    // Consume the hand-off once so a page refresh does not reopen the builder.
+    if (incoming) void navigate(location.pathname, { replace: true, state: null });
+  }, [incoming, location.pathname, navigate]);
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
   return (
     <div className="page">
@@ -170,9 +180,14 @@ export function ProcurementScreen(): React.JSX.Element {
       {tab === 'PRICES' ? <SupplierPricesTab /> : null}
       {creating ? (
         <NewOrderDialog
-          onClose={() => setCreating(false)}
+          prefill={prefill}
+          onClose={() => {
+            setCreating(false);
+            setPrefill(null);
+          }}
           onCreated={(id) => {
             setCreating(false);
+            setPrefill(null);
             setTab('ORDERS');
             setOpenOrderId(id);
           }}
@@ -323,10 +338,19 @@ function draftLineProblem(line: DraftLine): string | null {
   return null;
 }
 
+/** A reorder suggestion handed over from Inventory when it could not be drafted directly. */
+interface ReorderPrefill {
+  readonly medicineId: string;
+  readonly medicineName: string;
+  readonly quantity: string;
+}
+
 function NewOrderDialog({
+  prefill,
   onClose,
   onCreated,
 }: {
+  readonly prefill: ReorderPrefill | null;
   readonly onClose: () => void;
   readonly onCreated: (id: string) => void;
 }) {
@@ -338,7 +362,22 @@ function NewOrderDialog({
   });
   const [supplierId, setSupplierId] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [lines, setLines] = useState<readonly DraftLine[]>([]);
+  const [lines, setLines] = useState<readonly DraftLine[]>(() =>
+    prefill
+      ? [
+          {
+            baseUnitsPerOrderUnit: '1',
+            bonusQuantity: '0',
+            detail: `Suggested ${formatQuantity(prefill.quantity)} single units — set packs and units per pack as the supplier sells them`,
+            lineDiscount: '0',
+            medicineId: prefill.medicineId,
+            medicineName: prefill.medicineName,
+            orderedQuantity: plainQuantity(decimalToScaledInteger(prefill.quantity, 3)),
+            unitCost: '',
+          },
+        ]
+      : [],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const payload = useMemo(

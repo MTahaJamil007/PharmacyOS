@@ -13,6 +13,7 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import {
   actOnExpiryItem,
@@ -23,7 +24,9 @@ import {
   getStockOverview,
   reviewReorderSuggestion,
   reviewShelfRecommendation,
+  ApiError,
   type ExpiryRiskItem,
+  type ReorderSuggestion,
 } from '../../api';
 import {
   Badge,
@@ -40,6 +43,7 @@ import {
   Stat,
   Tabs,
   Textarea,
+  errorMessage,
   useToast,
   type Tone,
 } from '../../components/ui';
@@ -530,6 +534,7 @@ function ExpiryActionDialog({
 
 function ReorderTab() {
   const can = usePermissions();
+  const navigate = useNavigate();
   const toast = useToast();
   const queryClient = useQueryClient();
   const suggestions = useQuery({
@@ -537,7 +542,11 @@ function ReorderTab() {
     queryFn: getReorderSuggestions,
   });
   const [busyId, setBusyId] = useState('');
-  const act = async (id: string, kind: 'REVIEW' | 'DISMISS' | 'DRAFT'): Promise<void> => {
+  const act = async (
+    row: ReorderSuggestion,
+    kind: 'REVIEW' | 'DISMISS' | 'DRAFT',
+  ): Promise<void> => {
+    const id = row.id;
     setBusyId(id);
     try {
       if (kind === 'DRAFT') {
@@ -551,6 +560,21 @@ function ReorderTab() {
       }
       await queryClient.invalidateQueries({ queryKey: ['reorder-suggestions'] });
     } catch (cause) {
+      if (kind === 'DRAFT' && cause instanceof ApiError && cause.status === 409) {
+        // No preferred supplier or no price on record yet (always true at go-live): open the
+        // order builder with this medicine so the cost can be entered by hand.
+        toast.info('Enter the supplier and cost', errorMessage(cause));
+        void navigate('/purchasing', {
+          state: {
+            reorder: {
+              medicineId: row.medicine_id,
+              medicineName: row.medicine_name,
+              quantity: row.suggested_qty,
+            },
+          },
+        });
+        return;
+      }
       toast.error('That did not work', cause);
     } finally {
       setBusyId('');
@@ -626,36 +650,42 @@ function ReorderTab() {
             align: 'end',
             header: '',
             key: 'actions',
-            render: (row) => (
-              <div className="table-actions">
-                {can(PERMISSIONS.PROCUREMENT_PURCHASE_DRAFT_APPROVE) ? (
+            render: (row) => {
+              const open = row.status === 'GENERATED' || row.status === 'REVIEWED';
+              if (!open) return null;
+              return (
+                <div className="table-actions">
+                  {can(PERMISSIONS.PROCUREMENT_PURCHASE_DRAFT_APPROVE) ? (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      loading={busyId === row.id}
+                      onClick={() => void act(row, 'DRAFT')}
+                    >
+                      Draft order
+                    </Button>
+                  ) : row.status === 'GENERATED' ? (
+                    <Button
+                      size="sm"
+                      loading={busyId === row.id}
+                      onClick={() => void act(row, 'REVIEW')}
+                    >
+                      Mark reviewed
+                    </Button>
+                  ) : (
+                    <span className="muted">Waiting for a manager to order</span>
+                  )}
                   <Button
                     size="sm"
-                    variant="primary"
-                    loading={busyId === row.id}
-                    onClick={() => void act(row.id, 'DRAFT')}
+                    variant="ghost"
+                    disabled={busyId === row.id}
+                    onClick={() => void act(row, 'DISMISS')}
                   >
-                    Draft order
+                    Dismiss
                   </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    loading={busyId === row.id}
-                    onClick={() => void act(row.id, 'REVIEW')}
-                  >
-                    Mark reviewed
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busyId === row.id}
-                  onClick={() => void act(row.id, 'DISMISS')}
-                >
-                  Dismiss
-                </Button>
-              </div>
-            ),
+                </div>
+              );
+            },
           },
         ]}
       />
