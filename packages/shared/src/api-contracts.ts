@@ -101,21 +101,58 @@ export interface ReorderSuggestion {
   readonly reason: Record<string, unknown>;
 }
 
+export type ReturnDisposition = 'RESTOCK_SELLABLE' | 'QUARANTINE' | 'SCRAP';
+export type RefundMethod = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'CUSTOMER_ACCOUNT';
+export type ReturnStatus = 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'REFUNDED';
+
 export interface ReturnLookup {
   readonly sale: {
     readonly id: string;
-    readonly invoice_number: string;
+    readonly invoiceNumber: string;
+    readonly status: string;
     readonly total: string;
-    readonly created_at: string;
+    readonly discountTotal: string;
+    readonly createdAt: string;
+    readonly lookupToken: string;
+    readonly customerId: string | null;
+    readonly customerName: string | null;
   };
+  readonly payments: ReadonlyArray<{ readonly method: string; readonly amount: string }>;
   readonly items: ReadonlyArray<{
     readonly id: string;
-    readonly medicine_name: string;
-    readonly sold_quantity: string;
-    readonly returned_quantity: string;
-    readonly eligible_quantity: string;
-    readonly batch_number: string;
+    readonly medicineName: string;
+    readonly strength: string | null;
+    readonly batchNumber: string;
+    readonly expiryDate: string;
+    readonly expired: boolean;
+    readonly soldQuantity: string;
+    readonly returnedQuantity: string;
+    readonly eligibleQuantity: string;
+    readonly unitPrice: string;
+    /** Amount the customer paid for the whole line after its share of invoice discount. */
+    readonly netPaid: string;
   }>;
+  readonly returns: readonly ReturnSummary[];
+}
+
+export interface ReturnSummary {
+  readonly id: string;
+  readonly returnNumber: string;
+  readonly status: ReturnStatus;
+  readonly reason: string;
+  readonly saleId: string;
+  readonly invoiceNumber: string;
+  readonly lookupToken: string | null;
+  readonly customerId: string | null;
+  readonly customerName: string | null;
+  readonly requestedBy: string;
+  readonly requestedAt: string;
+  readonly refundAmount: string;
+  readonly refundMethod: RefundMethod | null;
+  readonly rejectionReason: string | null;
+  readonly itemCount: number;
+  /** Largest refund each route may still pay for this sale; see ReturnsService.refundLimits. */
+  readonly refundLimits: { readonly cashOrCard: string; readonly customerAccount: string };
 }
 
 export interface ReturnCommandResult {
@@ -123,6 +160,8 @@ export interface ReturnCommandResult {
   readonly returnNumber?: string;
   readonly status: string;
   readonly refundAmount?: string;
+  readonly refundMethod?: RefundMethod;
+  readonly idempotentReplay?: boolean;
 }
 
 export type OwnerTool =

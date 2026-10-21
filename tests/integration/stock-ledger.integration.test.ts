@@ -522,7 +522,7 @@ describe('stock ledger integrity', () => {
 
     const lookup = await service.lookup(fixture.branchId, saleFixture.token);
     expect(lookup.items).toEqual([
-      expect.objectContaining({ eligible_quantity: '0.000', returned_quantity: '1.000' }),
+      expect.objectContaining({ eligibleQuantity: '0.000', returnedQuantity: '1.000' }),
     ]);
     await expect(service.approve(fixture.user, BigInt(returnId))).resolves.toMatchObject({
       idempotentReplay: false,

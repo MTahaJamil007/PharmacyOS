@@ -136,7 +136,7 @@ export function ReturnLookupScreen(): React.JSX.Element {
           <header>
             <div>
               <p className="eyebrow">Original finalized sale</p>
-              <h2>{result.sale.invoice_number}</h2>
+              <h2>{result.sale.invoiceNumber}</h2>
             </div>
             <strong>{formatPkrMoney(result.sale.total)}</strong>
           </header>
@@ -144,18 +144,18 @@ export function ReturnLookupScreen(): React.JSX.Element {
             {result.items.map((item) => (
               <div className="return-item-row" key={item.id}>
                 <div>
-                  <strong>{item.medicine_name}</strong>
-                  <small>Batch {item.batch_number}</small>
+                  <strong>{item.medicineName}</strong>
+                  <small>Batch {item.batchNumber}</small>
                 </div>
                 <div>
-                  <small>Sold {item.sold_quantity}</small>
-                  <b>{item.eligible_quantity} eligible</b>
+                  <small>Sold {item.soldQuantity}</small>
+                  <b>{item.eligibleQuantity} eligible</b>
                 </div>
                 <label>
                   Return quantity
                   <input
                     inputMode="decimal"
-                    max={item.eligible_quantity}
+                    max={item.eligibleQuantity}
                     value={quantities[item.id] ?? ''}
                     onChange={(event) =>
                       setQuantities({ ...quantities, [item.id]: event.target.value })

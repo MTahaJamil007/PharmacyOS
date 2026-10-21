@@ -605,11 +605,44 @@ export const createReturnSchema = z.object({
     .max(100),
 });
 
-export const refundReturnSchema = z.object({
-  cashSessionId: idSchema.optional(),
-  method: z.enum(['CASH', 'CARD', 'BANK_TRANSFER']),
-  reference: z.string().trim().max(120).optional(),
+export const refundReturnSchema = z
+  .object({
+    cashSessionId: idSchema.optional(),
+    method: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'CUSTOMER_ACCOUNT']),
+    reference: z.string().trim().max(120).optional(),
+  })
+  .superRefine((refund, context) => {
+    if (refund.method === 'CASH' && !refund.cashSessionId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'A cash refund must be paid from an open cash session',
+        path: ['cashSessionId'],
+      });
+    }
+    if (refund.method !== 'CASH' && refund.cashSessionId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Only a cash refund is paid from a cash session',
+        path: ['cashSessionId'],
+      });
+    }
+  });
+
+export const rejectReturnSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
 });
+
+export const returnQueueQuerySchema = z.object({
+  status: z.enum(['REQUESTED', 'APPROVED', 'REFUNDED', 'REJECTED']).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export const invoiceNumberSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(64)
+  .regex(/^[A-Za-z0-9-]+$/, 'Invoice numbers contain letters, digits, and dashes only');
 
 export const ownerAiToolSchema = z.enum([
   'get_sales_summary',
@@ -792,6 +825,8 @@ export type ReviewReorderSuggestionRequest = z.infer<typeof reviewReorderSuggest
 export type BudgetRegimenRequest = z.infer<typeof budgetRegimenSchema>;
 export type CreateReturnRequest = z.infer<typeof createReturnSchema>;
 export type RefundReturnRequest = z.infer<typeof refundReturnSchema>;
+export type RejectReturnRequest = z.infer<typeof rejectReturnSchema>;
+export type ReturnQueueQuery = z.infer<typeof returnQueueQuerySchema>;
 export type OwnerAiChatRequest = z.infer<typeof ownerAiChatSchema>;
 export type OpenCashSessionRequest = z.infer<typeof openCashSessionSchema>;
 export type CashMovementRequest = z.infer<typeof cashMovementSchema>;
