@@ -222,6 +222,7 @@ function MedicineDialog({
           ),
         );
         if (Object.keys(changes).length === 0) {
+          toast.info('No changes to save');
           onClose();
           return;
         }
