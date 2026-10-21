@@ -243,6 +243,7 @@ export function ChunkedImport<R extends ImportChunkResult>({
           <input
             ref={input}
             className="sr-only"
+            aria-label={`${title} file`}
             type="file"
             accept=".csv,text/csv,.txt"
             disabled={busy}

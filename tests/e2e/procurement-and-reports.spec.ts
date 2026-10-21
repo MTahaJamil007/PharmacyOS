@@ -1,235 +1,232 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
-const session = {
-  accessToken: 'procurement-e2e-token',
-  absoluteExpiresAt: '2027-09-01T08:00:00.000Z',
-  expiresAt: '2027-08-31T20:30:00.000Z',
-  sessionId: 'procurement-e2e-session',
-  user: {
-    id: '1',
-    branchId: '1',
-    branchTimezone: 'Asia/Karachi',
-    displayName: 'Inventory Manager',
-    permissions: [
-      'pos.search',
-      'inventory.purchase',
-      'procurement.purchase_draft.approve',
-      'procurement.supplier_price.read',
-      'reports.view_basic',
-      'reports.view_financial',
-    ],
-    terminalCode: 'STORE-01',
-    terminalId: '1',
-    terminalName: 'Store Room',
-    username: 'inventory',
-  },
+import { json, panadol, sessionWith, signIn } from './support.js';
+
+const manager = sessionWith([
+  'inventory.purchase',
+  'procurement.purchase_draft.approve',
+  'procurement.supplier_price.read',
+  'reports.view_basic',
+  'reports.view_financial',
+]);
+
+const orderLine = {
+  base_units_per_order_unit: '10.000',
+  bonus_qty: '0.000',
+  id: '91',
+  line_discount: '0.00',
+  medicine_id: '101',
+  medicine_name: 'Panadol',
+  ordered_qty: '20.000',
+  received_bonus_qty: '0.000',
+  received_qty: '0.000',
+  // Stored at the database's 8-decimal cost scale.
+  unit_cost: '100.00000000',
 };
-
-function json(route: Route, value: unknown, status = 200): Promise<void> {
-  return route.fulfill({ body: JSON.stringify(value), contentType: 'application/json', status });
-}
-
-async function authenticated(page: Page): Promise<void> {
-  await page.addInitScript((value) => {
-    localStorage.setItem('pharmacy-session', JSON.stringify(value));
-  }, session);
-}
-
-const medicine = {
-  availableQuantity: '4.000',
-  barcode: '8961100098765',
-  daysToExpiry: 40,
-  genericName: 'Paracetamol',
-  id: '101',
-  manufacturer: 'GSK',
-  name: 'Panadol',
-  nearestExpiry: '2026-11-01',
-  salePrice: '35.00',
-  shelf: 'A-01',
-  strength: '500 mg',
-} as const;
 
 test('inventory manager orders from a supplier and receives goods into a batch', async ({
   page,
 }) => {
-  await authenticated(page);
-  let status: 'DRAFT' | 'ORDERED' | 'RECEIVED' = 'DRAFT';
-  let created = false;
-  let receivedQuantity = '0.000';
-  let receiptPayload: Record<string, unknown> | null = null;
-  let createPayload: Record<string, unknown> | null = null;
-
-  await page.route('**/api/v1/admin/suppliers', (route) =>
+  await signIn(page, manager);
+  let status = 'NONE';
+  let createBody: unknown = null;
+  let receiveBody: unknown = null;
+  const detail = () => ({
+    cancel_reason: null,
+    cancelled_at: null,
+    created_at: '2026-09-01T08:00:00.000Z',
+    id: '55',
+    items: [status === 'RECEIVED' ? { ...orderLine, received_qty: '20.000' } : orderLine],
+    order_number: 'PO-20260901-0055',
+    ordered_at: status === 'DRAFT' ? null : '2026-09-01T09:00:00.000Z',
+    receipts:
+      status === 'RECEIVED'
+        ? [
+            {
+              id: '1',
+              received_at: '2026-09-02T10:00:00.000Z',
+              received_base_quantity: '200.000',
+              received_by: 'E2E Operator',
+              supplier_invoice_number: 'INV-900',
+            },
+          ]
+        : [],
+    received_at: status === 'RECEIVED' ? '2026-09-02T10:00:00.000Z' : null,
+    status,
+    supplier_id: '7',
+    supplier_invoice_number: 'INV-900',
+    supplier_name: 'Karachi Distributors',
+    total_cost: '2000.00',
+  });
+  await page.route('**/api/v1/suppliers', (route) =>
     json(route, {
       data: [
-        { code: 'S-1', id: '7', isActive: true, leadTimeDays: 3, name: 'Karachi Distributors' },
+        {
+          code: 'KD',
+          id: '7',
+          isActive: true,
+          leadTimeDays: 2,
+          name: 'Karachi Distributors',
+          phone: null,
+        },
       ],
     }),
   );
   await page.route('**/api/v1/catalog/medicines/search**', (route) =>
-    json(route, { data: [medicine] }),
+    json(route, { data: [panadol] }),
   );
-  await page.route('**/api/v1/purchase-orders?*', (route) =>
-    json(route, {
-      data: created
-        ? [
-            {
-              created_at: '2026-09-01T06:00:00.000Z',
-              id: '55',
-              line_count: 1,
-              order_number: 'PO-20260901-AB12CD34EF',
-              ordered_at: null,
-              ordered_quantity: '20.000',
-              received_at: null,
-              received_quantity: receivedQuantity,
-              status,
-              supplier_id: '7',
-              supplier_invoice_number: 'INV-900',
-              supplier_name: 'Karachi Distributors',
-              total_cost: '2000.00',
-            },
-          ]
-        : [],
-    }),
-  );
-  await page.route('**/api/v1/purchase-orders', async (route) => {
-    createPayload = route.request().postDataJSON() as Record<string, unknown>;
-    created = true;
-    await json(
-      route,
-      {
-        created_at: '2026-09-01T06:00:00.000Z',
-        id: '55',
-        items: [],
-        order_number: 'PO-20260901-AB12CD34EF',
-        ordered_at: null,
-        received_at: null,
-        status: 'DRAFT',
-        supplier_id: '7',
-        supplier_invoice_number: 'INV-900',
-        supplier_name: 'Karachi Distributors',
-        total_cost: '2000.00',
-      },
-      201,
-    );
+  await page.route(/\/api\/v1\/purchase-orders(\?.*)?$/, (route) => {
+    if (route.request().method() === 'POST') {
+      createBody = route.request().postDataJSON();
+      status = 'DRAFT';
+      return json(route, detail(), 201);
+    }
+    return json(route, {
+      data:
+        status === 'NONE'
+          ? []
+          : [
+              {
+                created_at: '2026-09-01T08:00:00.000Z',
+                id: '55',
+                line_count: 1,
+                order_number: 'PO-20260901-0055',
+                ordered_at: null,
+                ordered_quantity: '20.000',
+                received_at: null,
+                received_quantity: '0.000',
+                status,
+                supplier_id: '7',
+                supplier_invoice_number: 'INV-900',
+                supplier_name: 'Karachi Distributors',
+                total_cost: '2000.00',
+              },
+            ],
+    });
   });
-  await page.route('**/api/v1/purchase-orders/55', (route) =>
-    json(route, {
-      created_at: '2026-09-01T06:00:00.000Z',
-      id: '55',
-      items: [
-        {
-          base_units_per_order_unit: '1.000',
-          bonus_qty: '0.000',
-          id: '77',
-          line_discount: '0.00',
-          medicine_id: '101',
-          medicine_name: 'Panadol',
-          ordered_qty: '20.000',
-          received_bonus_qty: '0.000',
-          received_qty: receivedQuantity,
-          unit_cost: '100.00',
-        },
-      ],
-      order_number: 'PO-20260901-AB12CD34EF',
-      ordered_at: status === 'DRAFT' ? null : '2026-09-01T07:00:00.000Z',
-      receipts: [],
-      received_at: null,
-      status,
-      supplier_id: '7',
-      supplier_invoice_number: 'INV-900',
-      supplier_name: 'Karachi Distributors',
-      total_cost: '2000.00',
-    }),
-  );
-  await page.route('**/api/v1/purchase-orders/55/order', async (route) => {
+  await page.route('**/api/v1/purchase-orders/55', (route) => json(route, detail()));
+  await page.route('**/api/v1/purchase-orders/55/order', (route) => {
     status = 'ORDERED';
-    await json(route, { id: '55', status: 'ORDERED' }, 201);
+    return json(route, detail(), 201);
   });
-  await page.route('**/api/v1/purchase-orders/55/receive', async (route) => {
-    receiptPayload = route.request().postDataJSON() as Record<string, unknown>;
+  await page.route('**/api/v1/purchase-orders/55/receive', (route) => {
+    receiveBody = route.request().postDataJSON();
     status = 'RECEIVED';
-    receivedQuantity = '20.000';
-    await json(route, { goodsReceiptId: '91', status: 'RECEIVED' }, 201);
+    return json(route, detail(), 201);
   });
 
   await page.goto('/#/purchasing');
-  await expect(page.getByRole('heading', { name: /Order from suppliers/ })).toBeVisible();
+  await page.getByRole('button', { name: 'New purchase order' }).click();
+  const builder = page.getByRole('dialog', { name: 'New purchase order' });
+  await builder.getByLabel('Supplier', { exact: true }).selectOption('7');
+  await builder.getByLabel(/Supplier invoice/).fill('INV-900');
+  await builder.getByRole('combobox', { name: 'Add a medicine to this order' }).fill('Panadol');
+  await builder.getByRole('option', { name: /Panadol/ }).click();
+  await builder.getByLabel('Packs of Panadol', { exact: true }).fill('20');
+  await builder.getByLabel('Units per pack of Panadol').fill('10');
+  await builder.getByLabel('Cost per pack of Panadol').fill('100');
+  await expect(builder).toContainText('Rs 2,000.00');
+  await builder.getByRole('button', { name: 'Save draft' }).click();
+  await expect
+    .poll(() => createBody)
+    .toMatchObject({
+      items: [
+        {
+          baseUnitsPerOrderUnit: '10',
+          bonusQuantity: '0',
+          lineDiscount: '0',
+          medicineId: '101',
+          orderedQuantity: '20',
+          unitCost: '100',
+        },
+      ],
+      supplierId: '7',
+      supplierInvoiceNumber: 'INV-900',
+    });
 
-  await page.getByLabel('Supplier', { exact: true }).selectOption('7');
-  await page.getByLabel('Supplier invoice number').first().fill('INV-900');
-  await page.getByPlaceholder('Add medicine to the order').fill('panadol');
-  await page.getByRole('button', { name: /Panadol/ }).click();
+  const drawer = page.getByRole('dialog', { name: 'Purchase order PO-20260901-0055' });
+  // The stored 8-decimal cost still produces an exact line total.
+  await expect(drawer.getByRole('row', { name: /Panadol/ })).toContainText('Rs 2,000.00');
+  await drawer.getByRole('button', { name: 'Place order' }).click();
+  await page
+    .getByRole('dialog', { name: /Place PO-20260901-0055/ })
+    .getByRole('button', { name: 'Place order' })
+    .click();
+  await drawer.getByRole('button', { name: 'Receive delivery' }).click();
 
-  await page.getByLabel('Qty').fill('20');
-  await page.getByLabel('Unit cost', { exact: true }).fill('100.00');
-  await expect(page.getByText('2000.00', { exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Save purchase order' }).click();
-  await expect(page.getByText(/saved as a draft/)).toBeVisible();
-  expect(createPayload).toMatchObject({
-    items: [{ lineDiscount: '0.00', medicineId: '101', orderedQuantity: '20', unitCost: '100.00' }],
-    supplierId: '7',
-    supplierInvoiceNumber: 'INV-900',
-  });
-
-  await page.getByRole('button', { name: 'Mark as ordered' }).click();
-  await expect(page.getByText('Purchase order sent to the supplier')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Receive goods' }).click();
-  await page.getByLabel('Batch').fill('BX-2291');
-  await page.getByLabel('Expiry').fill('2028-03-31');
-  await page.getByLabel('Sale price / base unit').fill('135.00');
-  await page.getByRole('button', { name: 'Post goods receipt' }).click();
-
-  await expect(page.getByText(/Goods receipt posted/)).toBeVisible();
-  expect(receiptPayload).toMatchObject({
+  const receive = page.getByRole('dialog', { name: /Receive delivery/ });
+  await receive.getByLabel('Batch number of Panadol').fill('BX-2291');
+  await receive.getByLabel('Expiry date of Panadol').fill('2028-03-31');
+  await receive.getByLabel('Sale price per unit of Panadol').fill('13.50');
+  await receive.getByLabel('Printed MRP per unit of Panadol').fill('13.00');
+  await expect(receive).toContainText('Sale price is above the printed MRP');
+  await expect(receive.getByRole('button', { name: 'Receive into stock' })).toBeDisabled();
+  await receive.getByLabel('Printed MRP per unit of Panadol').fill('14.00');
+  await receive.getByRole('button', { name: 'Receive into stock' }).click();
+  await expect(page.getByText('Delivery received')).toBeVisible();
+  expect(receiveBody).toMatchObject({
     lines: [
       {
         batchNumber: 'BX-2291',
         expiryDate: '2028-03-31',
-        purchaseOrderItemId: '77',
-        receivedQuantity: '20.000',
-        salePricePerBaseUnit: '135.00',
+        maximumRetailPricePerBaseUnit: '14.00',
+        purchaseOrderItemId: '91',
+        receivedBonusQuantity: '0',
+        receivedQuantity: '20',
+        salePricePerBaseUnit: '13.50',
       },
     ],
     supplierInvoiceNumber: 'INV-900',
   });
 });
 
-test('owner reads a deterministic report without the AI assistant', async ({ page }) => {
-  await authenticated(page);
-  await page.route('**/api/v1/reports/sales**', (route) =>
+test('owner reads a typed report with totals and exports it', async ({ page }) => {
+  await signIn(page, manager);
+  await page.route('**/api/v1/reports/tables/daily-sales**', (route) =>
     json(route, {
-      dataBasis: 'Finalized non-voided sales from 2026-08-01 through 2026-09-01',
-      facts: { average_ticket: '415.50', gross_sales: '18420.00', invoice_count: '44' },
-      reportPath: '/owner?report=sales',
-    }),
-  );
-  await page.route('**/api/v1/reports/low-stock**', (route) =>
-    json(route, {
-      dataBasis: 'Current sellable batch stock compared with active reorder policies',
-      facts: [
-        {
-          average_daily_demand: '3.2',
-          days_of_stock: '1.2',
-          id: '101',
-          minimum_stock: '10.000',
-          name: 'Panadol',
-          sellable_stock: '4.000',
-        },
+      columns: [
+        { key: 'date', label: 'Date', type: 'date' },
+        { key: 'invoices', label: 'Invoices', type: 'count' },
+        { key: 'netSales', label: 'Net sales', type: 'money' },
       ],
-      reportPath: '/inventory?view=reorder',
+      dataBasis: 'Finalized sales by branch-local day.',
+      from: '2026-08-26',
+      report: 'daily-sales',
+      rows: [
+        { date: '2026-08-31', invoices: 40, netSales: '18000.00' },
+        { date: '2026-09-01', invoices: 4, netSales: '420.50' },
+      ],
+      title: 'Daily sales',
+      to: '2026-09-01',
+      totals: { date: null, invoices: 44, netSales: '18420.50' },
     }),
   );
-
+  await page.route('**/api/v1/reports/tables/stock-valuation**', (route) =>
+    json(route, {
+      columns: [
+        { key: 'name', label: 'Medicine', type: 'text' },
+        { key: 'quantity', label: 'Units', type: 'quantity' },
+      ],
+      dataBasis: 'Sellable stock right now.',
+      from: null,
+      report: 'stock-valuation',
+      rows: [{ name: 'Panadol', quantity: '120.000' }],
+      title: 'Stock valuation',
+      to: null,
+      totals: null,
+    }),
+  );
   await page.goto('/#/reports');
-  await expect(page.getByRole('heading', { name: /Read the day from the ledger/ })).toBeVisible();
-  await expect(page.getByRole('cell', { name: 'Gross sales' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: '18420.00' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Rs 18,000.00' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /Total/ })).toContainText('Rs 18,420.50');
 
-  await page.getByLabel('Report').selectOption('low-stock');
-  await expect(page.getByRole('columnheader', { name: 'Days of stock' })).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export CSV' }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('daily-sales_2026-08-26_to_2026-09-01.csv');
+
+  await page.getByRole('button', { name: /Stock valuation/ }).click();
+  await expect(page.getByRole('columnheader', { name: 'Units' })).toBeVisible();
   await expect(page.getByRole('cell', { name: 'Panadol' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Export CSV' })).toBeEnabled();
+  await expect(page.getByRole('cell', { name: '120', exact: true })).toBeVisible();
 });

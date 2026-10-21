@@ -10,8 +10,9 @@ export default defineConfig({
   use: {
     ...devices['Desktop Chrome'],
     baseURL: 'http://127.0.0.1:4173',
-    launchOptions:
-      process.platform === 'win32'
+    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
+      : process.platform === 'win32'
         ? { executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' }
         : {},
     screenshot: 'only-on-failure',

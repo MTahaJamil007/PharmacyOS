@@ -68,6 +68,7 @@ import {
   isPositiveQuantityText,
   isQuantityText,
   isoDateIn,
+  normalizeMoney,
   shiftIsoDate,
 } from '../../format';
 import {
@@ -108,13 +109,21 @@ function safeLineTotal(line: {
   }
 }
 
+/**
+ * Stored order lines keep cost at the database's 8-decimal scale; entered costs never have
+ * more than two decimals, so normalising back to money is exact.
+ */
+function storedLineTotal(line: PurchaseOrderLine): string | null {
+  return safeLineTotal({
+    lineDiscount: normalizeMoney(line.line_discount) ?? '0.00',
+    orderedQuantity: line.ordered_qty,
+    unitCost: normalizeMoney(line.unit_cost) ?? '0.00',
+  });
+}
+
 /** Cost of one base unit (tablet, ml…) the way the server values the received batch. */
 function effectiveUnitCost(line: PurchaseOrderLine): string | null {
-  const total = safeLineTotal({
-    lineDiscount: line.line_discount,
-    orderedQuantity: line.ordered_qty,
-    unitCost: line.unit_cost,
-  });
+  const total = storedLineTotal(line);
   if (total === null) return null;
   const units =
     (decimalToScaledInteger(line.ordered_qty, 3) + decimalToScaledInteger(line.bonus_qty, 3)) *
@@ -698,7 +707,17 @@ function OrderDrawer({
             </div>
             <div className="kv">
               <span>Last received</span>
-              <strong>{detail.received_at ? formatDate(detail.received_at) : '—'}</strong>
+              <strong>
+                {detail.receipts[0]
+                  ? formatDate(
+                      detail.receipts.reduce(
+                        (latest, receipt) =>
+                          receipt.received_at > latest ? receipt.received_at : latest,
+                        detail.receipts[0].received_at,
+                      ),
+                    )
+                  : '—'}
+              </strong>
             </div>
             <div className="kv">
               <span>Supplier invoice</span>
@@ -787,14 +806,7 @@ function OrderDrawer({
                   footer: <strong>{formatMoney(detail.total_cost)}</strong>,
                   header: 'Line total',
                   key: 'total',
-                  render: (line) =>
-                    formatMoney(
-                      safeLineTotal({
-                        lineDiscount: line.line_discount,
-                        orderedQuantity: line.ordered_qty,
-                        unitCost: line.unit_cost,
-                      }),
-                    ),
+                  render: (line) => formatMoney(storedLineTotal(line)),
                 },
               ]}
             />

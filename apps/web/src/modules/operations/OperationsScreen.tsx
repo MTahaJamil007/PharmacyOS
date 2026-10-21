@@ -133,8 +133,9 @@ function FiscalTab() {
           tone="warning"
           title={`FBR submission is off (mode: ${humanize(overview.data.mode)})`}
         >
-          Sales are recorded and queued, but nothing is sent to FBR until the POS integration is
-          configured and authorised.
+          {overview.data.mode === 'DISABLED'
+            ? 'Sales are recorded normally but are not reported to FBR. Switch the FBR mode on once the shop’s POS integration is registered and authorised.'
+            : 'Sales are recorded and queued for FBR, but nothing is sent until outbound submission is enabled on the server.'}
         </Alert>
       ) : null}
       <div className="grid grid-4">

@@ -36,7 +36,7 @@ import {
   Textarea,
   useToast,
 } from '../../components/ui';
-import { formatDateTime, formatMoney, humanize, isZero } from '../../format';
+import { formatDateTime, formatMoney, humanize, isNegative, isZero } from '../../format';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { usePermissions, useRequestId } from '../../hooks/useSession';
 
@@ -283,7 +283,7 @@ function CustomerDetail({ customerId }: { readonly customerId: string }) {
               header: 'Amount',
               key: 'amount',
               render: (entry) =>
-                entry.amountDelta.startsWith('-') ? (
+                isNegative(entry.amountDelta) ? (
                   <span className="text-success">− {formatMoney(entry.amountDelta.slice(1))}</span>
                 ) : (
                   <span>+ {formatMoney(entry.amountDelta)}</span>

@@ -1,38 +1,14 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-const session = {
-  accessToken: 'phase6-e2e-token',
-  absoluteExpiresAt: '2027-09-01T08:00:00.000Z',
-  expiresAt: '2027-08-31T20:30:00.000Z',
-  sessionId: 'phase6-e2e-session',
-  user: {
-    id: '1',
-    branchId: '1',
-    branchTimezone: 'Asia/Karachi',
-    displayName: 'System Manager',
-    permissions: [
-      'fbr.view_status',
-      'fbr.retry',
-      'backup.restore',
-      'ai.audit.read',
-      'settings.manage_system',
-    ],
-    terminalCode: 'BACK-01',
-    terminalId: '1',
-    terminalName: 'Back Office',
-    username: 'systems',
-  },
-};
+import { json, sessionWith, signIn } from './support.js';
 
-function json(route: Route, value: unknown, status = 200): Promise<void> {
-  return route.fulfill({ body: JSON.stringify(value), contentType: 'application/json', status });
-}
-
-async function authenticated(page: Page): Promise<void> {
-  await page.addInitScript((value) => {
-    localStorage.setItem('pharmacy-session', JSON.stringify(value));
-  }, session);
-}
+const systems = sessionWith([
+  'fbr.view_status',
+  'fbr.retry',
+  'backup.restore',
+  'ai.audit.read',
+  'settings.manage_system',
+]);
 
 const failedInvoice = {
   attemptCount: 2,
@@ -41,7 +17,7 @@ const failedInvoice = {
   invoiceNumber: 'MAIN-20260920-000044',
   lastErrorCode: 'FBR_OUTBOUND_APPROVAL_REQUIRED',
   lastErrorMessage: 'Outbound fiscal submission is disabled pending operator approval',
-  mode: 'DISABLED',
+  mode: 'SANDBOX',
   retryable: true,
   saleCreatedAt: '2026-09-20T09:00:00.000Z',
   saleId: '44',
@@ -62,33 +38,42 @@ const submittedInvoice = {
   retryable: false,
   saleId: '45',
   status: 'SUBMITTED',
+  submittedAt: '2026-09-20T09:01:00.000Z',
 };
 
-test('system manager inspects a failed fiscal submission and queues one retry', async ({
-  page,
-}) => {
-  await authenticated(page);
-  let retried = false;
-  let retryPayload: Record<string, unknown> | null = null;
+const counts = {
+  FAILED_NEEDS_REVIEW: 1,
+  FAILED_RETRYABLE: 0,
+  NOT_REQUIRED: 0,
+  PENDING: 0,
+  SUBMITTED: 1,
+  SUBMITTING: 0,
+  VALIDATED: 0,
+  VALIDATING: 0,
+  VOID_OR_CREDIT_NOTE_PENDING: 0,
+};
 
+const backupRun = {
+  backupType: 'LOGICAL',
+  checksum: 'abc',
+  destination: '/backups/nightly',
+  durationSeconds: 42,
+  encrypted: true,
+  errorMessage: null,
+  finishedAt: '2026-09-21T01:00:42.000Z',
+  id: '5',
+  sizeBytes: '5242880',
+  startedAt: '2026-09-21T01:00:00.000Z',
+  status: 'SUCCEEDED',
+};
+
+async function mockFiscal(page: Page): Promise<{ retryBody: () => unknown }> {
+  let retryBody: unknown = null;
   await page.route('**/api/v1/fiscal/invoices?*', (route) =>
     json(route, {
-      counts: {
-        FAILED_NEEDS_REVIEW: retried ? 0 : 1,
-        FAILED_RETRYABLE: 0,
-        NOT_REQUIRED: 3,
-        PENDING: retried ? 1 : 0,
-        SUBMITTED: 1,
-        SUBMITTING: 0,
-        VALIDATED: 0,
-        VALIDATING: 0,
-        VOID_OR_CREDIT_NOTE_PENDING: 0,
-      },
-      invoices: [
-        retried ? { ...failedInvoice, status: 'PENDING' } : failedInvoice,
-        submittedInvoice,
-      ],
-      mode: 'DISABLED',
+      counts,
+      invoices: [failedInvoice, submittedInvoice],
+      mode: 'SANDBOX',
       outboundEnabled: false,
     }),
   );
@@ -96,106 +81,58 @@ test('system manager inspects a failed fiscal submission and queues one retry', 
     json(route, {
       attempts: [
         {
-          attemptNumber: 2,
-          attemptedAt: '2026-09-20T09:05:00.000Z',
-          correlationId: 'req-2',
-          durationMs: 12,
+          attemptNumber: 1,
+          attemptedAt: '2026-09-20T09:01:00.000Z',
+          correlationId: 'c-1',
+          durationMs: 120,
           errorMessage: 'Outbound fiscal submission is disabled pending operator approval',
           httpStatus: null,
-          id: '102',
+          id: '1',
           operation: 'SUBMIT',
           outcome: 'PERMANENT_FAILURE',
         },
       ],
-      invoice: retried ? { ...failedInvoice, retryable: false, status: 'PENDING' } : failedInvoice,
-    }),
-  );
-  await page.route('**/api/v1/fiscal/invoices/9/retry', async (route) => {
-    retryPayload = route.request().postDataJSON() as Record<string, unknown>;
-    retried = true;
-    await json(route, { id: '9', idempotentReplay: false, status: 'PENDING' }, 201);
-  });
-  await page.route('**/api/v1/operations/backups*', (route) =>
-    json(route, { lastSuccessfulBackup: null, lastSuccessfulRestoreDrill: null, runs: [] }),
-  );
-  await page.route('**/api/v1/owner-ai/audits*', (route) => json(route, { data: [] }));
-
-  await page.goto('/#/operations');
-  await expect(page.getByRole('heading', { name: /Fiscal, backup, and assistant/ })).toBeVisible();
-  await expect(page.getByText('outbound transmission disabled')).toBeVisible();
-
-  await page
-    .getByRole('row', { name: /MAIN-20260920-000044/ })
-    .getByRole('button')
-    .click();
-  await expect(page.getByRole('heading', { name: /attempt history/ })).toBeVisible();
-  await expect(page.getByRole('cell', { name: 'PERMANENT FAILURE' })).toBeVisible();
-
-  await page.getByLabel('Reason for retry').fill('Integrator confirmed no invoice number issued');
-  await page.getByRole('button', { name: 'Queue resubmission' }).click();
-  await expect(page.getByText(/Queued for resubmission/)).toBeVisible();
-  expect(retryPayload).toMatchObject({
-    reason: 'Integrator confirmed no invoice number issued',
-  });
-  expect(
-    String((retryPayload as unknown as { clientRequestId: string }).clientRequestId).length,
-  ).toBeGreaterThanOrEqual(8);
-});
-
-test('an invoice that already holds a fiscal number offers no retry', async ({ page }) => {
-  await authenticated(page);
-  await page.route('**/api/v1/fiscal/invoices?*', (route) =>
-    json(route, {
-      counts: {
-        FAILED_NEEDS_REVIEW: 0,
-        FAILED_RETRYABLE: 0,
-        NOT_REQUIRED: 0,
-        PENDING: 0,
-        SUBMITTED: 1,
-        SUBMITTING: 0,
-        VALIDATED: 0,
-        VALIDATING: 0,
-        VOID_OR_CREDIT_NOTE_PENDING: 0,
-      },
-      invoices: [submittedInvoice],
-      mode: 'SANDBOX',
-      outboundEnabled: true,
+      invoice: failedInvoice,
     }),
   );
   await page.route('**/api/v1/fiscal/invoices/10/attempts', (route) =>
     json(route, { attempts: [], invoice: submittedInvoice }),
   );
+  await page.route('**/api/v1/fiscal/invoices/9/retry', (route) => {
+    retryBody = route.request().postDataJSON();
+    return json(route, { id: '9', status: 'PENDING' }, 201);
+  });
+  return { retryBody: () => retryBody };
+}
+
+test('system manager inspects a failed fiscal submission and queues one retry', async ({
+  page,
+}) => {
+  await signIn(page, systems);
+  const fiscal = await mockFiscal(page);
+  await page.goto('/#/operations');
+  await expect(page.getByText(/FBR submission is off/)).toBeVisible();
+  await page.getByRole('row', { name: /MAIN-20260920-000044/ }).click();
+  const drawer = page.getByRole('dialog', { name: /Invoice MAIN-20260920-000044/ });
+  await expect(drawer.getByText('Permanent failure')).toBeVisible();
+  await drawer.getByRole('button', { name: 'Send to FBR again' }).click();
+  const retry = page.getByRole('dialog', { name: /Retry MAIN-20260920-000044/ });
+  await retry.getByLabel('What was fixed?').fill('Integrator confirmed no invoice number issued');
+  await retry.getByRole('button', { name: 'Queue retry' }).click();
+  await expect(page.getByText('Queued for another attempt')).toBeVisible();
+  expect(fiscal.retryBody()).toMatchObject({
+    reason: 'Integrator confirmed no invoice number issued',
+  });
+});
+
+test('an invoice that already holds a fiscal number offers no retry', async ({ page }) => {
+  await signIn(page, systems);
+  await mockFiscal(page);
   await page.route('**/api/v1/operations/backups*', (route) =>
     json(route, {
-      lastSuccessfulBackup: {
-        backupType: 'LOGICAL',
-        checksum: 'abc',
-        destination: '/backups/nightly',
-        durationSeconds: 42,
-        encrypted: true,
-        errorMessage: null,
-        finishedAt: '2026-09-21T01:00:42.000Z',
-        id: '5',
-        sizeBytes: '5242880',
-        startedAt: '2026-09-21T01:00:00.000Z',
-        status: 'SUCCEEDED',
-      },
+      lastSuccessfulBackup: backupRun,
       lastSuccessfulRestoreDrill: null,
-      runs: [
-        {
-          backupType: 'LOGICAL',
-          checksum: 'abc',
-          destination: '/backups/nightly',
-          durationSeconds: 42,
-          encrypted: true,
-          errorMessage: null,
-          finishedAt: '2026-09-21T01:00:42.000Z',
-          id: '5',
-          sizeBytes: '5242880',
-          startedAt: '2026-09-21T01:00:00.000Z',
-          status: 'SUCCEEDED',
-        },
-      ],
+      runs: [backupRun],
     }),
   );
   await page.route('**/api/v1/owner-ai/audits*', (route) =>
@@ -215,65 +152,45 @@ test('an invoice that already holds a fiscal number offers no retry', async ({ p
       ],
     }),
   );
-
   await page.goto('/#/operations');
-  await page
-    .getByRole('row', { name: /MAIN-20260920-000045/ })
-    .getByRole('button')
-    .click();
-  await expect(page.getByText(/already carries an official fiscal number/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Queue resubmission' })).toHaveCount(0);
+  await page.getByRole('row', { name: /MAIN-20260920-000045/ }).click();
+  const drawer = page.getByRole('dialog', { name: /Invoice MAIN-20260920-000045/ });
+  await expect(drawer).toContainText('FBR-000-111');
+  await expect(drawer.getByRole('button', { name: 'Send to FBR again' })).toHaveCount(0);
+  await drawer.getByRole('button', { name: 'Close' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Backups and restore drills' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Backups' }).click();
   await expect(page.getByRole('cell', { name: '5.0 MB' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: 'get_sales_summary' })).toBeVisible();
+  await expect(page.getByText('Last restore drill')).toBeVisible();
+  await page.getByRole('tab', { name: 'Assistant log' }).click();
+  await expect(page.getByRole('cell', { name: 'Get sales summary' })).toBeVisible();
 });
 
-test('catalog import validates a file before anything is written', async ({ page }) => {
-  await authenticated(page);
-  let applied = false;
-  let lastMode = '';
-
-  await page.route('**/api/v1/admin/**', async (route) => {
-    const url = route.request().url();
-    if (url.includes('/admin/medicines/import')) {
-      const body = route.request().postDataJSON() as { mode: string };
-      lastMode = body.mode;
-      if (body.mode === 'VALIDATE') {
-        await json(route, {
-          applied: false,
-          created: 2,
-          idempotentReplay: false,
-          issues: [],
-          mode: 'VALIDATE',
-          rejected: 0,
-          totalRows: 2,
-          unchanged: 0,
-          updated: 0,
-        });
-        return;
-      }
-      applied = true;
-      await json(route, {
-        applied: true,
-        created: 2,
-        idempotentReplay: false,
-        issues: [],
-        mode: 'APPLY',
-        rejected: 0,
-        totalRows: 2,
-        unchanged: 0,
-        updated: 0,
-      });
-      return;
-    }
-    await json(route, { data: [] });
+test('catalog import checks the whole file before anything is written', async ({ page }) => {
+  await signIn(page, systems);
+  const modes: string[] = [];
+  await page.route(/\/api\/v1\/admin\/(users|medicines|suppliers|terminals)(\?.*)?$/, (route) =>
+    json(route, { data: [] }),
+  );
+  await page.route('**/api/v1/admin/medicines/import', (route) => {
+    const body = route.request().postDataJSON() as { mode: 'VALIDATE' | 'APPLY'; rows: unknown[] };
+    modes.push(body.mode);
+    return json(route, {
+      applied: body.mode === 'APPLY',
+      created: 2,
+      idempotentReplay: false,
+      issues: [],
+      mode: body.mode,
+      rejected: 0,
+      totalRows: body.rows.length,
+      unchanged: 0,
+      updated: 0,
+    });
   });
 
   await page.goto('/#/admin');
-  await expect(page.getByRole('heading', { name: 'Import medicine catalog' })).toBeVisible();
-
-  await page.getByLabel('Catalog file').setInputFiles({
+  await page.getByRole('tab', { name: 'Data import' }).click();
+  await page.getByLabel('1. Medicine list file').setInputFiles({
     buffer: Buffer.from(
       'Brand Name,Generic,Pack,Barcode\nPanadol,Paracetamol,20,8964000123456\nBrufen,Ibuprofen,10,8964000654321\n',
     ),
@@ -281,16 +198,50 @@ test('catalog import validates a file before anything is written', async ({ page
     name: 'catalog.csv',
   });
   await expect(page.getByText('catalog.csv')).toBeVisible();
+  // Nothing can be applied until the file has been checked.
+  await expect(page.getByRole('button', { name: 'Import medicines' })).toHaveCount(0);
 
-  // Applying is refused until the file has actually been validated.
-  await expect(page.getByRole('button', { name: /^Apply/ })).toBeDisabled();
+  await page.getByRole('button', { name: 'Check file' }).first().click();
+  await expect(page.getByRole('button', { name: 'Import medicines' })).toBeVisible();
+  expect(modes).toEqual(['VALIDATE']);
 
-  await page.getByRole('button', { name: 'Validate file' }).click();
-  await expect(page.getByText('Validation passed; this file is safe to apply')).toBeVisible();
-  expect(lastMode).toBe('VALIDATE');
-  expect(applied).toBe(false);
+  await page.getByRole('button', { name: 'Import medicines' }).click();
+  await expect(page.getByText('Import complete')).toBeVisible();
+  expect(modes).toEqual(['VALIDATE', 'APPLY']);
+});
 
-  await page.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByText('Applied: 2 created, 0 updated')).toBeVisible();
-  expect(applied).toBe(true);
+test('catalog import reports problems by spreadsheet line and refuses to apply', async ({
+  page,
+}) => {
+  await signIn(page, systems);
+  await page.route(/\/api\/v1\/admin\/(users|medicines|suppliers|terminals)(\?.*)?$/, (route) =>
+    json(route, { data: [] }),
+  );
+  await page.route('**/api/v1/admin/medicines/import', (route) =>
+    json(route, {
+      applied: false,
+      created: 1,
+      idempotentReplay: false,
+      issues: [
+        { field: 'name', message: 'Too small: expected string to have >=2 characters', row: 2 },
+      ],
+      mode: 'VALIDATE',
+      rejected: 1,
+      totalRows: 2,
+      unchanged: 0,
+      updated: 0,
+    }),
+  );
+  await page.goto('/#/admin');
+  await page.getByRole('tab', { name: 'Data import' }).click();
+  await page.getByLabel('1. Medicine list file').setInputFiles({
+    buffer: Buffer.from('name,barcode\nPanadol,8964000123456\nX,8964000654321\n'),
+    mimeType: 'text/csv',
+    name: 'catalog.csv',
+  });
+  await page.getByRole('button', { name: 'Check file' }).first().click();
+  await expect(page.getByText(/1 problem\(s\) found — nothing has been saved/)).toBeVisible();
+  // Server row 2 of the first chunk is spreadsheet line 3 (line 1 is the heading).
+  await expect(page.getByRole('row', { name: /^3 name/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Import medicines' })).toHaveCount(0);
 });

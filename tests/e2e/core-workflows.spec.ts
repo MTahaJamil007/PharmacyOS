@@ -1,95 +1,56 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
-const session = {
-  accessToken: 'e2e-token',
-  absoluteExpiresAt: '2027-09-01T08:00:00.000Z',
-  expiresAt: '2027-08-31T20:30:00.000Z',
-  sessionId: 'e2e-session',
-  user: {
-    id: '1',
-    branchId: '1',
-    branchTimezone: 'Asia/Karachi',
-    displayName: 'E2E Operator',
-    permissions: [
-      'cash.open_session',
-      'cash.close_session',
-      'inventory.shelf.read',
-      'inventory.shelf.recommendation.review',
-      'inventory.expiry.read',
-      'procurement.reorder.review',
-      'returns.lookup',
-      'returns.request',
-      'returns.approve',
-      'returns.refund',
-    ],
-    terminalCode: 'COUNTER-01',
-    terminalId: '1',
-    terminalName: 'Front Counter',
-    username: 'cashier',
-  },
-};
+import {
+  baseSession,
+  json,
+  openCashSession,
+  panadol,
+  receiptFor,
+  scan,
+  sessionWith,
+  signIn,
+} from './support.js';
 
-const cashSession = {
-  cashIn: '0.00',
-  cashOut: '0.00',
-  cashRefunds: '0.00',
-  cashSales: '0.00',
-  cashierName: 'E2E Operator',
-  cashierUserId: '1',
-  closedAt: null,
-  closingNotes: null,
-  countedCash: null,
-  expectedCash: '5000.00',
-  id: '10',
-  openedAt: '2026-08-31T08:00:00.000Z',
-  openingFloat: '5000.00',
-  status: 'OPEN',
-  variance: null,
-  varianceApprovalThreshold: '100.00',
-} as const;
-
-const panadol = {
-  availableQuantity: '5.000',
-  barcode: '8961100098765',
-  daysToExpiry: 122,
-  genericName: 'Paracetamol',
-  id: '101',
-  manufacturer: 'GSK',
-  name: 'Panadol',
-  nearestExpiry: '2027-01-01',
-  salePrice: '35.00',
-  shelf: 'A-01',
-  strength: '500 mg',
-} as const;
-
-function json(route: Route, value: unknown, status = 200): Promise<void> {
-  return route.fulfill({ body: JSON.stringify(value), contentType: 'application/json', status });
-}
-
-async function authenticated(page: Page): Promise<void> {
-  await page.addInitScript((value) => {
-    localStorage.setItem('pharmacy-session', JSON.stringify(value));
-  }, session);
-}
+const cashier = sessionWith([
+  'pos.search',
+  'pos.create_draft',
+  'sale.finalize_payment',
+  'cash.open_session',
+  'cash.close_session',
+  'returns.lookup',
+  'returns.request',
+  'returns.approve',
+  'returns.refund',
+  'returns.refund_cash',
+  'inventory.shelf.read',
+  'inventory.shelf.recommendation.review',
+  'inventory.expiry.read',
+  'procurement.reorder.review',
+]);
 
 test('staff signs in and signs out', async ({ page }) => {
-  await page.route('**/api/v1/auth/login', (route) => json(route, session));
+  await page.route('**/api/v1/**', (route) => json(route, { message: 'Not mocked' }, 404));
+  await page.route('**/api/v1/auth/login', (route) => json(route, cashier));
   await page.route('**/api/v1/auth/logout', (route) => json(route, { revoked: true }));
   await page.goto('/');
   await page.getByLabel('Username').fill('cashier');
   await page.getByLabel('Password').fill('correct-password');
-  await page.getByRole('button', { name: 'Open counter' }).click();
-  await expect(page.getByRole('heading', { name: 'Find medicine' })).toBeVisible();
-  await page.getByRole('button', { name: /E2E Operator · Sign out/ }).click();
-  await expect(page.getByRole('heading', { name: 'Open this terminal' })).toBeVisible();
+  await page.getByLabel('Terminal code').fill('COUNTER-01');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('textbox', { name: 'Find medicine' })).toBeVisible();
+  await page.getByRole('button', { name: /E2E Operator/ }).click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  // The terminal code is remembered for the next sign-in on this computer.
+  await expect(page.getByLabel('Terminal code')).toHaveValue('COUNTER-01');
 });
 
 test('cashier scans, split-tenders, prints, and reprints a sale', async ({ page }) => {
-  await authenticated(page);
+  await signIn(page, cashier);
   await page.route('**/api/v1/catalog/medicines/search**', (route) =>
     json(route, { data: [panadol] }),
   );
-  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, cashSession));
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, openCashSession));
   await page.route('**/api/v1/pos/drafts', (route) =>
     json(route, { id: '20', status: 'DRAFT', total: '35.00' }, 201),
   );
@@ -107,15 +68,9 @@ test('cashier scans, split-tenders, prints, and reprints a sale', async ({ page 
       201,
     ),
   );
+  let finalizeBody: unknown = null;
   await page.route('**/api/v1/pos/sales/finalize', (route) => {
-    expect(route.request().postDataJSON()).toMatchObject({
-      cashSessionId: '10',
-      draftId: '20',
-      payments: [
-        { amount: '15.00', method: 'CASH', tenderedAmount: '20.00' },
-        { amount: '20.00', method: 'CARD', reference: 'AUTH-7' },
-      ],
-    });
+    finalizeBody = route.request().postDataJSON();
     return json(
       route,
       {
@@ -129,19 +84,7 @@ test('cashier scans, split-tenders, prints, and reprints a sale', async ({ page 
       201,
     );
   });
-  const receiptResponse = {
-    items: [
-      {
-        batch_number: 'B-1',
-        expiry_date: '2027-01-01',
-        id: '1',
-        line_total: '35.00',
-        name: 'Panadol',
-        quantity: '1.000',
-        strength: '500 mg',
-        unit_price: '35.00',
-      },
-    ],
+  const receipt = receiptFor('30', 'MAIN-20260831-000001', {
     payments: [
       {
         amount: '15.00',
@@ -158,26 +101,9 @@ test('cashier scans, split-tenders, prints, and reprints a sale', async ({ page 
         tendered_amount: null,
       },
     ],
-    returnQrPayload: '00000000-0000-4000-8000-000000000030',
-    sale: {
-      branch_address: 'Karachi',
-      branch_name: 'Main Pharmacy',
-      branch_phone: '021-0000000',
-      cashier_name: 'E2E Operator',
-      created_at: '2026-08-31T12:00:00.000Z',
-      discount_total: '0.00',
-      fiscal_invoice_number: null,
-      fiscal_status: 'NOT_REQUIRED',
-      id: '30',
-      invoice_number: 'MAIN-20260831-000001',
-      return_lookup_token: '00000000-0000-4000-8000-000000000030',
-      subtotal: '35.00',
-      tax_total: '0.00',
-      total: '35.00',
-    },
-  };
-  await page.route('**/api/v1/pos/sales/30/receipt', (route) => json(route, receiptResponse));
-  await page.route('**/api/v1/pos/sales?query=*', (route) =>
+  });
+  await page.route('**/api/v1/pos/sales/30/receipt', (route) => json(route, receipt));
+  await page.route(/\/api\/v1\/pos\/sales(\?.*)?$/, (route) =>
     json(route, {
       data: [
         {
@@ -190,50 +116,62 @@ test('cashier scans, split-tenders, prints, and reprints a sale', async ({ page 
       ],
     }),
   );
-  await page.route('**/api/v1/pos/sales/30/reprint', (route) => json(route, receiptResponse, 201));
+  await page.route('**/api/v1/pos/sales/30/reprint', (route) => json(route, receipt, 201));
 
   await page.goto('/#/pos');
-  await expect(page.getByRole('heading', { name: 'Find medicine' })).toBeVisible();
-  await page.evaluate((barcode) => {
-    for (const key of barcode) {
-      window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key }));
-    }
-    window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-  }, panadol.barcode);
+  await expect(page.getByRole('textbox', { name: 'Find medicine' })).toBeVisible();
+  await scan(page, panadol.barcode);
   await expect(page.getByLabel('Panadol quantity')).toHaveValue('1');
+
   await page.keyboard.press('F8');
   const payment = page.getByRole('dialog', { name: 'Take payment' });
-  await payment.getByRole('group', { name: 'Cash' }).getByLabel('Applied to sale').fill('15');
-  await payment.getByRole('group', { name: 'Cash' }).getByLabel('Tendered').fill('20');
+  await expect(payment).toContainText('Rs 35.00');
   await payment.getByRole('group', { name: 'Card' }).getByLabel('Amount').fill('20');
-  await payment.getByRole('group', { name: 'Card' }).getByLabel('Reference').fill('AUTH-7');
-  await expect(payment).toContainText('Change PKR 5.00');
+  await payment
+    .getByRole('group', { name: 'Card' })
+    .getByLabel(/Card slip/)
+    .fill('AUTH-7');
+  await expect(
+    payment.getByRole('group', { name: 'Cash' }).getByLabel('Cash for this sale'),
+  ).toHaveValue('15.00');
+  await payment.getByRole('group', { name: 'Cash' }).getByLabel('Customer gave').fill('20');
+  await expect(payment).toContainText('Fully paid');
+  await expect(payment.locator('.change-due')).toHaveText('Rs 5.00');
   await page.keyboard.press('F8');
-  const receipt = page.getByRole('dialog', { name: 'Sale receipt' });
-  await expect(receipt).toContainText('MAIN-20260831-000001');
-  await expect(receipt).toContainText('PKR 35.00');
-  await expect(receipt).toContainText('Change');
-  await expect(receipt).toContainText('PKR 5.00');
-  await expect(receipt.getByAltText('Opaque return lookup token')).toBeVisible();
-  await receipt.getByRole('button', { name: 'Close' }).click();
+
+  const done = page.getByRole('dialog', { name: /Sale complete/ });
+  await expect(done).toContainText('MAIN-20260831-000001');
+  await expect(done).toContainText('Change');
+  await expect(done.getByAltText('Return lookup code')).toBeVisible();
+  expect(finalizeBody).toMatchObject({
+    cashSessionId: '10',
+    draftId: '20',
+    payments: [
+      { amount: '15.00', method: 'CASH', tenderedAmount: '20.00' },
+      { amount: '20.00', method: 'CARD', reference: 'AUTH-7' },
+    ],
+  });
+  await done.getByRole('button', { name: 'New sale' }).click();
+  await expect(page.getByText('No items yet')).toBeVisible();
 
   await page.keyboard.press('F6');
-  const reprint = page.getByRole('dialog', { name: 'Find and reprint receipt' });
-  await reprint.getByRole('button', { name: /MAIN-20260831-000001/ }).click();
-  await expect(page.getByRole('dialog', { name: 'Sale receipt' })).toContainText(
+  const reprint = page.getByRole('dialog', { name: 'Find a receipt' });
+  await reprint.getByRole('row', { name: /MAIN-20260831-000001/ }).click();
+  await expect(page.getByRole('dialog', { name: /Sale complete/ })).toContainText(
     'MAIN-20260831-000001',
   );
 });
 
 test('cart survives reload and keyboard controls remain complete', async ({ page }) => {
-  await authenticated(page);
+  await signIn(page, cashier);
   await page.route('**/api/v1/catalog/medicines/search**', (route) =>
     json(route, { data: [panadol] }),
   );
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, openCashSession));
   await page.goto('/#/pos');
-  const search = page.getByPlaceholder('Brand, generic, barcode or company');
+  const search = page.getByRole('textbox', { name: 'Find medicine' });
   await search.fill('Panadol');
-  await expect(page.getByRole('button', { name: /Panadol 500 mg/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Panadol/ })).toBeVisible();
   await search.press('Enter');
   await search.fill('*3');
   await search.press('Enter');
@@ -241,94 +179,95 @@ test('cart survives reload and keyboard controls remain complete', async ({ page
 
   await page.reload();
   await expect(page.getByLabel('Panadol quantity')).toHaveValue('3');
-  await page.getByRole('heading', { name: 'Counter ticket' }).click();
   await page.keyboard.press('F4');
-  await expect(page.getByRole('status')).toContainText('Cart held');
-  await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
+  await expect(page.getByText('Sale put on hold')).toBeVisible();
+  await expect(page.getByText('No items yet')).toBeVisible();
   await page.keyboard.press('F4');
-  await expect(page.getByRole('status')).toContainText('Held cart resumed');
+  await expect(page.getByText('Held sale resumed')).toBeVisible();
   await expect(page.getByLabel('Panadol quantity')).toHaveValue('3');
-  await page.keyboard.press('Delete');
-  await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Remove Panadol' }).click();
+  await expect(page.getByText('No items yet')).toBeVisible();
 
   await search.fill('Panadol');
-  await expect(page.getByRole('button', { name: /Panadol 500 mg/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Panadol/ })).toBeVisible();
   await search.press('Enter');
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('1');
   await page.keyboard.press('F2');
-  await expect(page.getByRole('status')).toContainText('New sale ready');
-  await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
+  await expect(page.getByText('No items yet')).toBeVisible();
 });
 
 test('an expired API session can re-authenticate without losing the counter', async ({ page }) => {
-  await authenticated(page);
+  await signIn(page, cashier);
+  let authenticated = false;
   await page.route('**/api/v1/catalog/medicines/search**', (route) =>
-    json(route, { message: 'Session expired' }, 401),
+    authenticated
+      ? json(route, { data: [panadol] })
+      : json(route, { message: 'Session expired' }, 401),
   );
-  await page.route('**/api/v1/auth/login', (route) => json(route, session));
+  await page.route('**/api/v1/auth/login', (route) => {
+    authenticated = true;
+    return json(route, cashier);
+  });
   await page.goto('/#/pos');
-  await page.getByPlaceholder('Brand, generic, barcode or company').fill('Panadol');
-  const reauth = page.getByRole('dialog');
-  await expect(reauth).toContainText('Session expired');
+  await page.getByRole('textbox', { name: 'Find medicine' }).fill('Panadol');
+  const reauth = page.getByRole('dialog', { name: 'Your session has ended' });
+  await expect(reauth).toBeVisible();
   await reauth.getByLabel('Password').fill('correct-password');
   await reauth.getByRole('button', { name: 'Continue' }).click();
   await expect(reauth).toBeHidden();
-  await expect(page.getByRole('heading', { name: 'Find medicine' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Find medicine' })).toHaveValue('Panadol');
 });
 
-test('operator opens, adjusts, and closes a cash session', async ({ page }) => {
-  await authenticated(page);
+test('operator opens, adjusts, and closes the cash drawer', async ({ page }) => {
+  await signIn(page, cashier);
   let current: Record<string, unknown> | null = null;
-  let movementRecorded = false;
+  let movement: unknown = null;
+  let closeBody: unknown = null;
   await page.route('**/api/v1/cash-sessions/current', (route) => json(route, current));
   await page.route('**/api/v1/cash-sessions/open', (route) => {
-    current = { ...cashSession };
+    current = { ...openCashSession };
     return json(route, current, 201);
   });
   await page.route('**/api/v1/cash-sessions/10/movements', (route) => {
-    movementRecorded = true;
-    current = { ...cashSession, cashOut: '200.00', expectedCash: '4800.00' };
+    movement = route.request().postDataJSON();
+    current = { ...openCashSession, cashOut: '200.00', expectedCash: '4800.00' };
     return json(route, { session: current }, 201);
   });
   await page.route('**/api/v1/cash-sessions/10/close', (route) => {
+    closeBody = route.request().postDataJSON();
     current = null;
-    return json(route, { ...cashSession, countedCash: '4800.00', status: 'CLOSED' }, 201);
+    return json(
+      route,
+      { ...openCashSession, countedCash: '4800.00', status: 'CLOSED', variance: '0.00' },
+      201,
+    );
   });
   await page.goto('/#/cash');
-  await page.getByRole('button', { name: 'Open cash session' }).click();
-  await expect(page.getByRole('heading', { name: 'OPEN' })).toBeVisible();
-  await page.getByLabel('Amount').fill('200');
-  await page.getByLabel('Reason').fill('Bank deposit');
-  await page.getByRole('button', { name: 'Record movement' }).click();
-  await expect.poll(() => movementRecorded).toBe(true);
-  await page.getByLabel('Counted cash (PKR)').fill('4800');
-  await page.getByRole('button', { name: 'Submit count' }).click();
-  await expect(page.getByRole('heading', { name: 'Open this terminal’s till' })).toBeVisible();
+  await page.getByLabel('Starting cash (opening float)').fill('5000');
+  await page.getByRole('button', { name: 'Open drawer' }).click();
+  await expect(page.getByRole('heading', { name: 'Drawer is open' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Cash in / out' }).click();
+  const movementDialog = page.getByRole('dialog', { name: 'Cash in / out' });
+  await movementDialog.getByLabel('Amount').fill('200');
+  await movementDialog.getByRole('button', { name: 'Record' }).click();
+  await expect(movementDialog).toBeHidden();
+  expect(movement).toMatchObject({ amount: '200', movementType: 'CASH_OUT' });
+
+  await page.getByRole('button', { name: 'Count and close' }).click();
+  const closeDialog = page.getByRole('dialog', { name: 'Count and close the drawer' });
+  await closeDialog.getByRole('button', { name: 'Enter total' }).click();
+  await closeDialog.getByLabel('Counted cash').fill('4800');
+  await closeDialog.getByRole('button', { name: 'Submit count' }).click();
+  await expect(page.getByRole('heading', { name: 'Open the drawer' })).toBeVisible();
+  expect(closeBody).toMatchObject({ countedCash: '4800.00' });
 });
 
-test('operator reviews safe shelf and reorder recommendations', async ({ page }) => {
-  await authenticated(page);
+test('stock controller reviews shelf and reorder recommendations', async ({ page }) => {
+  await signIn(page, cashier);
   let shelfOpen = true;
   let reorderOpen = true;
-  await page.route('**/api/v1/inventory-intelligence/attention', (route) =>
-    json(route, { critical_expiry: '1', expired: '1', open_reorders: '1', pending_shelf: '1' }),
-  );
-  await page.route('**/api/v1/expiry-risk**', (route) =>
-    json(route, {
-      data: [
-        {
-          batch_id: '1',
-          batch_number: 'EXP-1',
-          days_to_expiry: 10,
-          expiry_date: '2026-09-10',
-          medicine_name: 'Expiry Medicine',
-          quantity: '2.000',
-          risk_bucket: 'DAYS_0_30',
-          status: 'SELLABLE',
-          value_at_risk: '20.00',
-        },
-      ],
-    }),
-  );
   await page.route('**/api/v1/shelf-recommendations?**', (route) =>
     json(route, {
       data: shelfOpen
@@ -375,55 +314,131 @@ test('operator reviews safe shelf and reorder recommendations', async ({ page })
     reorderOpen = false;
     return json(route, { id: '2', status: 'REVIEWED' }, 201);
   });
+  await page.route('**/api/v1/expiry-risk**', (route) => json(route, { data: [] }));
   await page.goto('/#/inventory');
+  await page.getByRole('tab', { name: 'Shelf placement' }).click();
   await expect(page.getByText('Fast Picker')).toBeVisible();
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Moved it' }).click();
   await expect(page.getByText('Fast Picker')).toBeHidden();
-  await page.getByRole('button', { name: 'Mark reviewed' }).click();
+  await page.getByRole('tab', { name: 'Reorder suggestions' }).click();
+  await expect(page.getByText('Low Stock')).toBeVisible();
+  await page
+    .getByRole('row', { name: /Low Stock/ })
+    .getByRole('button', { name: 'Dismiss' })
+    .click();
   await expect(page.getByText('Low Stock')).toBeHidden();
 });
 
-test('authorized return moves from lookup through refund', async ({ page }) => {
-  await authenticated(page);
-  await page.route('**/api/v1/returns/lookup/**', async (route) => {
-    if (route.request().method() === 'GET') {
-      return json(route, {
-        items: [
-          {
-            batch_number: 'B-1',
-            eligible_quantity: '1.000',
-            id: '1',
-            medicine_name: 'Panadol',
-            returned_quantity: '0.000',
-            sold_quantity: '1.000',
-          },
-        ],
-        sale: {
-          created_at: '2026-08-31T12:00:00.000Z',
-          id: '30',
-          invoice_number: 'MAIN-000001',
-          total: '35.00',
-        },
-      });
-    }
+test('a return moves from invoice lookup through approval to a cash refund', async ({ page }) => {
+  await signIn(page, cashier);
+  const lookup = {
+    items: [
+      {
+        batchNumber: 'B-1',
+        eligibleQuantity: '1.000',
+        expired: false,
+        expiryDate: '2027-01-01',
+        id: '1',
+        medicineName: 'Panadol',
+        netPaid: '35.00',
+        returnedQuantity: '0.000',
+        soldQuantity: '1.000',
+        strength: '500 mg',
+        unitPrice: '35.00',
+      },
+    ],
+    payments: [{ amount: '35.00', method: 'CASH' }],
+    returns: [],
+    sale: {
+      createdAt: '2026-08-31T12:00:00.000Z',
+      customerId: null,
+      customerName: null,
+      discountTotal: '0.00',
+      id: '30',
+      invoiceNumber: 'MAIN-000001',
+      lookupToken: '00000000-0000-4000-8000-000000000030',
+      status: 'FINALIZED',
+      total: '35.00',
+    },
+  };
+  const queued = {
+    customerId: null,
+    customerName: null,
+    id: '40',
+    invoiceNumber: 'MAIN-000001',
+    itemCount: 1,
+    lookupToken: '00000000-0000-4000-8000-000000000030',
+    reason: 'Damaged pack',
+    refundAmount: '35.00',
+    refundLimits: { cashOrCard: '35.00', customerAccount: '0.00' },
+    refundMethod: null,
+    rejectionReason: null,
+    requestedAt: '2026-08-31T12:30:00.000Z',
+    requestedBy: 'E2E Operator',
+    returnNumber: 'RET-1',
+    saleId: '30',
+    status: 'REQUESTED',
+  };
+  let status = 'REQUESTED';
+  let requestBody: unknown = null;
+  let refundBody: unknown = null;
+  await page.route('**/api/v1/returns/invoices/MAIN-000001', (route) => json(route, lookup));
+  await page.route('**/api/v1/returns/lookup/*/request', (route) => {
+    requestBody = route.request().postDataJSON();
     return json(route, { id: '40', returnNumber: 'RET-1', status: 'REQUESTED' }, 201);
   });
-  await page.route('**/api/v1/returns/40/approve', (route) =>
-    json(route, { id: '40', status: 'APPROVED' }, 201),
+  await page.route(/\/api\/v1\/returns(\?.*)?$/, (route) =>
+    json(route, { data: status === 'REFUNDED' ? [] : [{ ...queued, status }] }),
   );
-  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, cashSession));
-  await page.route('**/api/v1/returns/40/refund', (route) =>
-    json(route, { id: '40', refundAmount: '35.00', status: 'REFUNDED' }, 201),
-  );
+  await page.route('**/api/v1/returns/40/approve', (route) => {
+    status = 'APPROVED';
+    return json(route, { id: '40', status: 'APPROVED' }, 201);
+  });
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, openCashSession));
+  await page.route('**/api/v1/returns/40/refund', (route) => {
+    refundBody = route.request().postDataJSON();
+    status = 'REFUNDED';
+    return json(
+      route,
+      { id: '40', refundAmount: '35.00', refundMethod: 'CASH', status: 'REFUNDED' },
+      201,
+    );
+  });
+
   await page.goto('/#/returns');
-  await page.getByLabel('Scan or paste receipt token').fill('00000000-0000-4000-8000-000000000030');
-  await page.getByRole('button', { name: 'Find receipt' }).click();
-  await page.getByLabel('Return quantity').fill('1');
-  await page.getByLabel('Disposition').selectOption('SCRAP');
-  await page.getByLabel('Return reason').fill('Damaged pack');
-  await page.getByRole('button', { name: 'Submit return request' }).click();
-  await page.getByRole('button', { name: 'Approve return' }).click();
-  await page.getByRole('button', { name: 'Issue cash refund' }).click();
-  await expect(page.getByText('Status: REFUNDED')).toBeVisible();
-  await expect(page.getByText('Refunded PKR 35.00')).toBeVisible();
+  await page.getByRole('searchbox', { name: 'Invoice number or receipt code' }).fill('MAIN-000001');
+  await page.getByRole('button', { name: 'Find sale' }).click();
+  await page.getByLabel('Return quantity for Panadol').fill('1');
+  await page.getByLabel('Disposition for Panadol').selectOption('SCRAP');
+  await page.getByLabel('Reason', { exact: true }).selectOption({ index: 1 });
+  await page.getByRole('button', { name: /Request return/ }).click();
+  await expect
+    .poll(() => requestBody)
+    .toMatchObject({
+      items: [{ disposition: 'SCRAP', quantity: '1', saleItemId: '1' }],
+    });
+
+  await page.getByRole('tab', { name: /Return queue/ }).click();
+  await page.getByRole('row', { name: /RET-1/ }).getByRole('button', { name: 'Approve' }).click();
+  await page
+    .getByRole('row', { name: /RET-1/ })
+    .getByRole('button', { name: /Refund/ })
+    .click();
+  const refund = page.getByRole('dialog', { name: /Refund Rs 35.00/ });
+  await expect(refund.getByRole('radio', { name: /Cash from drawer/ })).toBeChecked();
+  await refund.getByRole('button', { name: /Refund/ }).click();
+  await expect.poll(() => refundBody).toMatchObject({ cashSessionId: '10', method: 'CASH' });
+});
+
+test('a cashier without refund authority never sees the refund action', async ({ page }) => {
+  await signIn(page, {
+    ...baseSession,
+    user: { ...baseSession.user, permissions: ['returns.lookup', 'returns.request'] },
+  });
+  await page.route(/\/api\/v1\/returns(\?.*)?$/, (route) => json(route, { data: [] }));
+  await page.goto('/#/returns');
+  await expect(
+    page.getByRole('searchbox', { name: 'Invoice number or receipt code' }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: /Refund/ })).toHaveCount(0);
 });

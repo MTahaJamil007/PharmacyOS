@@ -148,7 +148,7 @@ export function PaymentDialog({
         </div>
 
         <div className="tender-rows">
-          <div className="tender-row">
+          <div className="tender-row" role="group" aria-label="Cash">
             <span className="tender-method">
               <Banknote aria-hidden /> Cash
             </span>
@@ -185,7 +185,7 @@ export function PaymentDialog({
             ))}
           </div>
 
-          <div className="tender-row">
+          <div className="tender-row" role="group" aria-label="Card">
             <span className="tender-method">
               <CreditCard aria-hidden /> Card
             </span>
@@ -207,7 +207,7 @@ export function PaymentDialog({
             </Field>
           </div>
 
-          <div className="tender-row">
+          <div className="tender-row" role="group" aria-label="Bank / wallet">
             <span className="tender-method">
               <Landmark aria-hidden /> Bank / wallet
             </span>
@@ -229,7 +229,11 @@ export function PaymentDialog({
             </Field>
           </div>
 
-          <div className={allowCredit ? 'tender-row' : 'tender-row disabled'}>
+          <div
+            className={allowCredit ? 'tender-row' : 'tender-row disabled'}
+            role="group"
+            aria-label="Khata (credit)"
+          >
             <span className="tender-method">
               <BookUser aria-hidden /> Khata (credit)
             </span>
