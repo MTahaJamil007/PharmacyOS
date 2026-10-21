@@ -189,9 +189,14 @@ export class IntelligenceService {
             when inventory_batches.expiry_date <= local_date + policies.expiry_moderate_days then 'DAYS_61_90'
           end as risk_bucket,
           (inventory_batches.expiry_date - local_date) as days_to_expiry,
-          inventory_batches.status
+          inventory_batches.status,
+          work_items.id::text as work_item_id, work_items.status as work_item_status,
+          work_items.action as work_item_action
         from inventory_batches
         join medicines on medicines.id = inventory_batches.medicine_id
+        left join expiry_work_items work_items
+          on work_items.inventory_batch_id = inventory_batches.id
+          and work_items.status in ('OPEN', 'REVIEWED')
         join branches on branches.id = inventory_batches.branch_id
         join operational_intelligence_policies policies on policies.branch_id = branches.id
         cross join lateral (select (now() at time zone branches.timezone)::date as local_date) dates

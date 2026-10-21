@@ -18,7 +18,7 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>,
     );
 
-    expect(screen.getByRole('alert').textContent).toContain('Your cart is stored on this terminal');
+    expect(screen.getByRole('alert').textContent).toContain('kept on this terminal');
     expect(screen.getByRole('button', { name: 'Reload counter' })).not.toBeNull();
   });
 });

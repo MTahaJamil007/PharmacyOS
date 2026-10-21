@@ -1,9 +1,14 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { type FormEvent, useRef, useState } from 'react';
 
 import { login } from '../api';
 import { useI18n } from '../i18n';
 import { usePharmacyStore } from '../store';
+import { Alert, Button, Dialog, Field, Input } from './ui';
 
+/**
+ * Shown when the server ends the session (idle timeout, password change, role change). The
+ * counter state stays in place underneath, so signing in again continues the same sale.
+ */
 export function ReauthModal({ onComplete }: { readonly onComplete: () => void }) {
   const current = usePharmacyStore((state) => state.session);
   const setSession = usePharmacyStore((state) => state.setSession);
@@ -14,10 +19,9 @@ export function ReauthModal({ onComplete }: { readonly onComplete: () => void })
   const [terminalCode, setTerminalCode] = useState(current?.user.terminalCode ?? 'COUNTER-01');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => passwordInput.current?.focus(), []);
 
-  const submit = async (event: FormEvent): Promise<void> => {
-    event.preventDefault();
+  const submit = async (event?: FormEvent): Promise<void> => {
+    event?.preventDefault();
     setBusy(true);
     setError('');
     try {
@@ -31,47 +35,45 @@ export function ReauthModal({ onComplete }: { readonly onComplete: () => void })
   };
 
   return (
-    <div className="modal-backdrop" role="presentation">
-      <form
-        className="reauth-dialog"
-        role="dialog"
-        aria-modal="true"
-        onSubmit={(event) => void submit(event)}
-      >
-        <p className="eyebrow">{t('auth.sessionExpired')}</p>
-        <h2>{t('auth.sessionExpired')}</h2>
-        <p>{t('auth.reauthenticate')}</p>
-        <label>
-          {t('auth.username')}
-          <input
+    <Dialog
+      title={t('auth.sessionExpired')}
+      description={t('auth.reauthenticate')}
+      size="sm"
+      initialFocus={passwordInput}
+      onClose={() => setSession(null)}
+      closeLabel={t('auth.signOut')}
+      footer={
+        <>
+          <Button onClick={() => setSession(null)}>{t('auth.signOut')}</Button>
+          <Button variant="primary" loading={busy} onClick={() => void submit()}>
+            {t('auth.continue')}
+          </Button>
+        </>
+      }
+    >
+      <form className="form-stack" onSubmit={(event) => void submit(event)}>
+        {error ? <Alert tone="danger">{error}</Alert> : null}
+        <Field label={t('auth.username')}>
+          <Input
             autoComplete="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
           />
-        </label>
-        <label>
-          {t('auth.password')}
-          <input
+        </Field>
+        <Field label={t('auth.password')}>
+          <Input
             ref={passwordInput}
             type="password"
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
-        </label>
-        <label>
-          {t('auth.terminal')}
-          <input value={terminalCode} onChange={(event) => setTerminalCode(event.target.value)} />
-        </label>
-        {error ? (
-          <p className="inline-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <button className="primary-button" disabled={busy}>
-          {busy ? 'Checking…' : t('auth.continue')}
-        </button>
+        </Field>
+        <Field label={t('auth.terminal')}>
+          <Input value={terminalCode} onChange={(event) => setTerminalCode(event.target.value)} />
+        </Field>
+        <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
       </form>
-    </div>
+    </Dialog>
   );
 }

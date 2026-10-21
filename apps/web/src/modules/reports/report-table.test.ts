@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { humanizeColumn, toCsv, toReportTable } from './report-table';
+import {
+  formatReportCell,
+  humanizeColumn,
+  tabularReportToCsv,
+  toCsv,
+  toReportTable,
+} from './report-table';
 
 describe('deterministic report rendering', () => {
   it('renders an aggregate fact object as measure and value rows', () => {
@@ -63,5 +69,36 @@ describe('report export', () => {
         rows: [['Expired, damaged'], ['He said "return it"'], ['line\nbreak']],
       }),
     ).toBe('Note\r\n"Expired, damaged"\r\n"He said ""return it"""\r\n"line\nbreak"');
+  });
+});
+
+describe('typed report formatting', () => {
+  const money = { key: 'netSales', label: 'Net sales', type: 'money' } as const;
+  const quantity = { key: 'quantity', label: 'Quantity', type: 'quantity' } as const;
+  const text = { key: 'name', label: 'Medicine', type: 'text' } as const;
+
+  it('formats each column by its declared type', () => {
+    expect(formatReportCell(money, '1234.5')).toBe('Rs 1,234.50');
+    expect(formatReportCell(quantity, '12.500')).toBe('12.5');
+    expect(formatReportCell(text, 'Panadol')).toBe('Panadol');
+    expect(formatReportCell(money, null)).toBe('—');
+  });
+
+  it('exports exact raw values with labelled headers and a totals row', () => {
+    expect(
+      tabularReportToCsv({
+        columns: [text, money],
+        dataBasis: 'test',
+        from: '2026-01-01',
+        report: 'item-sales',
+        rows: [
+          { name: 'Panadol, 500mg', netSales: '1234.50' },
+          { name: 'Brufen', netSales: '10.00' },
+        ],
+        title: 'Item sales',
+        to: '2026-01-31',
+        totals: { name: null, netSales: '1244.50' },
+      }),
+    ).toBe('Medicine,Net sales\r\n"Panadol, 500mg",1234.50\r\nBrufen,10.00\r\nTotal,1244.50');
   });
 });

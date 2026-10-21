@@ -1,17 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
-import { PERMISSIONS } from '@pharmacy/shared';
-import { useMemo, useState } from 'react';
+import { Bot, Sparkles } from 'lucide-react';
+import { useState } from 'react';
 
-import {
-  askOwnerAssistant,
-  getFailedJobs,
-  getOperationalAlerts,
-  type OwnerAnswer,
-  type OwnerTool,
-} from '../../api';
-import { usePharmacyStore } from '../../store';
+import { askOwnerAssistant, type OwnerAnswer, type OwnerTool } from '../../api';
+import { Alert, Button, Card, DataTable, EmptyState, ErrorAlert } from '../../components/ui';
+import { humanizeColumn, toReportTable } from '../reports/report-table';
 
-const ownerQuestions: ReadonlyArray<{ readonly question: string; readonly tool: OwnerTool }> = [
+const QUESTIONS: ReadonlyArray<{ readonly question: string; readonly tool: OwnerTool }> = [
   { question: 'What is most likely to run out soon?', tool: 'get_purchase_suggestions' },
   { question: 'Which batches need expiry action first?', tool: 'get_expiry_risk' },
   { question: 'Summarize sales for the last 30 days.', tool: 'get_sales_summary' },
@@ -21,147 +15,83 @@ const ownerQuestions: ReadonlyArray<{ readonly question: string; readonly tool: 
   },
 ];
 
+/**
+ * Read-only questions answered from whitelisted local reports. The optional AI explanation
+ * only describes those facts; it cannot change stock, prices, orders or refunds.
+ */
 export function OwnerAssistant(): React.JSX.Element {
-  const session = usePharmacyStore((state) => state.session);
-  const token = session?.accessToken ?? '';
-  const canViewSystemHealth =
-    session?.user.permissions.includes(PERMISSIONS.SETTINGS_MANAGE_SYSTEM) ?? false;
   const [selected, setSelected] = useState(0);
   const [answer, setAnswer] = useState<OwnerAnswer | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
-  const failedJobs = useQuery({
-    queryKey: ['operations', 'failed-jobs'],
-    queryFn: () => getFailedJobs(token),
-    enabled: canViewSystemHealth && Boolean(token),
-    refetchInterval: 60_000,
-  });
-  const operationalAlerts = useQuery({
-    queryKey: ['operations', 'alerts'],
-    queryFn: () => getOperationalAlerts(token),
-    enabled: canViewSystemHealth && Boolean(token),
-    refetchInterval: 60_000,
-  });
-  const current = ownerQuestions[selected] ?? ownerQuestions[0];
-  const ask = async (): Promise<void> => {
-    if (!current) return;
+  const current = QUESTIONS[selected] ?? QUESTIONS[0];
+  const ask = async (index: number): Promise<void> => {
+    const item = QUESTIONS[index];
+    if (!item) return;
+    setSelected(index);
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError('');
-      setAnswer(await askOwnerAssistant(token, current.question, current.tool));
+      setAnswer(await askOwnerAssistant(item.question, item.tool));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Assistant is unavailable');
+      setAnswer(null);
+      setError(caught);
     } finally {
       setLoading(false);
     }
   };
-  const factsText = useMemo(() => (answer ? JSON.stringify(answer.facts, null, 2) : ''), [answer]);
+  const table = answer ? toReportTable(answer.facts) : null;
   return (
-    <section className="operations-canvas assistant-canvas" aria-label="Owner assistant">
-      <section className="operations-heading">
-        <div>
-          <p className="eyebrow">Owner-only · read-only</p>
-          <h1>Ask about operations, never medicine.</h1>
-          <p>
-            Whitelisted local reports produce the facts. AI may explain them but cannot write,
-            order, refund, or change stock.
-          </p>
-        </div>
-      </section>
-      {canViewSystemHealth ? (
-        <section className="job-health-panel" aria-label="Background job health">
-          <div className="attention-ledger">
-            <article
-              className={
-                failedJobs.data?.summary.failed ? 'attention-cell critical' : 'attention-cell'
-              }
-            >
-              <span>Failed jobs</span>
-              <strong>{failedJobs.data?.summary.failed ?? '—'}</strong>
-            </article>
-            <article className="attention-cell warning">
-              <span>Retrying</span>
-              <strong>{failedJobs.data?.summary.retryable ?? '—'}</strong>
-            </article>
-            <article className="attention-cell">
-              <span>Processing</span>
-              <strong>{failedJobs.data?.summary.processing ?? '—'}</strong>
-            </article>
-            <article
-              className={
-                failedJobs.data?.summary.staleProcessing
-                  ? 'attention-cell critical'
-                  : 'attention-cell'
-              }
-            >
-              <span>Stale locks</span>
-              <strong>{failedJobs.data?.summary.staleProcessing ?? '—'}</strong>
-            </article>
-          </div>
-          {failedJobs.error ? (
-            <p className="inline-error">Background job status is unavailable.</p>
-          ) : failedJobs.data?.jobs[0] ? (
-            <p className="job-health-latest">
-              Latest failure: <strong>{failedJobs.data.jobs[0].jobType}</strong> ·{' '}
-              {failedJobs.data.jobs[0].lastError ?? 'No error detail was recorded'}
-            </p>
-          ) : (
-            <p className="job-health-latest">No failed background jobs require review.</p>
-          )}
-          <p className="job-health-latest">
-            Operational alerts: <strong>{operationalAlerts.data?.summary.total ?? '—'}</strong> open
-            · <strong>{operationalAlerts.data?.summary.critical ?? '—'}</strong> critical
-            {operationalAlerts.data?.alerts[0]
-              ? ` · ${operationalAlerts.data.alerts[0].title}`
-              : ''}
-          </p>
-        </section>
-      ) : null}
-      <section className="assistant-layout">
-        <aside className="question-rail">
-          <p className="eyebrow">Suggested questions</p>
-          {ownerQuestions.map((item, index) => (
-            <button
-              className={selected === index ? 'selected' : ''}
+    <Card
+      title="Ask about the business"
+      description="Answers come from the shop's own records. Never used for clinical or dosing advice."
+    >
+      <div className="stack">
+        <div className="row wrap">
+          {QUESTIONS.map((item, index) => (
+            <Button
               key={item.tool}
-              onClick={() => setSelected(index)}
+              size="sm"
+              variant={selected === index && answer ? 'primary' : 'secondary'}
+              icon={Sparkles}
+              loading={loading && selected === index}
+              onClick={() => void ask(index)}
             >
               {item.question}
-            </button>
+            </Button>
           ))}
-        </aside>
-        <article className="assistant-answer">
-          <header>
-            <span>Operational question</span>
-            <h2>{current?.question}</h2>
-            <button className="primary-button" disabled={loading} onClick={() => void ask()}>
-              {loading ? 'Checking local facts…' : 'Get answer'}
-            </button>
-          </header>
-          {error ? <p className="inline-error">{error}</p> : null}
-          {answer ? (
-            <>
-              <section className="fact-block">
-                <p className="eyebrow">Authoritative tool result</p>
-                <pre>{factsText}</pre>
-                <small>{answer.dataBasis}</small>
-              </section>
-              <section className="explanation-block">
-                <p className="eyebrow">AI explanation</p>
-                <p>
-                  {answer.explanation ??
-                    'AI is disabled. The deterministic result above remains available and authoritative.'}
-                </p>
-              </section>
-            </>
-          ) : (
-            <p className="empty-state">
-              Choose a question and get the current local facts. No customer-identifiable
-              prescription or health data is sent to the provider.
-            </p>
-          )}
-        </article>
-      </section>
-    </section>
+        </div>
+        <ErrorAlert error={error} />
+        {answer && table ? (
+          <>
+            <Alert tone="info" title={current?.question}>
+              {answer.explanation ??
+                'AI explanations are switched off. The figures below are the complete answer.'}
+            </Alert>
+            {table.columns.length > 0 ? (
+              <DataTable
+                caption="Facts"
+                compact
+                maxHeight={360}
+                rows={table.rows.map((cells, index) => ({ cells, index }))}
+                rowKey={(row) => String(row.index)}
+                columns={table.columns.map((column, columnIndex) => ({
+                  header:
+                    column === 'Measure' || column === 'Value' ? column : humanizeColumn(column),
+                  key: column,
+                  render: (row: { readonly cells: readonly string[] }) =>
+                    row.cells[columnIndex] ?? '—',
+                }))}
+              />
+            ) : (
+              <EmptyState icon={Bot} title="Nothing to report" />
+            )}
+            <span className="muted">{answer.dataBasis}</span>
+          </>
+        ) : !error ? (
+          <span className="muted">Pick a question to see the current figures.</span>
+        ) : null}
+      </div>
+    </Card>
   );
 }

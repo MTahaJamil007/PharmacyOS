@@ -7,12 +7,15 @@ const receipt: SaleReceipt = {
   items: [
     {
       batch_number: 'B-1',
+      discount_amount: '0.00',
       expiry_date: '2027-12-31',
       id: '1',
       line_total: '35.00',
       name: 'Panadol',
       quantity: '1.000',
       strength: '500 mg',
+      tax_amount: '0.00',
+      tax_rate: '0.00',
       unit_price: '35.00',
     },
   ],
@@ -40,9 +43,13 @@ const receipt: SaleReceipt = {
     fiscal_status: 'NOT_REQUIRED',
     id: '30',
     invoice_number: 'MAIN-000030',
+    pos_registration_number: null,
     return_lookup_token: '00000000-0000-4000-8000-000000000030',
+    seller_ntn_cnic: '1234567',
+    seller_strn: null,
     subtotal: '35.00',
     tax_total: '0.00',
+    terminal_name: 'Front counter',
     total: '35.00',
   },
 };
@@ -87,6 +94,7 @@ describe('ESC/POS receipt transport', () => {
     ).toBe(true);
     expect(bytes.slice(-3)).toEqual([0x1d, 0x56, 0x00]);
     expect(new TextDecoder().decode(written)).toContain('MAIN-000030');
+    expect(new TextDecoder().decode(written)).toContain('NTN 1234567');
     expect(new TextDecoder().decode(written)).toContain(receipt.returnQrPayload);
   });
 });

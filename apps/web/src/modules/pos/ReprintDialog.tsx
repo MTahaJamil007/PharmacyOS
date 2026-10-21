@@ -1,109 +1,86 @@
-import { useEffect, useRef, useState } from 'react';
-import type { SaleReceipt, SaleReceiptSearchResult } from '@pharmacy/shared';
+import { useQuery } from '@tanstack/react-query';
+import type { SaleReceipt } from '@pharmacy/shared';
+import { Search } from 'lucide-react';
+import { useRef, useState } from 'react';
 
 import { findSalesForReceipt, reprintSaleReceipt } from '../../api';
+import { Alert, Button, DataTable, Dialog, EmptyState, SearchInput } from '../../components/ui';
+import { formatDateTime, formatMoney } from '../../format';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { useDialogFocus } from '../../hooks/useDialogFocus';
-import { formatPkrMoney } from '../../money';
 
 export function ReprintDialog({
   onClose,
   onReceipt,
-  token,
 }: {
   readonly onClose: () => void;
   readonly onReceipt: (receipt: SaleReceipt) => void;
-  readonly token: string;
 }) {
-  const dialog = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<readonly SaleReceiptSearchResult[]>([]);
+  const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
-  const debouncedQuery = useDebouncedValue(query, 180);
-  useDialogFocus(dialog, searchInput, onClose);
-  useEffect(() => {
-    let active = true;
-    void findSalesForReceipt(token, debouncedQuery)
-      .then((sales) => {
-        if (active) setResults(sales);
-      })
-      .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : 'Receipt search failed');
-      });
-    return () => {
-      active = false;
-    };
-  }, [debouncedQuery, token]);
+  const debounced = useDebouncedValue(text.trim(), 200);
+  const sales = useQuery({
+    queryKey: ['receipt-search', debounced],
+    queryFn: () => findSalesForReceipt(debounced),
+  });
   const select = async (saleId: string): Promise<void> => {
     setBusyId(saleId);
     setError('');
     try {
-      onReceipt(await reprintSaleReceipt(token, saleId));
+      onReceipt(await reprintSaleReceipt(saleId));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Receipt reprint failed');
+      setError(cause instanceof Error ? cause.message : 'The receipt could not be opened');
     } finally {
       setBusyId('');
     }
   };
-
   return (
-    <div className="modal-backdrop">
-      <div
-        ref={dialog}
-        className="reprint-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reprint-title"
-      >
-        <header>
-          <div>
-            <p className="eyebrow">Past sales</p>
-            <h2 id="reprint-title">Find and reprint receipt</h2>
-          </div>
-        </header>
-        <label className="search-box">
-          <span aria-hidden="true">⌕</span>
-          <input
-            ref={searchInput}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Invoice number"
+    <Dialog
+      title="Find a receipt"
+      description="Latest sales first. Reprints are recorded in the audit trail."
+      size="lg"
+      initialFocus={searchInput}
+      onClose={onClose}
+      footer={<Button onClick={onClose}>Close</Button>}
+    >
+      <div className="form-stack">
+        <SearchInput
+          ref={searchInput}
+          icon={Search}
+          aria-label="Invoice number"
+          placeholder="Invoice number, e.g. 20261021-000042"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+        {error ? <Alert tone="danger">{error}</Alert> : null}
+        {sales.error ? <Alert tone="danger">{sales.error.message}</Alert> : null}
+        <div className="card">
+          <DataTable
+            rows={sales.data ?? []}
+            loading={sales.isLoading}
+            rowKey={(sale) => sale.id}
+            onRowClick={(sale) => void select(sale.id)}
+            maxHeight={380}
+            empty={<EmptyState title="No matching sale" />}
+            columns={[
+              {
+                header: 'Invoice',
+                key: 'invoice',
+                render: (sale) => <span className="cell-primary mono">{sale.invoice_number}</span>,
+              },
+              { header: 'Time', key: 'time', render: (sale) => formatDateTime(sale.created_at) },
+              { header: 'Cashier', key: 'cashier', render: (sale) => sale.cashier_name },
+              {
+                align: 'end',
+                header: 'Total',
+                key: 'total',
+                render: (sale) => (busyId === sale.id ? 'Opening…' : formatMoney(sale.total)),
+              },
+            ]}
           />
-        </label>
-        {error ? (
-          <p className="inline-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <div className="receipt-search-results">
-          {results.length === 0 ? (
-            <p>No matching receipts.</p>
-          ) : (
-            results.map((sale) => (
-              <button
-                key={sale.id}
-                onClick={() => void select(sale.id)}
-                disabled={busyId === sale.id}
-              >
-                <span>
-                  <strong>{sale.invoice_number}</strong>
-                  <small>
-                    {new Date(sale.created_at).toLocaleString('en-PK')} · {sale.cashier_name}
-                  </small>
-                </span>
-                <b>{busyId === sale.id ? 'Opening…' : formatPkrMoney(sale.total)}</b>
-              </button>
-            ))
-          )}
         </div>
-        <footer>
-          <button className="secondary-button" onClick={onClose}>
-            Close
-          </button>
-        </footer>
       </div>
-    </div>
+    </Dialog>
   );
 }

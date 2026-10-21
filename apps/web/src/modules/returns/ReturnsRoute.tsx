@@ -1,10 +1,5 @@
-import { AppShell } from '../../components/AppShell';
-import { ReturnLookupScreen } from './ReturnLookupScreen';
+import { ReturnsScreen } from './ReturnsScreen';
 
 export default function ReturnsRoute(): React.JSX.Element {
-  return (
-    <AppShell>
-      <ReturnLookupScreen />
-    </AppShell>
-  );
+  return <ReturnsScreen />;
 }

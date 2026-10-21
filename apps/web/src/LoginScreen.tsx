@@ -1,14 +1,28 @@
+import { CheckCircle2 } from 'lucide-react';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 
 import { login } from './api';
+import { Alert, Button, Field, Input } from './components/ui';
+import { useI18n } from './i18n';
 import { usePharmacyStore } from './store';
+
+const TERMINAL_KEY = 'pharmacy-terminal-code';
+
+function rememberedTerminal(): string {
+  try {
+    return localStorage.getItem(TERMINAL_KEY) ?? 'COUNTER-01';
+  } catch {
+    return 'COUNTER-01';
+  }
+}
 
 export function LoginScreen(): React.JSX.Element {
   const usernameInput = useRef<HTMLInputElement>(null);
   const setSession = usePharmacyStore((state) => state.setSession);
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [terminalCode, setTerminalCode] = useState('COUNTER-01');
+  const [terminalCode, setTerminalCode] = useState(rememberedTerminal);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -21,9 +35,22 @@ export function LoginScreen(): React.JSX.Element {
     setBusy(true);
     setError(null);
     try {
-      setSession(await login(username, password, terminalCode));
+      const session = await login(username.trim(), password, terminalCode.trim());
+      try {
+        localStorage.setItem(TERMINAL_KEY, terminalCode.trim().toUpperCase());
+      } catch {
+        // The terminal code is only a convenience for the next sign-in.
+      }
+      setSession(session);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Login failed');
+      setPassword('');
+      setError(
+        cause instanceof Error && /credentials|terminal/i.test(cause.message)
+          ? 'Username, password, or terminal code is not correct. After several failed attempts the account is locked for a few minutes.'
+          : cause instanceof Error
+            ? cause.message
+            : 'Sign-in failed',
+      );
     } finally {
       setBusy(false);
     }
@@ -31,78 +58,69 @@ export function LoginScreen(): React.JSX.Element {
 
   return (
     <main className="login-shell">
-      <section className="login-context" aria-label="System status">
-        <div className="brand-lockup">
+      <section className="login-aside" aria-label="About this system">
+        <div className="brand">
           <span className="brand-mark" aria-hidden="true">
             Rx
           </span>
-          <div>
-            <strong>PharmacyOS</strong>
-            <span>Local counter system</span>
-          </div>
+          <strong>{t('app.name')}</strong>
         </div>
-        <div className="login-message">
-          <p className="eyebrow">Counter ready</p>
-          <h1>
-            Fast at the counter.
-            <br />
-            Exact in the ledger.
-          </h1>
-          <p>Sales remain available on the pharmacy network, even when the internet is not.</p>
+        <div>
+          <h1>Fast at the counter. Exact in the books.</h1>
+          <ul>
+            <li>
+              <CheckCircle2 aria-hidden /> Sells keep working on the shop network without internet
+            </li>
+            <li>
+              <CheckCircle2 aria-hidden /> First-expiry-first-out batches on every sale
+            </li>
+            <li>
+              <CheckCircle2 aria-hidden /> Every rupee and every tablet traced in the ledger
+            </li>
+          </ul>
         </div>
-        <dl className="system-strip">
-          <div>
-            <dt>Database</dt>
-            <dd>
-              <i className="status-dot" /> Local
-            </dd>
-          </div>
-          <div>
-            <dt>Fiscal mode</dt>
-            <dd>Configured by owner</dd>
-          </div>
-          <div>
-            <dt>Support</dt>
-            <dd>Alt + /</dd>
-          </div>
-        </dl>
+        <footer>Sign in with your own account. Every action is recorded against your name.</footer>
       </section>
-
       <section className="login-panel">
-        <form onSubmit={(event) => void submit(event)}>
-          <p className="eyebrow">Staff sign in</p>
-          <h2>Open this terminal</h2>
-          <label>
-            Username
-            <input
-              ref={usernameInput}
-              autoComplete="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </label>
-          <label>
-            Terminal code
-            <input value={terminalCode} onChange={(event) => setTerminalCode(event.target.value)} />
-          </label>
-          {error ? (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <button className="primary-button" type="submit" disabled={busy}>
-            {busy ? 'Opening…' : 'Open counter'}
-          </button>
-          <p className="form-note">Use your own account. Actions are recorded against your name.</p>
+        <form className="login-form" onSubmit={(event) => void submit(event)}>
+          <h2>{t('auth.signIn')}</h2>
+          <p>Open this terminal with your staff account.</p>
+          <div className="form-stack">
+            {error ? <Alert tone="danger">{error}</Alert> : null}
+            <Field label={t('auth.username')}>
+              <Input
+                ref={usernameInput}
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+            </Field>
+            <Field label={t('auth.password')}>
+              <Input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </Field>
+            <Field label={t('auth.terminal')} hint="Printed on the label of this computer.">
+              <Input
+                value={terminalCode}
+                autoCapitalize="characters"
+                onChange={(event) => setTerminalCode(event.target.value)}
+              />
+            </Field>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              block
+              loading={busy}
+              disabled={!username.trim() || !password || !terminalCode.trim()}
+            >
+              {busy ? 'Signing in…' : t('auth.signIn')}
+            </Button>
+          </div>
         </form>
       </section>
     </main>

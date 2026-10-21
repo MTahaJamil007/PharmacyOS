@@ -2,35 +2,49 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 const englishMessages = {
   'app.name': 'PharmacyOS',
+  'app.tagline': 'Pharmacy operations',
+  'group.sell': 'Sell',
+  'group.stock': 'Stock',
+  'group.money': 'Money',
+  'group.system': 'System',
   'nav.counter': 'Counter',
-  'nav.cash': 'Cash session',
+  'nav.returns': 'Returns',
   'nav.customers': 'Customers',
+  'nav.budget': 'Budget planner',
   'nav.inventory': 'Inventory',
   'nav.purchasing': 'Purchasing',
+  'nav.cash': 'Cash drawer',
+  'nav.owner': 'Dashboard',
   'nav.reports': 'Reports',
   'nav.operations': 'Operations',
-  'nav.budget': 'Budget',
-  'nav.returns': 'Returns',
-  'nav.owner': 'Owner',
-  'nav.admin': 'Admin',
-  'status.checking': 'Checking LAN',
-  'status.ready': 'LAN ready',
-  'status.unavailable': 'LAN unavailable',
+  'nav.admin': 'Settings',
+  'nav.collapse': 'Collapse menu',
+  'nav.expand': 'Expand menu',
+  'status.checking': 'Checking server',
+  'status.ready': 'Server connected',
+  'status.unavailable': 'Server unreachable',
+  'status.tillOpen': 'Till open',
+  'status.tillClosed': 'Till closed',
+  'status.tillCounting': 'Variance pending',
   'auth.signOut': 'Sign out',
-  'auth.sessionExpired': 'Session expired',
-  'auth.reauthenticate': 'Re-enter your password to continue this counter safely.',
-  'auth.continue': 'Continue session',
+  'auth.changePassword': 'Change password',
+  'auth.sessionExpired': 'Your session has ended',
+  'auth.reauthenticate': 'Sign in again to continue. Nothing on this counter has been lost.',
+  'auth.continue': 'Continue',
   'auth.username': 'Username',
   'auth.password': 'Password',
   'auth.terminal': 'Terminal code',
+  'auth.signIn': 'Sign in',
   'pos.findMedicine': 'Find medicine',
-  'pos.searchPlaceholder': 'Brand, generic, barcode or company',
-  'pos.scanHint': 'Scan a barcode or start typing',
-  'pos.currentCart': 'Current cart',
+  'pos.searchPlaceholder': 'Search by brand, generic, company, or scan a barcode',
+  'pos.currentCart': 'Current sale',
   'pos.newSale': 'New sale',
   'pos.holdCart': 'Hold / resume',
-  'pos.reprint': 'Receipt search',
+  'pos.reprint': 'Find receipt',
   'pos.takePayment': 'Take payment',
+  'pos.discount': 'Discount',
+  'pos.cancelSale': 'Cancel sale',
+  'language.switch': 'اردو',
 } as const;
 
 type MessageKey = keyof typeof englishMessages;
@@ -38,36 +52,53 @@ type Locale = 'en' | 'ur';
 
 const urduMessages: Record<MessageKey, string> = {
   'app.name': 'فارمیسی او ایس',
+  'app.tagline': 'فارمیسی آپریشنز',
+  'group.sell': 'فروخت',
+  'group.stock': 'اسٹاک',
+  'group.money': 'رقم',
+  'group.system': 'سسٹم',
   'nav.counter': 'کاؤنٹر',
-  'nav.cash': 'کیش سیشن',
+  'nav.returns': 'واپسی',
   'nav.customers': 'گاہک',
+  'nav.budget': 'بجٹ پلانر',
   'nav.inventory': 'انوینٹری',
   'nav.purchasing': 'خریداری',
+  'nav.cash': 'کیش دراز',
+  'nav.owner': 'ڈیش بورڈ',
   'nav.reports': 'رپورٹس',
   'nav.operations': 'آپریشنز',
-  'nav.budget': 'بجٹ',
-  'nav.returns': 'واپسی',
-  'nav.owner': 'مالک',
-  'nav.admin': 'انتظام',
-  'status.checking': 'نیٹ ورک چیک ہو رہا ہے',
-  'status.ready': 'نیٹ ورک تیار',
-  'status.unavailable': 'نیٹ ورک دستیاب نہیں',
+  'nav.admin': 'ترتیبات',
+  'nav.collapse': 'مینو چھوٹا کریں',
+  'nav.expand': 'مینو بڑا کریں',
+  'status.checking': 'سرور چیک ہو رہا ہے',
+  'status.ready': 'سرور سے منسلک',
+  'status.unavailable': 'سرور دستیاب نہیں',
+  'status.tillOpen': 'دراز کھلا ہے',
+  'status.tillClosed': 'دراز بند ہے',
+  'status.tillCounting': 'فرق کی منظوری باقی',
   'auth.signOut': 'سائن آؤٹ',
-  'auth.sessionExpired': 'سیشن ختم ہو گیا',
-  'auth.reauthenticate': 'محفوظ طریقے سے جاری رکھنے کے لیے پاس ورڈ دوبارہ درج کریں۔',
-  'auth.continue': 'سیشن جاری رکھیں',
+  'auth.changePassword': 'پاس ورڈ تبدیل کریں',
+  'auth.sessionExpired': 'آپ کا سیشن ختم ہو گیا',
+  'auth.reauthenticate':
+    'جاری رکھنے کے لیے دوبارہ سائن ان کریں۔ کاؤنٹر کا کوئی ڈیٹا ضائع نہیں ہوا۔',
+  'auth.continue': 'جاری رکھیں',
   'auth.username': 'صارف نام',
   'auth.password': 'پاس ورڈ',
   'auth.terminal': 'ٹرمینل کوڈ',
+  'auth.signIn': 'سائن ان',
   'pos.findMedicine': 'دوا تلاش کریں',
-  'pos.searchPlaceholder': 'برانڈ، جنیرک، بار کوڈ یا کمپنی',
-  'pos.scanHint': 'بار کوڈ اسکین کریں یا ٹائپ کریں',
-  'pos.currentCart': 'موجودہ کارٹ',
+  'pos.searchPlaceholder': 'برانڈ، جنیرک، کمپنی سے تلاش کریں یا بار کوڈ اسکین کریں',
+  'pos.currentCart': 'موجودہ فروخت',
   'pos.newSale': 'نئی فروخت',
   'pos.holdCart': 'روکیں / بحال کریں',
   'pos.reprint': 'رسید تلاش',
   'pos.takePayment': 'ادائیگی لیں',
+  'pos.discount': 'رعایت',
+  'pos.cancelSale': 'فروخت منسوخ کریں',
+  'language.switch': 'English',
 };
+
+export type { MessageKey };
 
 interface I18nValue {
   readonly locale: Locale;
@@ -79,16 +110,16 @@ interface I18nValue {
 const I18nContext = createContext<I18nValue | null>(null);
 
 function initialLocale(): Locale {
-  return localStorage.getItem('pharmacy-locale') === 'ur' ? 'ur' : 'en';
+  try {
+    return localStorage.getItem('pharmacy-locale') === 'ur' ? 'ur' : 'en';
+  } catch {
+    return 'en';
+  }
 }
 
 export function I18nProvider({ children }: { readonly children: React.ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(initialLocale);
   const direction = locale === 'ur' ? 'rtl' : 'ltr';
-  const setLocale = (next: Locale): void => {
-    localStorage.setItem('pharmacy-locale', next);
-    setLocaleState(next);
-  };
   useEffect(() => {
     document.documentElement.lang = locale;
     document.documentElement.dir = direction;
@@ -97,7 +128,14 @@ export function I18nProvider({ children }: { readonly children: React.ReactNode 
     () => ({
       direction,
       locale,
-      setLocale,
+      setLocale: (next) => {
+        try {
+          localStorage.setItem('pharmacy-locale', next);
+        } catch {
+          // A locked-down browser profile still gets the change for this session.
+        }
+        setLocaleState(next);
+      },
       t: (key) => (locale === 'ur' ? urduMessages[key] : englishMessages[key]),
     }),
     [direction, locale],
@@ -105,8 +143,14 @@ export function I18nProvider({ children }: { readonly children: React.ReactNode 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 
+const englishFallback: I18nValue = {
+  direction: 'ltr',
+  locale: 'en',
+  setLocale: () => undefined,
+  t: (key) => englishMessages[key],
+};
+
+/** Outside a provider (isolated component tests) the interface reads in English. */
 export function useI18n(): I18nValue {
-  const value = useContext(I18nContext);
-  if (!value) throw new Error('useI18n must be used inside I18nProvider');
-  return value;
+  return useContext(I18nContext) ?? englishFallback;
 }

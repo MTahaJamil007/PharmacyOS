@@ -155,3 +155,7 @@ export function parseCatalogFile(text: string): CatalogFileParseResult {
 
   return { rows, recognizedColumns, ignoredColumns };
 }
+
+export const CATALOG_TEMPLATE =
+  'sku,name,generic,strength,form,pack_size,unit,barcode,prescription,storage,hs_code,tax_rate\r\n' +
+  'PANADOL-500,Panadol,Paracetamol,500 mg,Tablet,200,tablet,8964000000011,no,AMBIENT,3004.9099,0\r\n';

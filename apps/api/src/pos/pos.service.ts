@@ -183,9 +183,13 @@ export class PosService {
         return_lookup_tokens.token::text as return_lookup_token,
         fbr_invoices.status as fiscal_status,
         fbr_invoices.fiscal_invoice_number,
-        fbr_invoices.qr_payload as fiscal_qr_payload
+        fbr_invoices.qr_payload as fiscal_qr_payload,
+        branches.seller_ntn_cnic, branches.seller_strn,
+        branches.fbr_pos_registration_number as pos_registration_number,
+        terminals.name as terminal_name
       from sales
       join branches on branches.id = sales.branch_id
+      join terminals on terminals.id = sales.terminal_id
       join users on users.id = sales.cashier_user_id
       left join customers on customers.id = sales.customer_id
       join return_lookup_tokens on return_lookup_tokens.sale_id = sales.id

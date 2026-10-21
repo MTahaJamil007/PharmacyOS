@@ -1,3 +1,14 @@
+import type { ReportCell, ReportColumn, TabularReport } from '@pharmacy/shared';
+
+import {
+  formatCount,
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatPercent,
+  formatQuantity,
+} from '../../format';
+
 export interface ReportTable {
   readonly columns: readonly string[];
   readonly rows: readonly (readonly string[])[];
@@ -53,5 +64,56 @@ export function toCsv(table: ReportTable): string {
     table.columns.map(humanizeColumn).map(escapeCsvCell).join(','),
     ...table.rows.map((row) => row.map(escapeCsvCell).join(',')),
   ];
+  return lines.join('\r\n');
+}
+
+/* ---------- Typed operational reports ---------- */
+
+export function formatReportCell(column: ReportColumn, value: ReportCell | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  switch (column.type) {
+    case 'money':
+      return formatMoney(String(value));
+    case 'quantity':
+      return formatQuantity(String(value));
+    case 'count':
+      return formatCount(String(value));
+    case 'percent':
+      return formatPercent(String(value));
+    case 'date':
+      return formatDate(String(value));
+    case 'datetime':
+      return formatDateTime(String(value));
+    case 'text':
+      return typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
+  }
+}
+
+/**
+ * CSV keeps the exact values the server sent (plain decimals, ISO dates) so a spreadsheet
+ * sums them correctly; only the header row uses the human labels.
+ */
+export function tabularReportToCsv(report: TabularReport): string {
+  const raw = (value: ReportCell | undefined): string =>
+    value === null || value === undefined ? '' : String(value);
+  const lines = [
+    report.columns.map((column) => escapeCsvCell(column.label)).join(','),
+    ...report.rows.map((row) =>
+      report.columns.map((column) => escapeCsvCell(raw(row[column.key]))).join(','),
+    ),
+  ];
+  if (report.totals) {
+    lines.push(
+      report.columns
+        .map((column, index) =>
+          escapeCsvCell(
+            index === 0 && report.totals?.[column.key] == null
+              ? 'Total'
+              : raw(report.totals?.[column.key]),
+          ),
+        )
+        .join(','),
+    );
+  }
   return lines.join('\r\n');
 }

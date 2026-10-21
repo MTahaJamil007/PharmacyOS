@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { calculateCartLineTotal, calculateCartTotal, formatPkrMoney } from './money';
+import { formatMoney } from './format';
+import { calculateCartLineTotal, calculateCartTotal } from './money';
 
 describe('exact browser money', () => {
   it('totals cart lines without converting money to floating point', () => {
@@ -14,7 +15,7 @@ describe('exact browser money', () => {
   });
 
   it('formats the complete database money range from its exact decimal string', () => {
-    expect(formatPkrMoney('9999999999.99')).toBe('PKR 9,999,999,999.99');
-    expect(formatPkrMoney('-0.05')).toBe('PKR -0.05');
+    expect(formatMoney('9999999999.99')).toBe('Rs 9,999,999,999.99');
+    expect(formatMoney('-0.05')).toBe('−Rs 0.05');
   });
 });

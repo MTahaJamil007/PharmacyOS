@@ -1,1 +1,5 @@
-export { PosWorkspace as default } from '../../PosWorkspace';
+import { PosScreen } from './PosScreen';
+
+export default function PosRoute(): React.JSX.Element {
+  return <PosScreen />;
+}

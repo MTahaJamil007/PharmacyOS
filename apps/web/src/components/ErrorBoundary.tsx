@@ -22,14 +22,31 @@ export class ErrorBoundary extends Component<Props, State> {
   override render(): ReactNode {
     if (!this.state.failed) return this.props.children;
     return (
-      <main className="recovery-screen" role="alert">
-        <p className="eyebrow">Counter recovery</p>
-        <h1>This screen stopped unexpectedly.</h1>
-        <p>Your cart is stored on this terminal. Reload to continue without rebuilding it.</p>
-        <button className="primary-button" onClick={() => window.location.reload()}>
-          Reload counter
-        </button>
-      </main>
+      <div className="error-screen" role="alert">
+        <section className="card">
+          <header className="card-header">
+            <div>
+              <h2>This screen stopped unexpectedly.</h2>
+              <p>Your cart and any sale in progress are kept on this terminal.</p>
+            </div>
+          </header>
+          <div className="card-body">
+            <p>
+              Reload to continue. If the same screen stops again, note what you were doing and
+              contact support; nothing has been charged twice.
+            </p>
+          </div>
+          <footer className="card-footer">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => window.location.reload()}
+            >
+              Reload counter
+            </button>
+          </footer>
+        </section>
+      </div>
     );
   }
 }

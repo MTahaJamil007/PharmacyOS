@@ -75,6 +75,10 @@ export interface ExpiryRiskItem {
   readonly risk_bucket: string;
   readonly days_to_expiry: number;
   readonly status: string;
+  readonly medicine_id: string;
+  readonly work_item_id: string | null;
+  readonly work_item_status: string | null;
+  readonly work_item_action: string | null;
 }
 
 export interface ShelfRecommendation {
@@ -251,6 +255,10 @@ export interface SaleReceipt {
     readonly return_lookup_token: string;
     readonly fiscal_status: string;
     readonly fiscal_invoice_number: string | null;
+    readonly seller_ntn_cnic: string | null;
+    readonly seller_strn: string | null;
+    readonly pos_registration_number: string | null;
+    readonly terminal_name: string;
   };
   readonly items: ReadonlyArray<{
     readonly id: string;
@@ -260,6 +268,9 @@ export interface SaleReceipt {
     readonly expiry_date: string;
     readonly quantity: string;
     readonly unit_price: string;
+    readonly discount_amount: string;
+    readonly tax_rate: string;
+    readonly tax_amount: string;
     readonly line_total: string;
   }>;
   readonly payments: readonly SalePayment[];
@@ -295,7 +306,8 @@ export interface CustomerSummary {
 
 export interface CustomerLedgerEntry {
   readonly id: string;
-  readonly entryType: 'OPENING_BALANCE' | 'CREDIT_SALE' | 'PAYMENT' | 'ADJUSTMENT';
+  readonly entryType:
+    'OPENING_BALANCE' | 'CREDIT_SALE' | 'PAYMENT' | 'ADJUSTMENT' | 'RETURN_CREDIT';
   readonly amountDelta: string;
   readonly balanceAfter: string;
   readonly saleId: string | null;
@@ -410,6 +422,8 @@ export interface PurchaseOrderDetail {
   readonly ordered_at: string | null;
   readonly received_at: string | null;
   readonly created_at: string;
+  readonly cancelled_at: string | null;
+  readonly cancel_reason: string | null;
   readonly items: readonly PurchaseOrderLine[];
   readonly receipts: readonly PurchaseOrderReceiptSummary[];
 }
