@@ -8,6 +8,7 @@ import type {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { cashSessionsEnabled } from '../common/cash-session-resolver.js';
 import { DATABASE } from '../database.module.js';
 
 interface LockedCashSession {
@@ -51,6 +52,11 @@ export class CashSessionsService {
     input: OpenCashSessionRequest,
   ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
+      if (!(await cashSessionsEnabled(transaction, user.branchId))) {
+        throw new ConflictException(
+          'This shop does not run cash sessions. The super admin can switch them on.',
+        );
+      }
       await transaction`select id from terminals where id = ${user.terminalId} for update`;
       const [replay] = await transaction<Array<{ id: string }>>`
         select id::text from cash_sessions

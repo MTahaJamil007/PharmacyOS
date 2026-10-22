@@ -4,6 +4,13 @@ import { decimalToScaledInteger } from './decimal.js';
 import { PAYMENT_METHODS } from './domain.js';
 import { normalizeDosage } from './dosage.js';
 import { moneyToMinorUnits, sumMoney } from './money.js';
+import {
+  ENTRANCE_WALLS,
+  FIXTURE_KINDS,
+  PLACEMENT_GROUPINGS,
+  PLAN_MODES,
+  SHELF_STORAGE_CLASSES,
+} from './shelf-planner.js';
 
 const MAX_DATABASE_ID = 9_223_372_036_854_775_807n;
 const MAX_MONEY_MINOR_UNITS = 999_999_999_999n;
@@ -89,7 +96,8 @@ export const createDraftSchema = z.object({
 export const finalizeSaleSchema = z
   .object({
     draftId: idSchema,
-    cashSessionId: idSchema,
+    /** Required when the shop runs cash sessions; omitted when the server manages them. */
+    cashSessionId: idSchema.optional(),
     clientRequestId: clientRequestIdSchema,
     customerId: idSchema.optional(),
     payments: z
@@ -474,13 +482,6 @@ export const customerPaymentSchema = z
     reference: z.string().trim().max(120).optional(),
   })
   .superRefine((payment, context) => {
-    if (payment.method === 'CASH' && !payment.cashSessionId) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Cash session is required for cash account payments',
-        path: ['cashSessionId'],
-      });
-    }
     if (payment.method !== 'CASH' && payment.cashSessionId) {
       context.addIssue({
         code: 'custom',
@@ -841,3 +842,108 @@ export const platformAuditQuerySchema = z.object({
   branchId: idSchema.optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
+
+export const sendToCashierSchema = z.object({ customerId: idSchema.optional() }).strict();
+
+export const clearCounterPaymentSchema = z
+  .object({
+    cashSessionId: idSchema.optional(),
+    clientRequestId: clientRequestIdSchema,
+    tenderedAmount: positiveMoneySchema.optional(),
+  })
+  .strict();
+
+export const completeInvoiceSchema = z
+  .object({ clientRequestId: clientRequestIdSchema, customerId: idSchema.optional() })
+  .strict();
+
+export const cashSessionsToggleSchema = z.object({ enabled: z.boolean() }).strict();
+
+const centimetres = (minimum: number, maximum: number) =>
+  z.number().int().min(minimum).max(maximum);
+const rotationSchema = z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]);
+const placedBoxFields = {
+  xCm: centimetres(-1000, 6000),
+  yCm: centimetres(-1000, 6000),
+  widthCm: centimetres(20, 2000),
+  depthCm: centimetres(20, 400),
+  rotation: rotationSchema,
+};
+
+export const floorPlanSchema = z
+  .object({
+    widthCm: centimetres(150, 5000),
+    depthCm: centimetres(150, 5000),
+    counter: z
+      .object({ ...placedBoxFields, widthCm: centimetres(40, 2000), depthCm: centimetres(30, 400) })
+      .strict(),
+    entrance: z
+      .object({
+        wall: z.enum(ENTRANCE_WALLS),
+        offsetCm: centimetres(0, 5000),
+        widthCm: centimetres(60, 1000),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const shelfFixtureInputSchema = z
+  .object({
+    /** A saved fixture's id; null for one added on screen. */
+    id: idSchema.nullable(),
+    key: z.string().trim().min(1).max(40),
+    code: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z0-9]{1,6}$/, 'Use up to 6 letters or digits, like A or R12'),
+    name: z.string().trim().min(1).max(60),
+    kind: z.enum(FIXTURE_KINDS),
+    ...placedBoxFields,
+    heightCm: centimetres(30, 400),
+    levelCount: z.number().int().min(1).max(12),
+    facingsPerLevel: z.number().int().min(1).max(200),
+    storageClass: z.enum(SHELF_STORAGE_CLASSES),
+    isSecured: z.boolean(),
+  })
+  .strict();
+
+export const saveShelfLayoutSchema = z
+  .object({
+    expectedVersion: z.number().int().min(0),
+    floor: floorPlanSchema,
+    fixtures: z.array(shelfFixtureInputSchema).max(200),
+  })
+  .strict();
+
+export const shelfPlacementSchema = z.object({ medicineId: idSchema, shelfId: idSchema }).strict();
+export const shelfPlacementRemoveSchema = z.object({ medicineId: idSchema }).strict();
+export const shelfMedicineSearchSchema = z.object({ query: z.string().trim().min(1).max(80) });
+
+export const generateShelfProposalSchema = z
+  .object({ mode: z.enum(PLAN_MODES), grouping: z.enum(PLACEMENT_GROUPINGS) })
+  .strict();
+
+export const applyShelfProposalSchema = z
+  .object({
+    fixtureChangeIds: z.array(z.string().min(1).max(80)).max(100),
+    moves: z
+      .array(
+        z
+          .object({
+            medicineId: idSchema,
+            fixtureKey: z.string().min(1).max(40),
+            level: z.number().int().min(1).max(12),
+          })
+          .strict(),
+      )
+      .max(20_000),
+  })
+  .strict();
+
+export type FloorPlanInput = z.infer<typeof floorPlanSchema>;
+export type ShelfFixtureInput = z.infer<typeof shelfFixtureInputSchema>;
+export type SaveShelfLayoutRequest = z.infer<typeof saveShelfLayoutSchema>;
+export type ShelfPlacementRequest = z.infer<typeof shelfPlacementSchema>;
+export type GenerateShelfProposalRequest = z.infer<typeof generateShelfProposalSchema>;
+export type ApplyShelfProposalRequest = z.infer<typeof applyShelfProposalSchema>;

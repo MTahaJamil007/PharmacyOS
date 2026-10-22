@@ -10,3 +10,4 @@ export * from './api-contracts.js';
 export * from './catalog-file.js';
 export * from './tax.js';
 export * from './fiscal.js';
+export * from './shelf-planner.js';

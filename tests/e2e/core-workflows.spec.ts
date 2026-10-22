@@ -285,36 +285,6 @@ test('an expired API session can re-authenticate without losing the counter', as
   await expect(page.getByRole('heading', { name: 'Find medicine' })).toBeVisible();
 });
 
-test('operator opens, adjusts, and closes a cash session', async ({ page }) => {
-  await authenticated(page);
-  let current: Record<string, unknown> | null = null;
-  let movementRecorded = false;
-  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, current));
-  await page.route('**/api/v1/cash-sessions/open', (route) => {
-    current = { ...cashSession };
-    return json(route, current, 201);
-  });
-  await page.route('**/api/v1/cash-sessions/10/movements', (route) => {
-    movementRecorded = true;
-    current = { ...cashSession, cashOut: '200.00', expectedCash: '4800.00' };
-    return json(route, { session: current }, 201);
-  });
-  await page.route('**/api/v1/cash-sessions/10/close', (route) => {
-    current = null;
-    return json(route, { ...cashSession, countedCash: '4800.00', status: 'CLOSED' }, 201);
-  });
-  await page.goto('/#/cash');
-  await page.getByRole('button', { name: 'Open cash session' }).click();
-  await expect(page.getByRole('heading', { name: 'OPEN' })).toBeVisible();
-  await page.getByLabel('Amount').fill('200');
-  await page.getByLabel('Reason').fill('Bank deposit');
-  await page.getByRole('button', { name: 'Record movement' }).click();
-  await expect.poll(() => movementRecorded).toBe(true);
-  await page.getByLabel('Counted cash (PKR)').fill('4800');
-  await page.getByRole('button', { name: 'Submit count' }).click();
-  await expect(page.getByRole('heading', { name: 'Open this terminal’s till' })).toBeVisible();
-});
-
 test('operator reviews safe shelf and reorder recommendations', async ({ page }) => {
   await authenticated(page);
   let shelfOpen = true;

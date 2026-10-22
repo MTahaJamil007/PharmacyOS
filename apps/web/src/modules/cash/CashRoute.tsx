@@ -1,10 +1,10 @@
 import { AppShell } from '../../components/AppShell';
-import { CashSessionScreen } from './CashSessionScreen';
+import { CashCounterScreen } from './CashCounterScreen';
 
 export default function CashRoute(): React.JSX.Element {
   return (
     <AppShell>
-      <CashSessionScreen />
+      <CashCounterScreen />
     </AppShell>
   );
 }

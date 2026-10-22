@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import {
   activeToggleSchema,
+  cashSessionsToggleSchema,
   createShopSchema,
   fbrInvoicingToggleSchema,
   fbrTransmissionApprovalSchema,
@@ -87,6 +88,20 @@ export class PlatformController {
     @Body() body: unknown,
   ) {
     return this.platform.setShopActive(user, parseId(id), parse(activeToggleSchema, body).isActive);
+  }
+
+  @Patch('shops/:id/cash-sessions')
+  @RequirePermissions(PERMISSIONS.PLATFORM_SUPER_ADMIN)
+  setCashSessions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.platform.setCashSessions(
+      user,
+      parseId(id),
+      parse(cashSessionsToggleSchema, body).enabled,
+    );
   }
 
   @Patch('shops/:id/fbr-invoicing')

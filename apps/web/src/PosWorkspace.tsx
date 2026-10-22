@@ -15,11 +15,14 @@ import {
   cancelSaleDraft,
   createSaleDraft,
   finalizeSale,
+  completeCounterInvoice,
+  getCounterSettings,
   getCurrentCashSession,
   getSaleReceipt,
   reserveSaleDraft,
   searchCustomers,
   searchMedicines,
+  sendToCashCounter,
   type FinalizedSale,
   type MedicineSearchResult,
 } from './api';
@@ -123,6 +126,34 @@ export function PosWorkspace(): React.JSX.Element {
   const canDiscount = previewMode || permissions.includes(PERMISSIONS.SALE_DISCOUNT_BASIC);
   const canBudget = previewMode || permissions.includes(PERMISSIONS.SALES_BUDGET_REGIMEN_CALCULATE);
   const token = session?.accessToken ?? '';
+  const canUseTill =
+    permissions.includes(PERMISSIONS.CASH_OPEN_SESSION) ||
+    permissions.includes(PERMISSIONS.SALE_FINALIZE_PAYMENT);
+  const canSend = permissions.includes(PERMISSIONS.POS_SEND_TO_CASHIER);
+
+  // How this desk finishes an order: the shop's cash-session mode, then whether this desk has a
+  // started day. Both are cached so the F8 label is right before the first sale.
+  const counterSettings = useQuery({
+    queryKey: ['counter-settings'],
+    queryFn: () => getCounterSettings(token),
+    enabled: !previewMode && token !== '',
+    staleTime: 60_000,
+    retry: false,
+  });
+  const till = useQuery({
+    queryKey: ['cash-session-current'],
+    queryFn: () => getCurrentCashSession(token),
+    enabled: !previewMode && token !== '' && canUseTill,
+    staleTime: 15_000,
+    retry: false,
+  });
+  const sessionsOn = counterSettings.data?.cashSessionsEnabled ?? true;
+  const tillOpen = till.data?.status === 'OPEN';
+  const checkoutLabel = !sessionsOn
+    ? 'Print invoice'
+    : tillOpen || !canSend
+      ? 'Take payment'
+      : 'Send to cash counter';
 
   const customers = useQuery({
     queryKey: ['customer-search', debouncedCustomerQuery],
@@ -323,13 +354,28 @@ export function PosWorkspace(): React.JSX.Element {
       }
       current = withCustomer(current, customer);
       updateAttempt(current);
-      if (!current.cashSessionId) {
-        const cashSession = await getCurrentCashSession(session.accessToken);
-        if (!cashSession || cashSession.status !== 'OPEN') {
+      const shopRunsSessions =
+        counterSettings.data?.cashSessionsEnabled ??
+        (await getCounterSettings(token)
+          .then((settings) => settings.cashSessionsEnabled)
+          .catch(() => true));
+      let mode: 'PAY_HERE' | 'SEND' | 'INVOICE' = shopRunsSessions ? 'PAY_HERE' : 'INVOICE';
+      if (shopRunsSessions && !current.cashSessionId) {
+        const cashSession = canUseTill
+          ? await getCurrentCashSession(session.accessToken).catch((cause: unknown) => {
+              // Taking payment without the till permission simply means no day of its own.
+              if (cause instanceof ApiError && cause.status === 403) return null;
+              throw cause;
+            })
+          : null;
+        if (cashSession?.status === 'OPEN') {
+          current = { ...current, cashSessionId: cashSession.id };
+          updateAttempt(current);
+        } else if (canSend) {
+          mode = 'SEND';
+        } else {
           throw new Error('Open a cash session for this terminal before taking payment');
         }
-        current = { ...current, cashSessionId: cashSession.id };
-        updateAttempt(current);
       }
       if (!current.draftId) {
         const draft = await createSaleDraft(
@@ -404,7 +450,36 @@ export function PosWorkspace(): React.JSX.Element {
         }
       }
       if (!current.reservedTotal) throw new Error('Sale reservation total is unavailable');
-      setPaymentTotal(current.reservedTotal);
+      const draftId = current.draftId;
+      if (!draftId) throw new Error('Sale draft could not be resumed');
+      if (mode === 'SEND') {
+        await sendToCashCounter(session.accessToken, draftId, current.customerId);
+        clearCheckoutAttempt(session.user.terminalId);
+        setAttempt(null);
+        clearCart();
+        setTickedIds(new Set());
+        setSelectedCustomer(null);
+        setCustomerQuery('');
+        setCounterNotice(
+          `Sent to the cash counter · order #${draftId} · ${formatPkrMoney(current.reservedTotal)}`,
+        );
+        entry.current?.focusSearch();
+      } else if (mode === 'INVOICE') {
+        const finalized = await completeCounterInvoice(
+          session.accessToken,
+          draftId,
+          current.clientRequestId,
+          current.customerId,
+        );
+        updateAttempt({ ...current, finalizedSaleId: finalized.id });
+        setReceipt(finalized);
+        clearCart();
+        setTickedIds(new Set());
+        setSelectedCustomer(null);
+        await recoverReceipt(finalized.id);
+      } else {
+        setPaymentTotal(current.reservedTotal);
+      }
     } catch (cause) {
       setCheckoutError(cause instanceof Error ? cause.message : 'Sale reservation failed');
     } finally {
@@ -414,14 +489,19 @@ export function PosWorkspace(): React.JSX.Element {
     abandonDraft,
     approval,
     attempt,
+    canSend,
+    canUseTill,
     cart,
     checkoutPending,
+    clearCart,
+    counterSettings.data,
     customerId,
     customerName,
     discounts.reason,
     plan,
     recoverReceipt,
     session,
+    token,
     updateAttempt,
   ]);
 
@@ -669,7 +749,7 @@ export function PosWorkspace(): React.JSX.Element {
               <kbd>F6</kbd> {t('pos.reprint')}
             </span>
             <span>
-              <kbd>F8</kbd> {t('pos.takePayment')}
+              <kbd>F8</kbd> {checkoutLabel}
             </span>
             <span>
               <kbd>F9</kbd> Discount
@@ -870,7 +950,11 @@ export function PosWorkspace(): React.JSX.Element {
               onClick={() => void beginCheckout()}
             >
               <span>
-                {checkoutPending ? 'Reserving…' : lockedCart ? 'Resume payment' : 'Take payment'}
+                {checkoutPending
+                  ? 'Working…'
+                  : lockedCart && checkoutLabel === 'Take payment'
+                    ? 'Resume payment'
+                    : checkoutLabel}
                 <kbd>F8</kbd>
               </span>
               <strong>{formatPkrMoney(grandTotal)}</strong>

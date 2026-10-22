@@ -5,6 +5,7 @@ import type { Database, DatabaseTransaction } from '@pharmacy/database';
 import type { ShopProfileUpdate } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { closeAutomaticSessions } from '../common/cash-session-resolver.js';
 import { auditShopEvent, SHOP_COLUMNS, toShop, type ShopRow } from '../common/shop-profile.js';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
 
@@ -160,6 +161,31 @@ export class PlatformService {
         isActive ? 'PLATFORM.SHOP_ACTIVATED' : 'PLATFORM.SHOP_DEACTIVATED',
         id,
         {},
+      );
+      return this.shopRow(transaction, id);
+    });
+  }
+
+  /**
+   * Whether this shop's staff run cash sessions. Switching them back on closes the automatic day
+   * sessions so the cashier starts a real day with a counted drawer.
+   */
+  async setCashSessions(actor: AuthenticatedUser, branchId: bigint, enabled: boolean) {
+    const id = branchId.toString();
+    return this.database.begin(async (transaction) => {
+      await this.lockShop(transaction, id);
+      await transaction`
+        update branches set cash_sessions_enabled = ${enabled},
+          cash_sessions_changed_at = now(), cash_sessions_changed_by = ${actor.id}
+        where id = ${id}
+      `;
+      const closed = enabled ? await closeAutomaticSessions(transaction, { branchId: id }) : 0;
+      await auditShopEvent(
+        transaction,
+        actor,
+        enabled ? 'PLATFORM.CASH_SESSIONS_ENABLED' : 'PLATFORM.CASH_SESSIONS_DISABLED',
+        id,
+        { enabled, automaticSessionsClosed: closed },
       );
       return this.shopRow(transaction, id);
     });

@@ -2,6 +2,7 @@ import { IntelligenceService } from '../../apps/api/src/intelligence/intelligenc
 import { ReturnsService } from '../../apps/api/src/returns/returns.service.js';
 import type { AuthenticatedUser } from '../../apps/api/src/auth/auth.types.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PERMISSIONS } from '@pharmacy/shared';
 
 import { runConcurrently } from './harness/concurrency.js';
 import { createIsolatedDatabase, type IsolatedDatabase } from './harness/database.js';
@@ -329,11 +330,13 @@ describe('stock ledger integrity', () => {
       returning id::text
     `;
     if (!otherSession) throw new Error('Failed to create other cash session fixture');
+    // A cashier allowed to refund cash still cannot pay it out of someone else's drawer.
     await expect(
-      service.refund(fixture.user, BigInt(returnId), {
-        cashSessionId: BigInt(otherSession.id),
-        method: 'CASH',
-      }),
+      service.refund(
+        { ...fixture.user, permissions: [PERMISSIONS.RETURNS_REFUND_CASH] },
+        BigInt(returnId),
+        { cashSessionId: BigInt(otherSession.id), method: 'CASH' },
+      ),
     ).rejects.toMatchObject({ message: 'Caller cash session is not open' });
 
     const results = await runConcurrently(8, () =>

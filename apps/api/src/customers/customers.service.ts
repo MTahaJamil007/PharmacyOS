@@ -10,6 +10,7 @@ import {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { resolveCashSession } from '../common/cash-session-resolver.js';
 import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE } from '../database.module.js';
 
@@ -170,15 +171,14 @@ export class CustomersService {
         user.branchId,
         input.clientRequestId,
       );
+      let cashSessionId: string | null = null;
       if (input.method === 'CASH') {
-        const [session] = await transaction<Array<{ id: string }>>`
-          select id::text from cash_sessions
-          where id = ${input.cashSessionId?.toString() ?? null}
-            and branch_id = ${user.branchId} and terminal_id = ${user.terminalId}
-            and cashier_user_id = ${user.id} and status = 'OPEN'
-          for update
-        `;
-        if (!session) throw new ConflictException('An owned open cash session is required');
+        cashSessionId = await resolveCashSession(
+          transaction,
+          user,
+          input.cashSessionId?.toString() ?? null,
+          'An owned open cash session is required',
+        );
       }
 
       await this.lockCustomer(transaction, user.branchId, id);
@@ -211,7 +211,7 @@ export class CustomersService {
           performed_by_user_id, reason
         ) values (
           ${user.branchId}, ${id}, 'PAYMENT', -${input.amount}::numeric, ${balanceAfter},
-          ${input.cashSessionId?.toString() ?? null}, ${input.method}, ${input.reference ?? null},
+          ${cashSessionId}, ${input.method}, ${input.reference ?? null},
           ${input.clientRequestId}, ${user.id}, 'Payment against customer account'
         ) returning id::text
       `;

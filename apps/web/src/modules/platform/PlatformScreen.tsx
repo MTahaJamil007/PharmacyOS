@@ -173,6 +173,33 @@ function ShopEditor({
           </div>
         </div>
         <aside className="platform-fbr">
+          <h3>Cash counter</h3>
+          <div className="switch-row">
+            <span>
+              <strong>Cash sessions</strong>
+              <small>
+                {shop.cashSessionsEnabled
+                  ? 'On: order desks send bills to the cash counter, which starts and ends each day.'
+                  : 'Off: order desks print the invoice and the customer pays against it.'}
+              </small>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={shop.cashSessionsEnabled}
+              aria-label={`Cash sessions for ${shop.name}`}
+              className={shop.cashSessionsEnabled ? 'toggle-switch on' : 'toggle-switch'}
+              onClick={() =>
+                void act(
+                  '/cash-sessions',
+                  { enabled: !shop.cashSessionsEnabled },
+                  `${shop.name}: cash sessions ${shop.cashSessionsEnabled ? 'off' : 'on'}`,
+                )
+              }
+            >
+              <span />
+            </button>
+          </div>
           <h3>FBR</h3>
           <div className="switch-row">
             <span>
