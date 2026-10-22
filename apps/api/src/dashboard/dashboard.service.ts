@@ -15,7 +15,13 @@ export class DashboardService {
         gross_profit_estimate::text as "grossProfitEstimate",
         cash_collected::text as "cashCollected",
         non_cash_collected::text as "nonCashCollected", refunds::text,
-        invoice_count::text as "invoiceCount", metrics, updated_at as "updatedAt"
+        invoice_count::text as "invoiceCount",
+        -- Snapshots written before the worker rounded these carried 11 decimal places.
+        metrics || jsonb_strip_nulls(jsonb_build_object(
+          'expiryValueAtRisk', round((metrics->>'expiryValueAtRisk')::numeric, 2)::text,
+          'deadStockValue', round((metrics->>'deadStockValue')::numeric, 2)::text
+        )) as metrics,
+        updated_at as "updatedAt"
       from dashboard_daily_metrics
       where branch_id = ${user.branchId}
         and metric_date = coalesce(

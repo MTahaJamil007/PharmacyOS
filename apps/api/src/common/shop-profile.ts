@@ -11,7 +11,8 @@ export const SHOP_COLUMNS = `
   branches.seller_ntn_cnic, branches.seller_strn, branches.fbr_pos_registration_number,
   branches.fbr_business_name, branches.fbr_province, branches.fbr_scenario_id,
   branches.fbr_invoicing_enabled, branches.fbr_invoicing_changed_at,
-  branches.fbr_transmission_approved, branches.fbr_transmission_approved_at
+  branches.fbr_transmission_approved, branches.fbr_transmission_approved_at,
+  branches.cash_sessions_enabled
 `;
 
 export interface ShopRow {
@@ -33,6 +34,7 @@ export interface ShopRow {
   readonly fbr_invoicing_changed_at: Date | null;
   readonly fbr_transmission_approved: boolean;
   readonly fbr_transmission_approved_at: Date | null;
+  readonly cash_sessions_enabled: boolean;
 }
 
 export function toShop(row: ShopRow, environment: Environment) {
@@ -45,6 +47,7 @@ export function toShop(row: ShopRow, environment: Environment) {
     email: row.email,
     drugLicenseNumber: row.drug_license_number,
     isActive: row.is_active,
+    cashSessionsEnabled: row.cash_sessions_enabled,
     sellerNtnCnic: row.seller_ntn_cnic,
     sellerStrn: row.seller_strn,
     posRegistrationNumber: row.fbr_pos_registration_number,

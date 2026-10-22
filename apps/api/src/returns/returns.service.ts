@@ -14,6 +14,7 @@ import {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { cashSessionsEnabled, resolveCashSession } from '../common/cash-session-resolver.js';
 import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE } from '../database.module.js';
 
@@ -185,15 +186,25 @@ export class ReturnsService {
         };
       if (row.status !== 'APPROVED')
         throw new ConflictException('Return must be approved before refund');
-      if (input.method === 'CASH' && !input.cashSessionId)
-        throw new ConflictException('Cash refund requires an open cash session');
-      if (input.cashSessionId) {
+      let refundSessionId: string | null = null;
+      if (input.method === 'CASH') {
+        if (!input.cashSessionId && (await cashSessionsEnabled(transaction, user.branchId))) {
+          throw new ConflictException('Cash refund requires an open cash session');
+        }
+        refundSessionId = await resolveCashSession(
+          transaction,
+          user,
+          input.cashSessionId?.toString() ?? null,
+          'Caller cash session is not open',
+        );
+      } else if (input.cashSessionId) {
         const [session] = await transaction<Array<{ id: string }>>`
           select id::text from cash_sessions where id = ${input.cashSessionId.toString()}
             and branch_id = ${user.branchId} and terminal_id = ${user.terminalId}
             and cashier_user_id = ${user.id} and status = 'OPEN' for update
         `;
         if (!session) throw new ConflictException('Caller cash session is not open');
+        refundSessionId = session.id;
       }
       const items = await transaction<
         Array<{
@@ -285,7 +296,7 @@ export class ReturnsService {
         insert into refunds (
           return_id, cash_session_id, processed_by_user_id, method, amount, reference
         ) values (
-          ${row.id}, ${input.cashSessionId?.toString() ?? null}, ${user.id}, ${input.method},
+          ${row.id}, ${refundSessionId}, ${user.id}, ${input.method},
           ${refundAmount}, ${input.reference ?? null}
         ) returning id::text
       `;

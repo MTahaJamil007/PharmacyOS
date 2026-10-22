@@ -15,6 +15,15 @@ import { getOwnerDashboard } from '../../api';
 import { formatPkrMoney } from '../../money';
 import { usePharmacyStore } from '../../store';
 
+/** A malformed figure shows as plain text instead of taking the whole owner screen down. */
+function displayMoney(value: string | null | undefined): string {
+  try {
+    return formatPkrMoney(value);
+  } catch {
+    return value ?? '—';
+  }
+}
+
 function recentDates(days: number): string[] {
   return Array.from({ length: days }, (_, index) => {
     const date = new Date();
@@ -90,7 +99,7 @@ export function OwnerDashboard(): React.JSX.Element {
             ].map(([label, value, kind]) => (
               <article key={label}>
                 <span>{label}</span>
-                <strong>{kind === 'money' ? formatPkrMoney(value) : value}</strong>
+                <strong>{kind === 'money' ? displayMoney(value) : value}</strong>
               </article>
             ))}
           </section>
@@ -107,7 +116,7 @@ export function OwnerDashboard(): React.JSX.Element {
                   <CartesianGrid stroke="#dce5e1" vertical={false} />
                   <XAxis dataKey="date" tickLine={false} axisLine={false} />
                   <YAxis tickLine={false} axisLine={false} width={70} />
-                  <Tooltip formatter={(value) => formatPkrMoney(String(value))} />
+                  <Tooltip formatter={(value) => displayMoney(String(value))} />
                   <Line dataKey="sales" stroke="#0b6b5e" strokeWidth={3} dot={false} />
                   <Line dataKey="profit" stroke="#f2b544" strokeWidth={2} dot={false} />
                 </LineChart>

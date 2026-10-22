@@ -206,6 +206,15 @@ export class AdministrationService {
     const id = shelfId.toString();
     return this.database.begin(async (transaction) => {
       await this.lockBranchResource(transaction, 'shelves', id, user.branchId, 'Shelf');
+      const [planned] = await transaction<Array<{ code: string }>>`
+        select shelf_fixtures.code from shelves
+        join shelf_fixtures on shelf_fixtures.id = shelves.fixture_id
+        where shelves.id = ${id}`;
+      if (planned) {
+        throw new ConflictException(
+          `This shelf is a level of rack ${planned.code} in the shelf planner. Change it there.`,
+        );
+      }
       await transaction`
         update shelves set
           code = case when ${input.code !== undefined} then ${input.code ?? null} else code end,
@@ -237,9 +246,12 @@ export class AdministrationService {
       `;
       if (!medicine) throw new NotFoundException('Medicine not found');
       if (input.isPrimary) {
+        // Medicines are shared across branches; only this branch's primary shelf changes.
         await transaction`
-          update medicine_shelf_locations set is_primary = false
-          where medicine_id = ${medicineId}
+          update medicine_shelf_locations locations set is_primary = false
+          from shelves
+          where shelves.id = locations.shelf_id and shelves.branch_id = ${user.branchId}
+            and locations.medicine_id = ${medicineId}
         `;
       }
       await transaction`

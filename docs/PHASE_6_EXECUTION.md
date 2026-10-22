@@ -397,3 +397,147 @@ No request was made to the real FBR API, and no physical printer was driven: USB
 network printing were verified against test doubles and a local TCP socket. WebUSB cannot claim a
 printer whose Windows driver holds it; such printers print through the print dialog. The new
 integration test needs Docker and has not run in this session.
+
+## 9. Post-gate change record — 2026-10-22: cash counter modes and readability
+
+### What changed
+
+- **Cash sessions per shop (super admin).** Migration `018_phase6_cash_counter_modes.sql` adds
+  `branches.cash_sessions_enabled` (default on), `cash_sessions.auto_managed`, and the cash counter
+  queue columns on `sale_drafts`. `PATCH /platform/shops/:id/cash-sessions` switches it, audited;
+  switching back on closes the automatic sessions.
+- **Sessions off.** The order desk's F8 becomes "Print invoice": `POST /pos/drafts/:id/complete-invoice`
+  reserves if needed and finalizes a cash sale. Every sale, refund, and cash account payment still
+  belongs to a cash session: `resolveCashSession` keeps one automatic session per counter user per
+  business day (opening 0), closing yesterday's with counted equal to expected. Manual day opening is
+  refused while sessions are off.
+- **Sessions on.** The order desk's F8 is "Send to cash counter" unless that desk has its own started
+  day ("Take payment" as before). `POST /pos/drafts/:id/send-to-cashier` queues the reserved order.
+  The cash counter page lists waiting bills (refreshed every 3 seconds), shows change for the cash
+  received, and clears each bill with `POST /pos/cash-counter/:id/clear` (re-reserving stock if the
+  hold expired; a retried request id returns the same sale) or cancels it, releasing stock. Start day
+  asks for the drawer's cash; end day shows over/short against the expected drawer while counting.
+  Variance approval for managers is unchanged.
+- **Finalize idempotency** now looks a sale up by terminal and client request id (the request id is
+  unique per attempt), since the server may choose the session.
+- **Readability.** Larger prices and totals in search results, the invoice grid, the side panel,
+  the pay button, the payment dialog, and the admin, user, and super admin forms.
+
+### Evidence
+
+| Command                                                         | Exit | Notes                                                 |
+| --------------------------------------------------------------- | ---- | ----------------------------------------------------- |
+| `npm run db:migrate` (local cluster)                            | 0    | Applied `018_phase6_cash_counter_modes.sql`           |
+| Throwaway database on the local cluster (created, then dropped) | 0    | 21 of 21 cash counter checks passed                   |
+| `npm run format:check`                                          | 0    |                                                       |
+| `npm run lint`                                                  | 0    |                                                       |
+| `npm run typecheck`                                             | 0    |                                                       |
+| `npm run test:unit`                                             | 0    |                                                       |
+| `npm run test:e2e`                                              | 0    | Adds cash counter, send, direct invoice, toggle tests |
+| `npm run build`                                                 | 0    |                                                       |
+| `npm run test:integration`                                      | 1    | Docker not running: no container runtime              |
+
+The throwaway-database run (shared with `tests/integration/phase6-cash-counter.integration.test.ts`
+through `tests/integration/scenarios/cash-counter.ts`) covered: send without a till, idempotent send,
+the queue with lines, clear needs a started day, cash and change recorded, retried clear replays,
+second clear refused, drawer = opening + sales, cancel releases stock, expired hold re-reserved,
+sessions off invoices into an automatic day session reused within the day and rolled over the next
+day with no variance, manual open refused, switching back on closes automatic sessions, and
+auditing.
+
+### Unverified
+
+The flows were driven through services and mocked browser routes, not by people at real counters.
+Automatic sessions roll over on the first sale of a new business day, not at midnight.
+
+## 10. Post-gate change record — 2026-10-22: owner page fix, budget page, shelf planner
+
+### What changed
+
+- **Owner page crash (root cause).** The worker stored `expiryValueAtRisk` and `deadStockValue` in
+  the daily snapshot as unrounded `quantity × cost` (for example `10770616.50000000000`). The owner
+  dashboard formats money exactly and refuses more than two decimals, so it threw while rendering
+  and the error boundary replaced the screen. The API logs looked normal because the failure was in
+  the browser after the data arrived. Fixes: the worker rounds both values to paisa, the dashboard
+  API rounds snapshots already stored, the dashboard shows a malformed figure as text instead of
+  failing, and the error boundary clears when the operator moves to another screen.
+- **Budget page.** The standalone `/budget` screen and its navigation entry are removed; the budget
+  plan lives only in the counter's side panel. The unused page components and their styles went with
+  it.
+- **Shelf planner** (`/shelves`, "Shelves" in the navigation). Migration
+  `019_phase6_shelf_planner.sql` adds `shop_floor_plans` (room, counter, doorway, version),
+  `shelf_fixtures` (racks, island stands, fridges, locked cabinets, displays with size, rotation,
+  levels, medicines per level, storage, lock), `shelves.fixture_id`/`level_number` (each level is an
+  ordinary shelf coded `A-1` for the top level, so counter search and older code keep working), and
+  `shelf_layout_proposals` (one pending suggestion per branch, applied or rejected as a whole or
+  item by item).
+  - The engine in `packages/shared/src/shelf-planner.ts` is shared by API and screen. It validates
+    layouts (inside the walls, no overlaps, unique labels, doorway clear, room to pick in front of
+    every fixture), finds walking routes around obstacles from where staff stand behind the counter,
+    prices every level in seconds per pick (round trip at 1 m/s, bending or reaching, opening a
+    fridge or a lock), and plans placements: _Fresh_ (fast sellers on the quickest levels, then
+    every medicine grouped by company, form, or A to Z from the quickest rack outward) or _Improve_
+    (keep the current arrangement; fix wrong storage, shelve unshelved stock next to its group, swap
+    fast sellers on slow shelves with slow sellers on quick ones only when it saves at least a
+    minute a month). Fridge-only medicines go only on cold fixtures and controlled medicines only on
+    locked ones. It also suggests turning fixtures that face a wall, swapping a busy far rack with a
+    quiet near one of the same size, and adding racks, a fridge, or a cabinet on free wall space when
+    stock does not fit.
+  - API (`apps/api/src/shelf-planner`): `GET /shelf-planner`, `PUT /shelf-planner/layout`
+    (optimistic version check; fixtures or levels still holding medicines cannot be removed or change
+    storage), `GET /shelf-planner/shelves/:id/medicines`, `GET /shelf-planner/medicines`,
+    `POST /shelf-planner/placements` and `/placements/remove`, `GET /shelf-planner/proposals/current`,
+    `POST /shelf-planner/proposals`, `POST /shelf-planner/proposals/:id/apply` (refused when the
+    layout changed since the suggestion; moving racks needs `inventory.shelf.manage`), and
+    `POST /shelf-planner/proposals/:id/reject`. Planner writes lock the branch's floor plan row
+    first. Every change is audited.
+  - Screen: a first-run size step with common Pakistani shop sizes and a starter layout; a plan
+    editor with drag, wall and edge snapping, keyboard nudging, turning, copying, removal, undo and
+    redo; a speed or fullness heat map; the walking route to the selected rack; a 3D view with
+    clickable levels; per-level medicine lists with type-to-add and take-off; a "Where is…?" search
+    that lights up the shelf; suggestion review with per-item ticks, per-medicine target changes, a
+    preview of rack changes on the plan, and a printable move list. Feet or centimetres; read-only for
+    staff without manage rights.
+- **Admin shelves.** Shelves that belong to a planner rack cannot be edited from Admin. Assigning a
+  primary shelf there now clears the old primary only in the caller's branch; before, it cleared the
+  medicine's primary shelf in every branch.
+- **Integration fixtures repaired.** With Docker available the full integration suite ran for the
+  first time since commit `1087fc3`. Two committed tests had never passed: the Phase 6 operations
+  test gave both test terminals the same code and inserted sales without a cashier, session, draft,
+  or line; the stock-ledger refund test called a cash refund with a user holding no permissions, so
+  the permission check fired before the session check it meant to test. The fixtures now build
+  complete sales and grant the cash-refund permission; no gate or assertion was weakened.
+
+### Evidence
+
+| Command                                                         | Exit | Notes                                                         |
+| --------------------------------------------------------------- | ---- | ------------------------------------------------------------- |
+| Throwaway database on the local cluster (created, then dropped) | 0    | 24 of 24 shelf planner checks before the suite could run      |
+| `npm run db:migrate` (local cluster)                            | 0    | Applied `019_phase6_shelf_planner.sql`                        |
+| `npm run format:check`                                          | 0    |                                                               |
+| `npm run lint`                                                  | 0    |                                                               |
+| `npm run typecheck`                                             | 0    |                                                               |
+| `npm run test:unit`                                             | 0    | 17 shelf planner engine tests added                           |
+| `npm run test:integration`                                      | 0    | 14 files, 77 tests, including shelf planner and cash counter  |
+| `npm run test:e2e`                                              | 0    | 25 tests; 4 new: draw and save, suggestion review, 3D, finder |
+| `npm run build`                                                 | 0    |                                                               |
+
+The shelf planner scenario (`tests/integration/scenarios/shelf-planner.ts`) covers: an empty shop,
+stock counts, saving the starter shop as version 1, a coded shelf per level, shelves priced by
+seconds per pick, stale saves refused, overlaps refused, fridge medicines refused on ordinary
+shelves, search and shelf lists, a rack holding stock cannot be removed, swapping rack labels keeps
+shelves with their racks, fridge and lock rules in suggestions, reviewers cannot move racks,
+accepting shelves every medicine, no double apply, a tidy shop needs no improving, rejecting,
+layout changes retiring open suggestions, overflow asking for a new rack, moves onto an unaccepted
+rack refused, building an accepted rack with its shelves, and auditing. The owner-page cause was
+confirmed against the local snapshots (`10770616.50000000000` stored, `10770616.50` after the fix).
+
+### Unverified
+
+- Seconds per pick rest on fixed assumptions (1 m/s walking, bending and reaching penalties, door
+  and lock time); they have not been timed against staff in a real shop.
+- Local data has no sales, so fast-mover moves and rack swaps are proven by engine tests and
+  fixtures, not by real sales history.
+- "Medicines per level" is the owner's estimate of how many different boxes fit side by side.
+- The 3D view uses CSS 3D transforms and was checked in Chrome only, not in other browsers or on
+  low-end counter PCs.

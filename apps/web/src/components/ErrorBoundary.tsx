@@ -2,6 +2,8 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface Props {
   readonly children: ReactNode;
+  /** Changing this (for example the route path) clears a failure so other screens stay usable. */
+  readonly resetKey?: string;
 }
 
 interface State {
@@ -13,6 +15,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(): State {
     return { failed: true };
+  }
+
+  override componentDidUpdate(previous: Props): void {
+    if (this.state.failed && previous.resetKey !== this.props.resetKey) {
+      this.setState({ failed: false });
+    }
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {

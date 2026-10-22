@@ -26,6 +26,7 @@ import {
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { resolveCashSession } from '../common/cash-session-resolver.js';
 import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
 
@@ -519,17 +520,26 @@ export class PosService {
     });
   }
 
-  async cancelDraft(user: AuthenticatedUser, draftId: bigint): Promise<Record<string, unknown>> {
+  /**
+   * Cancels a draft and releases its stock. The terminal that opened it may always cancel; the cash
+   * counter may cancel an order that was sent to it (the customer left without paying).
+   */
+  async cancelDraft(
+    user: AuthenticatedUser,
+    draftId: bigint,
+    options: { readonly fromCashCounter?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
-      const [draft] = await transaction<DraftRow[]>`
+      const [draft] = await transaction<Array<DraftRow & { cashier_queued_at: Date | null }>>`
         select id::text, branch_id::text, terminal_id::text, status,
           subtotal::text, discount_total::text, total::text, reserved_until,
-          discount_approval_id::text
+          discount_approval_id::text, cashier_queued_at
         from sale_drafts where id = ${draftId.toString()} for update
       `;
       if (!draft || draft.branch_id !== user.branchId)
         throw new NotFoundException('Draft not found');
-      if (draft.terminal_id !== user.terminalId) {
+      const counterMayCancel = options.fromCashCounter === true && draft.cashier_queued_at !== null;
+      if (draft.terminal_id !== user.terminalId && !counterMayCancel) {
         throw new ForbiddenException('Only the terminal that opened this draft can cancel it');
       }
       if (draft.status === 'CANCELLED') {
@@ -736,7 +746,6 @@ export class PosService {
     user: AuthenticatedUser,
     input: FinalizeSaleRequest,
   ): Promise<Record<string, unknown>> {
-    const cashSessionId = input.cashSessionId.toString();
     const draftId = input.draftId.toString();
     const creditAmount = sumMoney(
       input.payments
@@ -769,7 +778,6 @@ export class PosService {
         from sales
         left join return_lookup_tokens on return_lookup_tokens.sale_id = sales.id
         where sales.terminal_id = ${user.terminalId}
-          and sales.cash_session_id = ${cashSessionId}
           and sales.client_request_id = ${input.clientRequestId}
       `;
       if (existingSale) {
@@ -782,16 +790,11 @@ export class PosService {
         };
       }
 
-      const [cashSession] = await transaction<Array<{ id: string }>>`
-        select id::text from cash_sessions
-        where id = ${cashSessionId}
-          and branch_id = ${user.branchId}
-          and terminal_id = ${user.terminalId}
-          and cashier_user_id = ${user.id}
-          and status = 'OPEN'
-        for update
-      `;
-      if (!cashSession) throw new ConflictException('An open cash session is required');
+      const cashSessionId = await resolveCashSession(
+        transaction,
+        user,
+        input.cashSessionId?.toString() ?? null,
+      );
 
       const [draft] = await transaction<DraftRow[]>`
         select id::text, branch_id::text, terminal_id::text, status,

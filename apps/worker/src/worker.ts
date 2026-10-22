@@ -578,11 +578,11 @@ export class DurableWorker {
         day_refunds.total, day_sales.invoice_count,
         jsonb_build_object(
           'receivables', (select coalesce(sum(balance_after), 0)::text from latest_balances),
-          'expiryValueAtRisk', inventory_metrics.expiry_risk::text,
+          'expiryValueAtRisk', round(inventory_metrics.expiry_risk, 2)::text,
           'lowStockCount', operational.low_stock_count,
           'failedFiscalSubmissions', operational.failed_fiscal,
           'netCashVariance', operational.cash_variance,
-          'deadStockValue', inventory_metrics.dead_stock::text,
+          'deadStockValue', round(inventory_metrics.dead_stock, 2)::text,
           'topMovers', top_movers.items,
           'lastSuccessfulBackup', operational.last_backup,
           'lastRestoreDrill', operational.last_restore

@@ -10,6 +10,7 @@ export interface ShopRecord {
   readonly email: string | null;
   readonly drugLicenseNumber: string | null;
   readonly isActive: boolean;
+  readonly cashSessionsEnabled: boolean;
   readonly sellerNtnCnic: string | null;
   readonly sellerStrn: string | null;
   readonly posRegistrationNumber: string | null;

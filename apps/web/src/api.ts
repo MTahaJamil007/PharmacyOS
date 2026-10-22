@@ -17,7 +17,16 @@ import {
   type FiscalInvoiceStatus,
   type FiscalInvoiceSummary,
   type FiscalOverview,
+  type FixtureChange,
+  type FixtureLayout,
+  type FloorPlan,
+  type LayoutIssue,
   type LoginResponse,
+  type MoveReason,
+  type PlacementGrouping,
+  type PlanMode,
+  type SlotRef,
+  type UnplacedReason,
   type MedicineSearchResult,
   type OwnerAnswer,
   type OperationalAlertsResponse,
@@ -362,6 +371,91 @@ export function approveCashVariance(
     method: 'POST',
     body: JSON.stringify({ notes, clientRequestId: createClientRequestId() }),
   });
+}
+
+export interface CounterSettings {
+  readonly cashSessionsEnabled: boolean;
+}
+
+export function getCounterSettings(token: string): Promise<CounterSettings> {
+  return authenticatedRequest(token, '/pos/counter-settings');
+}
+
+/** Hands a reserved order to the cash counter queue (cash sessions on). */
+export function sendToCashCounter(
+  token: string,
+  draftId: string,
+  customerId?: string,
+): Promise<{ readonly id: string; readonly total: string }> {
+  return authenticatedRequest(token, `/pos/drafts/${draftId}/send-to-cashier`, {
+    method: 'POST',
+    body: JSON.stringify(customerId ? { customerId } : {}),
+  });
+}
+
+/** Issues the invoice straight from the order desk (cash sessions off). */
+export function completeCounterInvoice(
+  token: string,
+  draftId: string,
+  clientRequestId: string,
+  customerId?: string,
+): Promise<FinalizedSale> {
+  return authenticatedRequest(token, `/pos/drafts/${draftId}/complete-invoice`, {
+    method: 'POST',
+    body: JSON.stringify({ clientRequestId, ...(customerId ? { customerId } : {}) }),
+  });
+}
+
+export interface CashCounterOrder {
+  readonly id: string;
+  readonly total: string;
+  readonly invoiceDiscount: string;
+  readonly queuedAt: string;
+  readonly reservedUntil: string | null;
+  readonly status: string;
+  readonly orderTaker: string;
+  readonly counterName: string;
+  readonly customerName: string | null;
+  readonly items: ReadonlyArray<{
+    readonly name: string;
+    readonly strength: string | null;
+    readonly quantity: string;
+    readonly lineTotal: string;
+    readonly dosage: string | null;
+  }>;
+}
+
+export interface CashCounterQueue {
+  readonly data: readonly CashCounterOrder[];
+  readonly recent: ReadonlyArray<{
+    readonly id: string;
+    readonly invoiceNumber: string;
+    readonly total: string;
+    readonly createdAt: string;
+  }>;
+}
+
+export function getCashCounterQueue(token: string): Promise<CashCounterQueue> {
+  return authenticatedRequest(token, '/pos/cash-counter/queue');
+}
+
+export function clearCashCounterPayment(
+  token: string,
+  draftId: string,
+  input: {
+    readonly cashSessionId: string;
+    readonly clientRequestId: string;
+    readonly tenderedAmount?: string;
+  },
+): Promise<FinalizedSale> {
+  return authenticatedRequest(token, `/pos/cash-counter/${draftId}/clear`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function cancelCashCounterOrder(token: string, draftId: string): Promise<unknown> {
+  return authenticatedRequest(token, `/pos/cash-counter/${draftId}/cancel`, { method: 'POST' });
 }
 
 export async function searchMedicines(
@@ -796,4 +890,208 @@ export function importCatalog(
     method: 'POST',
     body: JSON.stringify({ mode, rows, clientRequestId }),
   });
+}
+
+export interface PlannerLevel {
+  readonly level: number;
+  readonly shelfId: string;
+  readonly code: string;
+  readonly used: number;
+}
+
+export interface PlannerFixture extends FixtureLayout {
+  readonly id: string | null;
+  readonly levels: readonly PlannerLevel[];
+}
+
+export interface ShelfPlannerState {
+  readonly version: number;
+  readonly floor: FloorPlan | null;
+  readonly fixtures: readonly PlannerFixture[];
+  readonly otherShelves: ReadonlyArray<{ id: string; code: string; name: string; used: number }>;
+  readonly stats: { readonly stocked: number; readonly placed: number; readonly unplaced: number };
+  readonly pendingProposal: { readonly id: string; readonly createdAt: string } | null;
+  readonly lookbackDays: number;
+}
+
+export interface PlannerMedicine {
+  readonly id: string;
+  readonly name: string;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly company: string | null;
+  readonly stock?: string;
+  readonly storageClass?: string;
+  readonly requiresSecured?: boolean;
+  readonly shelfCode?: string | null;
+  readonly shelfId?: string | null;
+}
+
+export interface ProposalMove {
+  readonly medicineId: string;
+  readonly name: string;
+  readonly group: string;
+  readonly picksPerMonth: number;
+  readonly from: SlotRef | null;
+  readonly fromLabel: string | null;
+  readonly to: SlotRef;
+  readonly toLabel: string;
+  readonly reason: MoveReason;
+  readonly secondsSavedPerMonth: number;
+}
+
+export interface ShelfProposal {
+  readonly id: string;
+  readonly status: string;
+  readonly layoutVersion: number;
+  readonly createdAt: string;
+  readonly summary: {
+    readonly mode: PlanMode;
+    readonly grouping: PlacementGrouping;
+    readonly lookbackDays: number;
+    readonly medicinesConsidered: number;
+    readonly withSales: number;
+    readonly moveCount: number;
+    readonly newPlacements: number;
+    readonly fixtureChangeCount: number;
+    readonly unplacedCount: number;
+    readonly secondsSavedPerMonth: number;
+  };
+  readonly fixtureChanges: readonly FixtureChange[];
+  readonly fixtures: readonly FixtureLayout[];
+  readonly moves: readonly ProposalMove[];
+  readonly unplaced: ReadonlyArray<{
+    readonly medicineId: string;
+    readonly name: string;
+    readonly group: string;
+    readonly reason: UnplacedReason;
+  }>;
+}
+
+export interface SaveLayoutFixture extends FixtureLayout {
+  readonly id: string | null;
+}
+
+export function getShelfPlanner(token: string): Promise<ShelfPlannerState> {
+  return authenticatedRequest(token, '/shelf-planner');
+}
+
+export function saveShelfLayout(
+  token: string,
+  expectedVersion: number,
+  floor: FloorPlan,
+  fixtures: readonly SaveLayoutFixture[],
+): Promise<{ readonly version: number; readonly warnings: readonly LayoutIssue[] }> {
+  return authenticatedRequest(token, '/shelf-planner/layout', {
+    method: 'PUT',
+    body: JSON.stringify({
+      expectedVersion,
+      floor,
+      fixtures: fixtures.map((fixture) => ({
+        id: fixture.id,
+        key: fixture.key,
+        code: fixture.code,
+        name: fixture.name,
+        kind: fixture.kind,
+        xCm: Math.round(fixture.xCm),
+        yCm: Math.round(fixture.yCm),
+        widthCm: fixture.widthCm,
+        depthCm: fixture.depthCm,
+        rotation: fixture.rotation,
+        heightCm: fixture.heightCm,
+        levelCount: fixture.levelCount,
+        facingsPerLevel: fixture.facingsPerLevel,
+        storageClass: fixture.storageClass,
+        isSecured: fixture.isSecured,
+      })),
+    }),
+  });
+}
+
+export async function getShelfMedicines(
+  token: string,
+  shelfId: string,
+): Promise<readonly PlannerMedicine[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly PlannerMedicine[] }>(
+    token,
+    `/shelf-planner/shelves/${encodeURIComponent(shelfId)}/medicines`,
+  );
+  return response.data;
+}
+
+export async function searchPlannerMedicines(
+  token: string,
+  query: string,
+): Promise<readonly PlannerMedicine[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly PlannerMedicine[] }>(
+    token,
+    `/shelf-planner/medicines?query=${encodeURIComponent(query)}`,
+  );
+  return response.data;
+}
+
+export function placeMedicineOnShelf(
+  token: string,
+  medicineId: string,
+  shelfId: string,
+): Promise<{ readonly code: string }> {
+  return authenticatedRequest(token, '/shelf-planner/placements', {
+    method: 'POST',
+    body: JSON.stringify({ medicineId, shelfId }),
+  });
+}
+
+export function removeMedicineFromShelf(token: string, medicineId: string): Promise<unknown> {
+  return authenticatedRequest(token, '/shelf-planner/placements/remove', {
+    method: 'POST',
+    body: JSON.stringify({ medicineId }),
+  });
+}
+
+export async function getCurrentShelfProposal(token: string): Promise<ShelfProposal | null> {
+  const response = await authenticatedRequest<{ readonly data: ShelfProposal | null }>(
+    token,
+    '/shelf-planner/proposals/current',
+  );
+  return response.data;
+}
+
+export async function createShelfProposal(
+  token: string,
+  mode: PlanMode,
+  grouping: PlacementGrouping,
+): Promise<ShelfProposal> {
+  const response = await authenticatedRequest<{ readonly data: ShelfProposal }>(
+    token,
+    '/shelf-planner/proposals',
+    { method: 'POST', body: JSON.stringify({ mode, grouping }) },
+  );
+  return response.data;
+}
+
+export function applyShelfProposal(
+  token: string,
+  proposalId: string,
+  fixtureChangeIds: readonly string[],
+  moves: ReadonlyArray<{ medicineId: string; fixtureKey: string; level: number }>,
+): Promise<{ readonly fixtureChanges: number; readonly moves: number; readonly version: number }> {
+  return authenticatedRequest(
+    token,
+    `/shelf-planner/proposals/${encodeURIComponent(proposalId)}/apply`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ fixtureChangeIds, moves }),
+    },
+  );
+}
+
+export function rejectShelfProposal(token: string, proposalId: string): Promise<unknown> {
+  return authenticatedRequest(
+    token,
+    `/shelf-planner/proposals/${encodeURIComponent(proposalId)}/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  );
 }

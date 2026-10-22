@@ -24,6 +24,7 @@ import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
 import { ObservabilityModule } from './observability/observability.module.js';
 import { PlatformModule } from './platform/platform.module.js';
 import { PrintingModule } from './printing/printing.module.js';
+import { ShelfPlannerModule } from './shelf-planner/shelf-planner.module.js';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { PrintingModule } from './printing/printing.module.js';
     ObservabilityModule,
     PlatformModule,
     PrintingModule,
+    ShelfPlannerModule,
   ],
   providers: [
     AuthGuard,

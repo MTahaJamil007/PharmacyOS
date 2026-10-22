@@ -27,12 +27,12 @@ const navigation = [
     ],
     to: '/inventory',
   },
-  { key: 'nav.purchasing', permissions: [PERMISSIONS.INVENTORY_PURCHASE], to: '/purchasing' },
   {
-    key: 'nav.budget',
-    permissions: [PERMISSIONS.SALES_BUDGET_REGIMEN_CALCULATE],
-    to: '/budget',
+    key: 'nav.shelves',
+    permissions: [PERMISSIONS.INVENTORY_SHELF_READ, PERMISSIONS.INVENTORY_SHELF_MANAGE],
+    to: '/shelves',
   },
+  { key: 'nav.purchasing', permissions: [PERMISSIONS.INVENTORY_PURCHASE], to: '/purchasing' },
   {
     key: 'nav.returns',
     permissions: [PERMISSIONS.RETURNS_LOOKUP, PERMISSIONS.RETURNS_REQUEST],
