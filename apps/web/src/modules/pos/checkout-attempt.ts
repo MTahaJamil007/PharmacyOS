@@ -26,7 +26,7 @@ function storageKey(terminalId: string): string {
 
 export function cartSignature(cart: readonly CartLine[]): string {
   return cart
-    .map((line) => `${line.medicine.id}:${line.quantity}`)
+    .map((line) => `${line.medicine.id}:${line.quantity}:${line.dosage ?? ''}`)
     .sort()
     .join('|');
 }

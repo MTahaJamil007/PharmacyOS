@@ -378,7 +378,11 @@ export async function searchMedicines(
 export function createSaleDraft(
   token: string,
   terminalId: string,
-  items: ReadonlyArray<{ readonly medicineId: string; readonly quantity: string }>,
+  items: ReadonlyArray<{
+    readonly medicineId: string;
+    readonly quantity: string;
+    readonly dosageInstruction?: string;
+  }>,
 ): Promise<SaleDraftResult> {
   return authenticatedRequest(token, '/pos/drafts', {
     method: 'POST',
@@ -571,6 +575,37 @@ export function adminPatch<T>(token: string, path: string, body: unknown): Promi
   return authenticatedRequest(token, `/admin${path}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
+  });
+}
+
+export function adminPut<T>(token: string, path: string, body: unknown): Promise<T> {
+  return authenticatedRequest(token, `/admin${path}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+/** Software-owner (super admin) endpoints. */
+export function platformRequest<T>(
+  token: string,
+  path: string,
+  method: 'GET' | 'POST' | 'PATCH' = 'GET',
+  body?: unknown,
+): Promise<T> {
+  return authenticatedRequest(token, `/platform${path}`, {
+    method,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
+
+/** Sends raw ESC/POS bytes, base64 encoded, to a LAN receipt printer through the local API. */
+export function printToNetworkPrinter(
+  token: string,
+  input: { readonly host: string; readonly port: number; readonly data: string },
+): Promise<{ readonly bytes: number }> {
+  return authenticatedRequest(token, '/printing/network', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }
 

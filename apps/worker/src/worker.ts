@@ -1,7 +1,9 @@
 import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
+import type { FiscalGatewayResult, FiscalInvoice, FiscalInvoiceGateway } from '@pharmacy/shared';
 
 import { retryDelaySeconds } from './backoff.js';
+import { FbrHttpGateway } from './fiscal-gateway.js';
 import { WorkerHeartbeat } from './heartbeat.js';
 
 interface OutboxJob {
@@ -22,7 +24,14 @@ export class DurableWorker {
     private readonly database: Database,
     private readonly environment: Environment,
     private readonly heartbeat = new WorkerHeartbeat(environment.WORKER_HEALTH_FILE),
+    private fiscalGateway?: FiscalInvoiceGateway,
   ) {}
+
+  /** Built on first use, so a worker that never sends to FBR never needs FBR settings. */
+  private gateway(): FiscalInvoiceGateway {
+    this.fiscalGateway ??= new FbrHttpGateway(this.environment);
+    return this.fiscalGateway;
+  }
 
   async run(signal: AbortSignal): Promise<void> {
     process.stdout.write(`Worker ${this.environment.WORKER_ID} started\n`);
@@ -153,14 +162,132 @@ export class DurableWorker {
       return { status: 'COMPLETED' };
     }
 
-    const recorded = await this.recordBlockedFiscalAttempt(
-      String(invoiceId),
-      'FBR_OUTBOUND_APPROVAL_REQUIRED',
-      'Outbound fiscal submission is disabled pending explicit operator approval',
-    );
-    return recorded
-      ? { status: 'COMPLETED' }
-      : { status: 'RETRYABLE', error: `Fiscal invoice ${String(invoiceId)} was not found` };
+    const claim = await this.claimFiscalSubmission(String(invoiceId));
+    if (claim.kind === 'MISSING') {
+      return { status: 'RETRYABLE', error: `Fiscal invoice ${String(invoiceId)} was not found` };
+    }
+    if (claim.kind === 'DONE') return { status: 'COMPLETED' };
+    if (claim.kind === 'NOT_APPROVED') {
+      await this.recordBlockedFiscalAttempt(
+        String(invoiceId),
+        'FBR_OUTBOUND_APPROVAL_REQUIRED',
+        'Live FBR transmission is not approved for this shop. The super admin approves it.',
+      );
+      return { status: 'COMPLETED' };
+    }
+
+    let invoice: FiscalInvoice;
+    try {
+      invoice = JSON.parse(claim.payloadText) as FiscalInvoice;
+    } catch {
+      await this.recordBlockedFiscalAttempt(
+        String(invoiceId),
+        'FBR_PAYLOAD_UNREADABLE',
+        'The stored fiscal payload could not be read',
+      );
+      return { status: 'COMPLETED' };
+    }
+    const result = await this.gateway().submitInvoice(invoice);
+    const outcome = await this.recordFiscalSubmission(String(invoiceId), claim.payloadText, result);
+    return outcome === 'RETRY'
+      ? { status: 'RETRYABLE', error: result.errorMessage ?? 'FBR submission will be retried' }
+      : { status: 'COMPLETED' };
+  }
+
+  /**
+   * Moves an approved invoice to SUBMITTING before any network call, so a crash between sending
+   * and recording leaves a visible SUBMITTING row instead of a silent second submission.
+   */
+  private async claimFiscalSubmission(
+    invoiceId: string,
+  ): Promise<
+    | { readonly kind: 'MISSING' }
+    | { readonly kind: 'DONE' }
+    | { readonly kind: 'NOT_APPROVED' }
+    | { readonly kind: 'SUBMIT'; readonly payloadText: string }
+  > {
+    return this.database.begin(async (transaction) => {
+      const [invoice] = await transaction<
+        Array<{
+          status: string;
+          payload_text: string;
+          fiscal_invoice_number: string | null;
+          approved: boolean;
+        }>
+      >`
+        select fbr_invoices.status, fbr_invoices.payload::text as payload_text,
+          fbr_invoices.fiscal_invoice_number, branches.fbr_transmission_approved as approved
+        from fbr_invoices
+        join sales on sales.id = fbr_invoices.sale_id
+        join branches on branches.id = sales.branch_id
+        where fbr_invoices.id = ${invoiceId}
+        for update of fbr_invoices
+      `;
+      if (!invoice) return { kind: 'MISSING' } as const;
+      if (invoice.status === 'SUBMITTED' || invoice.fiscal_invoice_number !== null) {
+        return { kind: 'DONE' } as const;
+      }
+      if (!invoice.approved) return { kind: 'NOT_APPROVED' } as const;
+      if (invoice.status === 'SUBMITTING') {
+        // A previous attempt may have reached FBR; sending again could duplicate the invoice.
+        await transaction`
+          update fbr_invoices set status = 'FAILED_NEEDS_REVIEW',
+            last_error_code = 'AMBIGUOUS_SUBMISSION',
+            last_error_message = 'An earlier submission did not record its result. Check the FBR portal before retrying.'
+          where id = ${invoiceId}
+        `;
+        return { kind: 'DONE' } as const;
+      }
+      await transaction`update fbr_invoices set status = 'SUBMITTING' where id = ${invoiceId}`;
+      return { kind: 'SUBMIT', payloadText: invoice.payload_text } as const;
+    });
+  }
+
+  private async recordFiscalSubmission(
+    invoiceId: string,
+    payloadText: string,
+    result: FiscalGatewayResult,
+  ): Promise<'DONE' | 'RETRY'> {
+    return this.database.begin(async (transaction) => {
+      const [attempt] = await transaction<Array<{ attempt_number: number }>>`
+        select coalesce(max(attempt_number), 0)::int + 1 as attempt_number
+        from fbr_invoice_attempts where fbr_invoice_id = ${invoiceId}
+      `;
+      if (!attempt) throw new Error('Fiscal attempt sequence could not be allocated');
+      const succeeded = result.ok && result.invoiceNumber !== null;
+      const retry = !succeeded && result.retryable && !result.ambiguousSubmission;
+      await transaction`
+        insert into fbr_invoice_attempts (
+          fbr_invoice_id, attempt_number, operation, request_payload, response_payload,
+          http_status, outcome, error_message, duration_ms, correlation_id
+        ) values (
+          ${invoiceId}, ${attempt.attempt_number}, 'SUBMIT', ${payloadText}::jsonb,
+          ${result.response === null ? null : JSON.stringify(result.response)}::jsonb,
+          ${result.httpStatus},
+          ${succeeded ? 'SUCCESS' : retry ? 'RETRYABLE_FAILURE' : 'PERMANENT_FAILURE'},
+          ${result.errorMessage}, ${result.durationMs}, ${result.correlationId}
+        )
+      `;
+      if (succeeded) {
+        // FBR prints its invoice number as the QR code on the customer's invoice.
+        await transaction`
+          update fbr_invoices set status = 'SUBMITTED',
+            fiscal_invoice_number = ${result.invoiceNumber},
+            qr_payload = ${result.invoiceNumber}, submitted_at = now(),
+            last_error_code = null, last_error_message = null
+          where id = ${invoiceId}
+        `;
+        return 'DONE';
+      }
+      await transaction`
+        update fbr_invoices set
+          status = ${retry ? 'FAILED_RETRYABLE' : 'FAILED_NEEDS_REVIEW'},
+          last_error_code = ${result.errorCode ?? (result.ok ? 'MISSING_INVOICE_NUMBER' : 'FBR_REJECTED')},
+          last_error_message = ${result.errorMessage ?? 'FBR accepted the request without an invoice number'}
+        where id = ${invoiceId}
+      `;
+      return retry ? 'RETRY' : 'DONE';
+    });
   }
 
   private async handleFbrReturn(job: OutboxJob): Promise<JobOutcome> {

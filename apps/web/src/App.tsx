@@ -17,6 +17,7 @@ const ProcurementRoute = lazy(() => import('./modules/procurement/ProcurementRou
 const ReportsRoute = lazy(() => import('./modules/reports/ReportsRoute'));
 const OperationsRoute = lazy(() => import('./modules/operations/OperationsRoute'));
 const AdministrationRoute = lazy(() => import('./modules/administration/AdministrationRoute'));
+const PlatformRoute = lazy(() => import('./modules/platform/PlatformRoute'));
 
 function RoutedWorkspace(): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
@@ -44,6 +45,7 @@ function RoutedWorkspace(): React.JSX.Element {
           <Route path="/reports" element={<ReportsRoute />} />
           <Route path="/operations" element={<OperationsRoute />} />
           <Route path="/admin" element={<AdministrationRoute />} />
+          <Route path="/platform" element={<PlatformRoute />} />
           <Route path="*" element={<Navigate replace to="/pos" />} />
         </Routes>
       </Suspense>

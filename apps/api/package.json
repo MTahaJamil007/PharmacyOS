@@ -8,6 +8,7 @@
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
     "bootstrap:owner": "tsx src/bootstrap-owner.ts",
+    "bootstrap:super-admin": "tsx src/bootstrap-super-admin.ts",
     "load:medicines": "tsx src/load-medicine-file.ts",
     "seed:development": "tsx src/seed-development.ts",
     "test": "vitest run",

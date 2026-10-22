@@ -70,6 +70,7 @@ export const PERMISSIONS = {
   ANALYTICS_OWNER_READ: 'analytics.owner.read',
   AI_OWNER_USE: 'ai.owner.use',
   AI_AUDIT_READ: 'ai.audit.read',
+  PLATFORM_SUPER_ADMIN: 'platform.super_admin',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

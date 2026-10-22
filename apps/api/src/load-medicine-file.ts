@@ -134,6 +134,40 @@ function chunk<T>(rows: readonly T[], size: number): readonly T[][] {
 }
 
 /**
+ * The catalog contract does not carry a manufacturer, but a file usually names one and the counter
+ * shows it next to each search result. Links each SKU to its manufacturer, creating missing ones,
+ * and never overwrites a manufacturer already set on a medicine.
+ */
+async function linkManufacturers(
+  transaction: DatabaseTransaction,
+  rows: readonly Record<string, unknown>[],
+): Promise<number> {
+  const skusByManufacturer = new Map<string, string[]>();
+  for (const row of rows) {
+    const name = typeof row.manufacturerName === 'string' ? row.manufacturerName.trim() : '';
+    const sku = typeof row.sku === 'string' ? row.sku.trim() : '';
+    if (!name || !sku || name.length > 200) continue;
+    skusByManufacturer.set(name, [...(skusByManufacturer.get(name) ?? []), sku]);
+  }
+  let linked = 0;
+  for (const [name, skus] of skusByManufacturer) {
+    await transaction`
+      insert into manufacturers (name) values (${name})
+      on conflict (lower(name)) where deleted_at is null do nothing
+    `;
+    const updated = await transaction`
+      update medicines set manufacturer_id = manufacturers.id, updated_at = now()
+      from manufacturers
+      where lower(manufacturers.name) = lower(${name}) and manufacturers.deleted_at is null
+        and medicines.sku in ${transaction(skus)} and medicines.deleted_at is null
+        and medicines.manufacturer_id is null
+    `;
+    linked += updated.count;
+  }
+  return linked;
+}
+
+/**
  * Opening stock for a development environment: one batch per priced medicine, recorded through
  * the append-only stock ledger exactly like the existing development fixture, and never touching
  * a batch that already has movement history.
@@ -308,6 +342,11 @@ async function main(): Promise<void> {
       );
       return;
     }
+
+    const manufacturersLinked = await database.begin((transaction) =>
+      linkManufacturers(transaction, rows),
+    );
+    process.stdout.write(`Manufacturers linked: ${String(manufacturersLinked)} medicine(s)\n`);
 
     let stockSummary = '';
     if (options.withDemoStock) {

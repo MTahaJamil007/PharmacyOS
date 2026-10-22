@@ -22,6 +22,8 @@ import { InventoryOperationsModule } from './inventory-operations/inventory-oper
 import { AdministrationModule } from './administration/administration.module.js';
 import { DatabaseExceptionFilter } from './common/database-exception.filter.js';
 import { ObservabilityModule } from './observability/observability.module.js';
+import { PlatformModule } from './platform/platform.module.js';
+import { PrintingModule } from './printing/printing.module.js';
 
 @Module({
   imports: [
@@ -44,6 +46,8 @@ import { ObservabilityModule } from './observability/observability.module.js';
     AdministrationModule,
     FiscalModule,
     ObservabilityModule,
+    PlatformModule,
+    PrintingModule,
   ],
   providers: [
     AuthGuard,

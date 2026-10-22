@@ -13,8 +13,8 @@ if (environmentName === 'production' || !allowSeed) {
   );
 }
 if (!connectionString) throw new Error('DATABASE_ADMIN_URL or DATABASE_URL is required');
-if (!password || password.length < 12) {
-  throw new Error('DEVELOPMENT_SEED_PASSWORD must contain at least 12 characters');
+if (!password || password.length < 6) {
+  throw new Error('DEVELOPMENT_SEED_PASSWORD must contain at least 6 characters');
 }
 if (!Number.isSafeInteger(medicineCount) || medicineCount < 100 || medicineCount > 10_000) {
   throw new Error('DEVELOPMENT_MEDICINE_COUNT must be an integer between 100 and 10000');

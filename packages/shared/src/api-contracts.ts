@@ -1,4 +1,5 @@
 import type { CashSessionStatus, PaymentMethod } from './domain.js';
+import type { InvoiceLayout } from './invoice.js';
 
 export interface LoginResponse {
   readonly accessToken: string;
@@ -222,9 +223,43 @@ export interface SaleReceipt {
     readonly quantity: string;
     readonly unit_price: string;
     readonly line_total: string;
+    /** Optional patient timing, e.g. "1+0+1 after meal". Absent on receipts before migration 016. */
+    readonly dosage_instruction?: string | null;
+    readonly discount_amount?: string;
+    readonly tax_rate?: string;
+    readonly tax_amount?: string;
   }>;
   readonly payments: readonly SalePayment[];
   readonly returnQrPayload: string;
+  /** Shop identity as set by the super admin. Absent from servers before migration 017. */
+  readonly shop?: InvoiceShop;
+  /** The shop owner's invoice layout, with defaults filled in. */
+  readonly layout?: InvoiceLayout;
+  readonly fbr?: InvoiceFbr;
+}
+
+export interface InvoiceShop {
+  readonly name: string;
+  readonly address: string | null;
+  readonly phone: string | null;
+  readonly email: string | null;
+  readonly drugLicenseNumber: string | null;
+  readonly sellerNtnCnic: string | null;
+  readonly sellerStrn: string | null;
+  readonly businessName: string | null;
+}
+
+/**
+ * Printed only while the shop owner keeps FBR invoicing switched on, and only for a sale that was
+ * fiscalized; the QR appears once FBR has issued the invoice number.
+ */
+export interface InvoiceFbr {
+  readonly enabled: boolean;
+  readonly status: string;
+  readonly invoiceNumber: string | null;
+  readonly qrPayload: string | null;
+  readonly posRegistrationNumber: string | null;
+  readonly lastError: string | null;
 }
 
 export interface SaleReceiptSearchResult {

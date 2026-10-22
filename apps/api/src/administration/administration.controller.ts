@@ -185,8 +185,9 @@ export class AdministrationController {
     return this.admin.fiscalSettings(user);
   }
 
+  // The shop's FBR identity is the software owner's to set; the shop owner reads it.
   @Patch('fiscal-settings')
-  @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_SYSTEM)
+  @RequirePermissions(PERMISSIONS.PLATFORM_SUPER_ADMIN)
   updateFiscalSettings(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
     const parsed = updateFiscalSettingsSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.flatten());

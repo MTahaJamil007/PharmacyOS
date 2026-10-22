@@ -1,16 +1,15 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { decimalToScaledInteger, sumMoney, type BudgetRegimenResult } from '@pharmacy/shared';
 
 import { calculateBudgetRegimen } from '../../api';
-import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { formatPkrMoney } from '../../money';
 import type { CartLine } from '../../store';
 import {
   allocateBudget,
   calculateBudgetLocally,
-  DEFAULT_REGIMEN,
   plannedQuantities,
   regimenEntryError,
+  regimenForLine,
   type RegimenEntry,
 } from './budget-plan';
 
@@ -73,7 +72,7 @@ export function BudgetPlanner({
 
   const entries = planLines.map((line) => ({
     line,
-    entry: regimen[line.medicine.id] ?? DEFAULT_REGIMEN,
+    entry: regimen[line.medicine.id] ?? regimenForLine(line),
   }));
   const inputKey = JSON.stringify({
     budget: budget.trim(),
@@ -316,40 +315,6 @@ export function BudgetPlanner({
           </button>
         </div>
       </aside>
-    </div>
-  );
-}
-
-export function BudgetPlanDialog(
-  props: Omit<React.ComponentProps<typeof BudgetPlanner>, 'autoFocusRef' | 'onCancel'> & {
-    readonly onClose: () => void;
-  },
-): React.JSX.Element {
-  const { onClose, ...planner } = props;
-  const dialog = useRef<HTMLDivElement>(null);
-  const budgetInput = useRef<HTMLInputElement>(null);
-  useDialogFocus(dialog, budgetInput, onClose);
-  return (
-    <div className="modal-backdrop">
-      <div
-        ref={dialog}
-        className="payment-dialog budget-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="budget-plan-title"
-      >
-        <header>
-          <div>
-            <p className="eyebrow">Affordability, not clinical advice</p>
-            <h2 id="budget-plan-title">Budget plan</h2>
-          </div>
-          <p className="dialog-caption">
-            {props.planLines.length} of {props.planLines.length + props.otherLines.length} medicines
-            planned
-          </p>
-        </header>
-        <BudgetPlanner {...planner} autoFocusRef={budgetInput} onCancel={onClose} />
-      </div>
     </div>
   );
 }

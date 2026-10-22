@@ -1,12 +1,24 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { PERMISSIONS } from '@pharmacy/shared';
+import { PASSWORD_MIN_LENGTH, PERMISSIONS } from '@pharmacy/shared';
 import { useState } from 'react';
 
 import { adminGet, adminPatch, adminPost } from '../../api';
 import { CatalogImportPanel } from './CatalogImportPanel';
+import { InvoiceLayoutEditor } from './InvoiceLayoutEditor';
+import { ShopFbrPanel } from './ShopFbrPanel';
 import { usePharmacyStore } from '../../store';
 
 type Resource = 'users' | 'medicines' | 'suppliers' | 'shelves' | 'terminals';
+type Tab = Resource | 'shop' | 'invoice';
+const TAB_LABELS: Record<Tab, string> = {
+  users: 'users',
+  medicines: 'medicines',
+  suppliers: 'suppliers',
+  shelves: 'shelves',
+  terminals: 'terminals',
+  shop: 'shop & FBR',
+  invoice: 'invoice layout',
+};
 interface AdminRecord {
   readonly id: string;
   readonly name?: string;
@@ -22,27 +34,9 @@ interface OperationalPolicies {
   readonly cashVarianceApprovalThreshold: string;
 }
 
-interface FiscalSettings {
-  readonly sellerNtnCnic: string | null;
-  readonly sellerStrn: string | null;
-  readonly posRegistrationNumber: string | null;
-  readonly businessName: string;
-  readonly province: string | null;
-  readonly scenarioId: string | null;
-}
-
-const fiscalFields = [
-  ['sellerNtnCnic', 'Seller NTN/CNIC'],
-  ['sellerStrn', 'Seller STRN'],
-  ['posRegistrationNumber', 'POS registration'],
-  ['businessName', 'Registered business name'],
-  ['province', 'Province'],
-  ['scenarioId', 'Sandbox scenario (SN###)'],
-] as const satisfies ReadonlyArray<readonly [keyof FiscalSettings, string]>;
-
 /** Server-enforced input rules worth stating before an operator submits the form. */
 const fieldHints: Readonly<Record<string, string>> = {
-  password: 'At least 12 characters.',
+  password: `At least ${String(PASSWORD_MIN_LENGTH)} characters.`,
   username: 'At least 3 characters, and unique.',
   displayName: 'At least 2 characters.',
   taxRate: 'Percentage with up to two decimals, for example 17 or 17.50.',
@@ -67,7 +61,11 @@ export function AdministrationScreen(): React.JSX.Element {
     (resource) =>
       resource === 'users' ? canUsers : resource === 'shelves' ? canShelves : canSystem,
   );
-  const [resource, setResource] = useState<Resource>(available[0] ?? 'users');
+  const tabs: readonly Tab[] = canSystem ? [...available, 'shop', 'invoice'] : available;
+  const canGrantSuperAdmin =
+    session?.user.permissions.includes(PERMISSIONS.PLATFORM_SUPER_ADMIN) ?? false;
+  const [tab, setTab] = useState<Tab>(tabs[0] ?? 'users');
+  const resource: Resource = tab === 'shop' || tab === 'invoice' ? (available[0] ?? 'users') : tab;
   const [form, setForm] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '' });
@@ -75,16 +73,11 @@ export function AdministrationScreen(): React.JSX.Element {
   const records = useQuery({
     queryKey: ['admin', resource],
     queryFn: () => adminGet<{ readonly data: readonly AdminRecord[] }>(token, `/${resource}`),
-    enabled: available.includes(resource),
+    enabled: available.includes(resource) && tab === resource,
   });
   const policies = useQuery({
     queryKey: ['admin', 'policies'],
     queryFn: () => adminGet<OperationalPolicies>(token, '/policies'),
-    enabled: canSystem,
-  });
-  const fiscalSettings = useQuery({
-    queryKey: ['admin', 'fiscal-settings'],
-    queryFn: () => adminGet<FiscalSettings>(token, '/fiscal-settings'),
     enabled: canSystem,
   });
 
@@ -170,29 +163,6 @@ export function AdministrationScreen(): React.JSX.Element {
       setMessage(cause instanceof Error ? cause.message : 'Policy update failed');
     }
   };
-  const updateFiscalSettings = async (): Promise<void> => {
-    try {
-      const current = fiscalSettings.data;
-      const optionalText = (value: string | null | undefined): string | null => {
-        const normalized = value?.trim();
-        return normalized ? normalized : null;
-      };
-      await adminPatch(token, '/fiscal-settings', {
-        sellerNtnCnic: optionalText(form.sellerNtnCnic ?? current?.sellerNtnCnic),
-        sellerStrn: optionalText(form.sellerStrn ?? current?.sellerStrn),
-        posRegistrationNumber: optionalText(
-          form.posRegistrationNumber ?? current?.posRegistrationNumber,
-        ),
-        businessName: optionalText(form.businessName ?? current?.businessName),
-        province: optionalText(form.province ?? current?.province),
-        scenarioId: optionalText(form.scenarioId ?? current?.scenarioId)?.toUpperCase() ?? null,
-      });
-      await client.invalidateQueries({ queryKey: ['admin', 'fiscal-settings'] });
-      setMessage('Fiscal settings updated');
-    } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : 'Fiscal settings update failed');
-    }
-  };
 
   return (
     <main className="operations-canvas admin-canvas">
@@ -212,210 +182,193 @@ export function AdministrationScreen(): React.JSX.Element {
         </p>
       ) : null}
       <div className="segmented-control admin-tabs">
-        {available.map((item) => (
+        {tabs.map((item) => (
           <button
-            className={resource === item ? 'selected' : ''}
+            className={tab === item ? 'selected' : ''}
             key={item}
             onClick={() => {
-              setResource(item);
+              setTab(item);
               setForm({});
+              setMessage('');
             }}
           >
-            {item}
+            {TAB_LABELS[item]}
           </button>
         ))}
       </div>
-      <section className="admin-layout">
-        <article className="work-panel compact-form-panel">
-          <header>
-            <div>
-              <p className="eyebrow">Create</p>
-              <h2>New {resource.slice(0, -1)}</h2>
-            </div>
-          </header>
-          <div className="form-grid single-column">
-            {labels[resource].map((field) => (
-              <label key={field}>
-                {field.replace(/([A-Z])/g, ' $1')}
-                {field === 'role' ? (
-                  <select
-                    value={form[field] ?? 'CASHIER'}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, [field]: event.target.value }))
-                    }
-                  >
-                    <option>CASHIER</option>
-                    <option>SALESPERSON</option>
-                    <option>SUPERVISOR</option>
-                    <option>INVENTORY_MANAGER</option>
-                    <option>MANAGER</option>
-                    <option>OWNER</option>
-                    <option>SYSTEM_ADMIN</option>
-                  </select>
-                ) : field === 'terminalType' ? (
-                  <select
-                    value={form[field] ?? 'ADMIN'}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, [field]: event.target.value }))
-                    }
-                  >
-                    <option>ADMIN</option>
-                    <option>CASHIER</option>
-                    <option>SALES_COUNTER</option>
-                  </select>
-                ) : (
-                  <input
-                    type={field === 'password' ? 'password' : 'text'}
-                    value={form[field] ?? ''}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, [field]: event.target.value }))
-                    }
-                  />
-                )}
-                {fieldHints[field] ? (
-                  <small className="field-hint">{fieldHints[field]}</small>
-                ) : null}
-              </label>
-            ))}
-            <button className="primary-button" onClick={() => void create()}>
-              Create
-            </button>
-          </div>
-        </article>
-        <article className="work-panel admin-records">
-          <header>
-            <div>
-              <p className="eyebrow">Current records</p>
-              <h2>{resource}</h2>
-            </div>
-            <span>{records.data?.data.length ?? 0}</span>
-          </header>
-          <div className="data-list">
-            {(records.data?.data ?? []).map((record) => (
-              <div className="admin-row" key={record.id}>
-                <span>
-                  <strong>
-                    {record.displayName ?? record.name ?? record.username ?? record.code}
-                  </strong>
-                  <small>{record.username ?? record.code ?? record.roles?.join(', ')}</small>
-                </span>
-                <button onClick={() => void toggle(record)}>
-                  {record.isActive === false ? 'Activate' : 'Deactivate'}
-                </button>
-              </div>
-            ))}
-          </div>
-        </article>
-        <aside className="admin-side-stack">
+      {tab === 'shop' ? <ShopFbrPanel /> : null}
+      {tab === 'invoice' ? <InvoiceLayoutEditor /> : null}
+      {tab === 'shop' || tab === 'invoice' ? null : (
+        <section className="admin-layout">
           <article className="work-panel compact-form-panel">
             <header>
               <div>
-                <p className="eyebrow">My security</p>
-                <h2>Change password</h2>
+                <p className="eyebrow">Create</p>
+                <h2>New {resource.slice(0, -1)}</h2>
               </div>
             </header>
             <div className="form-grid single-column">
-              <label>
-                Current password
-                <input
-                  type="password"
-                  value={passwords.currentPassword}
-                  onChange={(event) =>
-                    setPasswords((current) => ({ ...current, currentPassword: event.target.value }))
-                  }
-                />
-              </label>
-              <label>
-                New password
-                <input
-                  type="password"
-                  value={passwords.newPassword}
-                  onChange={(event) =>
-                    setPasswords((current) => ({ ...current, newPassword: event.target.value }))
-                  }
-                />
-              </label>
-              <button className="secondary-button" onClick={() => void changePassword()}>
-                Change password
-              </button>
-            </div>
-          </article>
-          {canSystem ? (
-            <article className="work-panel compact-form-panel">
-              <header>
-                <div>
-                  <p className="eyebrow">Branch policy</p>
-                  <h2>Approval limits</h2>
-                </div>
-              </header>
-              <div className="form-grid single-column">
-                <label>
-                  Basic discount %
-                  <input
-                    value={
-                      form.basicDiscountLimitPercent ??
-                      policies.data?.basicDiscountLimitPercent ??
-                      ''
-                    }
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        basicDiscountLimitPercent: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Cash variance threshold
-                  <input
-                    value={
-                      form.cashVarianceApprovalThreshold ??
-                      policies.data?.cashVarianceApprovalThreshold ??
-                      ''
-                    }
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        cashVarianceApprovalThreshold: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <button className="secondary-button" onClick={() => void updatePolicies()}>
-                  Update policies
-                </button>
-              </div>
-            </article>
-          ) : null}
-          {canSystem ? (
-            <article className="work-panel compact-form-panel">
-              <header>
-                <div>
-                  <p className="eyebrow">FBR readiness</p>
-                  <h2>Fiscal identity</h2>
-                </div>
-              </header>
-              <div className="form-grid single-column">
-                {fiscalFields.map(([field, fieldLabel]) => (
-                  <label key={field}>
-                    {fieldLabel}
+              {labels[resource].map((field) => (
+                <label key={field}>
+                  {field.replace(/([A-Z])/g, ' $1')}
+                  {field === 'role' ? (
+                    <select
+                      value={form[field] ?? 'CASHIER'}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, [field]: event.target.value }))
+                      }
+                    >
+                      <option>CASHIER</option>
+                      <option>SALESPERSON</option>
+                      <option>SUPERVISOR</option>
+                      <option>INVENTORY_MANAGER</option>
+                      <option>MANAGER</option>
+                      <option>OWNER</option>
+                      <option>SYSTEM_ADMIN</option>
+                      {canGrantSuperAdmin ? <option>SUPER_ADMIN</option> : null}
+                    </select>
+                  ) : field === 'terminalType' ? (
+                    <select
+                      value={form[field] ?? 'ADMIN'}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, [field]: event.target.value }))
+                      }
+                    >
+                      <option>ADMIN</option>
+                      <option>CASHIER</option>
+                      <option>SALES_COUNTER</option>
+                    </select>
+                  ) : (
                     <input
-                      value={form[field] ?? String(fiscalSettings.data?.[field] ?? '')}
+                      type={field === 'password' ? 'password' : 'text'}
+                      value={form[field] ?? ''}
                       onChange={(event) =>
                         setForm((current) => ({ ...current, [field]: event.target.value }))
                       }
                     />
-                  </label>
-                ))}
-                <button className="secondary-button" onClick={() => void updateFiscalSettings()}>
-                  Update fiscal identity
+                  )}
+                  {fieldHints[field] ? (
+                    <small className="field-hint">{fieldHints[field]}</small>
+                  ) : null}
+                </label>
+              ))}
+              <button className="primary-button" onClick={() => void create()}>
+                Create
+              </button>
+            </div>
+          </article>
+          <article className="work-panel admin-records">
+            <header>
+              <div>
+                <p className="eyebrow">Current records</p>
+                <h2>{resource}</h2>
+              </div>
+              <span>{records.data?.data.length ?? 0}</span>
+            </header>
+            <div className="data-list">
+              {(records.data?.data ?? []).map((record) => (
+                <div className="admin-row" key={record.id}>
+                  <span>
+                    <strong>
+                      {record.displayName ?? record.name ?? record.username ?? record.code}
+                    </strong>
+                    <small>{record.username ?? record.code ?? record.roles?.join(', ')}</small>
+                  </span>
+                  <button onClick={() => void toggle(record)}>
+                    {record.isActive === false ? 'Activate' : 'Deactivate'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </article>
+          <aside className="admin-side-stack">
+            <article className="work-panel compact-form-panel">
+              <header>
+                <div>
+                  <p className="eyebrow">My security</p>
+                  <h2>Change password</h2>
+                </div>
+              </header>
+              <div className="form-grid single-column">
+                <label>
+                  Current password
+                  <input
+                    type="password"
+                    value={passwords.currentPassword}
+                    onChange={(event) =>
+                      setPasswords((current) => ({
+                        ...current,
+                        currentPassword: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  New password
+                  <input
+                    type="password"
+                    value={passwords.newPassword}
+                    onChange={(event) =>
+                      setPasswords((current) => ({ ...current, newPassword: event.target.value }))
+                    }
+                  />
+                </label>
+                <button className="secondary-button" onClick={() => void changePassword()}>
+                  Change password
                 </button>
               </div>
             </article>
-          ) : null}
-          <CatalogImportPanel />
-        </aside>
-      </section>
+            {canSystem ? (
+              <article className="work-panel compact-form-panel">
+                <header>
+                  <div>
+                    <p className="eyebrow">Branch policy</p>
+                    <h2>Approval limits</h2>
+                  </div>
+                </header>
+                <div className="form-grid single-column">
+                  <label>
+                    Basic discount %
+                    <input
+                      value={
+                        form.basicDiscountLimitPercent ??
+                        policies.data?.basicDiscountLimitPercent ??
+                        ''
+                      }
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          basicDiscountLimitPercent: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Cash variance threshold
+                    <input
+                      value={
+                        form.cashVarianceApprovalThreshold ??
+                        policies.data?.cashVarianceApprovalThreshold ??
+                        ''
+                      }
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          cashVarianceApprovalThreshold: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <button className="secondary-button" onClick={() => void updatePolicies()}>
+                    Update policies
+                  </button>
+                </div>
+              </article>
+            ) : null}
+            <CatalogImportPanel />
+          </aside>
+        </section>
+      )}
     </main>
   );
 }

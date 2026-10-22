@@ -24,6 +24,15 @@ export class CatalogService {
   async search(branchId: string, query: string, limit: number): Promise<MedicineSearchResult[]> {
     const normalized = query.trim();
     const candidateLimit = Math.max(50, limit * 5);
+    // A counter types the start of a name, or a few words from name, strength and company
+    // ("metformin getz 500"). Those rank above fuzzy trigram matches. LIKE wildcards are escaped.
+    const literal = normalized.replace(/[\\%_]/g, (character) => `\\${character}`);
+    const prefixPattern = `${literal}%`;
+    const wordPatterns = literal
+      .split(/\s+/)
+      .filter((word) => word !== '')
+      .slice(0, 6)
+      .map((word) => `%${word}%`);
     return this.database<MedicineSearchResult[]>`
       with branch_clock as materialized (
         select (now() at time zone timezone)::date as local_date
@@ -37,13 +46,32 @@ export class CatalogService {
           and deleted_at is null and is_active
           and lower(name) = lower(${normalized})
         order by id limit ${limit}
+      ), prefix_hits as materialized (
+        select id,
+          case when name ilike ${prefixPattern} then 1::real else 0.9::real end as score
+        from medicines
+        where not exists (select 1 from barcode_hit)
+          and not exists (select 1 from exact_name_hits)
+          and deleted_at is null and is_active
+          and (name ilike ${prefixPattern} or generic_name ilike ${prefixPattern})
+        order by (name ilike ${prefixPattern}) desc, name, id limit ${candidateLimit}
+      ), word_hits as materialized (
+        select medicines.id, 1::real as score
+        from medicines
+        left join manufacturers on manufacturers.id = medicines.manufacturer_id
+        where not exists (select 1 from barcode_hit)
+          and not exists (select 1 from exact_name_hits)
+          and medicines.deleted_at is null and medicines.is_active
+          and concat_ws(' ', medicines.name, medicines.generic_name, medicines.strength,
+            manufacturers.name) ilike all (${this.database.array(wordPatterns)}::text[])
+        order by medicines.name, medicines.id limit ${candidateLimit}
       ), name_candidates as materialized (
         select id, similarity(name, ${normalized}) as score
         from medicines
         where not exists (select 1 from barcode_hit)
           and not exists (select 1 from exact_name_hits)
           and deleted_at is null and is_active
-          and (name % ${normalized} or name ilike ${`%${normalized}%`})
+          and name % ${normalized}
         order by name <-> ${normalized}, id limit ${candidateLimit}
       ), generic_candidates as materialized (
         select id, similarity(generic_name, ${normalized}) as score
@@ -67,15 +95,22 @@ export class CatalogService {
         union all
         select id, 1, 1::real from exact_name_hits
         union all
-        select id, 2, score from name_candidates
+        select id, 2, score from prefix_hits
         union all
-        select id, 2, score from generic_candidates
+        select id, 3, score from word_hits
         union all
-        select id, 2, score from alias_candidates
+        select id, 4, score from name_candidates
+        union all
+        select id, 4, score from generic_candidates
+        union all
+        select id, 4, score from alias_candidates
       ), matched as (
-        select id, min(match_rank) as match_rank, max(score) as score
-        from candidates group by id
-        order by match_rank, score desc, id
+        select candidates.id, min(match_rank) as match_rank, max(score) as score,
+          min(medicines.name) as name
+        from candidates
+        join medicines on medicines.id = candidates.id
+        group by candidates.id
+        order by min(match_rank), max(score) desc, min(medicines.name), candidates.id
         limit ${limit}
       )
       select matched.id::text as id, medicines.name, medicines.generic_name as "genericName",
@@ -114,7 +149,7 @@ export class CatalogService {
           and inventory_batches.deleted_at is null
           and inventory_batches.expiry_date >= branch_clock.local_date
       ) stock on true
-      order by matched.match_rank, matched.score desc, matched.id
+      order by matched.match_rank, matched.score desc, matched.name, matched.id
     `;
   }
 }

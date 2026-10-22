@@ -62,6 +62,7 @@ const navigation = [
     ],
     to: '/admin',
   },
+  { key: 'nav.platform', permissions: [PERMISSIONS.PLATFORM_SUPER_ADMIN], to: '/platform' },
 ] as const;
 
 export function AppShell({ children }: { readonly children: React.ReactNode }) {

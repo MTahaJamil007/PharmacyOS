@@ -33,8 +33,8 @@ export class UsersController {
 
   @Get('roles')
   @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_USERS)
-  roles() {
-    return this.users.roles();
+  roles(@CurrentUser() user: AuthenticatedUser) {
+    return this.users.roles(user);
   }
 
   @Post()

@@ -269,6 +269,33 @@ describe('POS endpoint idempotency', () => {
     expect(evidence).toEqual({ active_quantity: '1.000', current_qty: '1.000' });
   });
 
+  it('stores the patient timing in canonical form and rejects an unreadable one', async () => {
+    const create = (dosageInstruction: string) =>
+      api.app.inject({
+        headers: AUTHORIZATION,
+        method: 'POST',
+        payload: {
+          items: [{ dosageInstruction, medicineId: fixture.medicineId, quantity: '1' }],
+          terminalId: fixture.terminalId,
+        },
+        url: '/api/v1/pos/drafts',
+      });
+
+    expect((await create('1+1')).statusCode).toBe(400);
+    const created = await create('h0h a');
+    expect(created.statusCode).toBe(201);
+    const draftId = requiredString(recordBody(created.body), 'id');
+    const [item] = await database.admin<Array<{ dosage_instruction: string | null }>>`
+      select dosage_instruction from sale_draft_items where sale_draft_id = ${draftId}
+    `;
+    expect(item?.dosage_instruction).toBe('½+0+½ after meal');
+    await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      url: `/api/v1/pos/drafts/${draftId}/cancel`,
+    });
+  });
+
   it('cancels a reserved draft once and releases its stock for the next ticket', async () => {
     const [medicine] = await database.admin<{ id: string }[]>`
       insert into medicines (name, pack_size, unit_name)

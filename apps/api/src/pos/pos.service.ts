@@ -16,6 +16,7 @@ import {
   moneyToMinorUnits,
   multiplyMoneyByQuantity,
   PERMISSIONS,
+  resolveInvoiceLayout,
   scaledIntegerToDecimal,
   sumMoney,
   type ApplySaleDiscountRequest,
@@ -75,6 +76,7 @@ interface ReservedLineRow {
   readonly tax_rate: string;
   readonly fbr_uom: string;
   readonly fbr_sale_type: string;
+  readonly dosage_instruction: string | null;
 }
 
 interface FiscalHeaderRow {
@@ -88,6 +90,7 @@ interface FiscalHeaderRow {
   readonly scenario_id: string | null;
   readonly buyer_business_name: string;
   readonly buyer_address: string;
+  readonly fbr_invoicing_enabled: boolean;
 }
 
 const DUMMY_PASSWORD_HASH =
@@ -182,7 +185,12 @@ export class PosService {
         return_lookup_tokens.token::text as return_lookup_token,
         fbr_invoices.status as fiscal_status,
         fbr_invoices.fiscal_invoice_number,
-        fbr_invoices.qr_payload as fiscal_qr_payload
+        fbr_invoices.qr_payload as fiscal_qr_payload,
+        fbr_invoices.last_error_message as fiscal_last_error,
+        branches.email as branch_email, branches.drug_license_number,
+        branches.seller_ntn_cnic, branches.seller_strn, branches.fbr_business_name,
+        branches.fbr_pos_registration_number, branches.fbr_invoicing_enabled,
+        branches.invoice_layout
       from sales
       join branches on branches.id = sales.branch_id
       join users on users.id = sales.cashier_user_id
@@ -195,10 +203,10 @@ export class PosService {
     if (!sale) throw new NotFoundException('Sale receipt not found');
     const items = await this.database<Array<Record<string, unknown>>>`
       select sale_items.id::text, medicines.name, medicines.strength,
-        inventory_batches.batch_number, inventory_batches.expiry_date,
+        inventory_batches.batch_number, inventory_batches.expiry_date::text,
         sale_items.quantity::text, sale_items.unit_price::text,
         sale_items.discount_amount::text, sale_items.tax_rate::text,
-        sale_items.tax_amount::text, sale_items.line_total::text
+        sale_items.tax_amount::text, sale_items.line_total::text, sale_items.dosage_instruction
       from sale_items
       join medicines on medicines.id = sale_items.medicine_id
       join inventory_batches on inventory_batches.id = sale_items.inventory_batch_id
@@ -208,12 +216,35 @@ export class PosService {
       select method, amount::text, tendered_amount::text, change_amount::text, reference from payments
       where sale_id = ${saleId.toString()} and status = 'CAPTURED' order by id
     `;
+    const text = (value: unknown): string | null =>
+      typeof value === 'string' && value.trim() !== '' ? value : null;
+    const fiscalized = sale.fiscal_status !== 'NOT_REQUIRED';
     return {
       sale,
       items,
       payments,
       returnQrPayload: String(sale.return_lookup_token),
       qrDataClassification: 'OPAQUE_RETURN_TOKEN_ONLY',
+      shop: {
+        name: String(sale.branch_name),
+        address: text(sale.branch_address),
+        phone: text(sale.branch_phone),
+        email: text(sale.branch_email),
+        drugLicenseNumber: text(sale.drug_license_number),
+        sellerNtnCnic: text(sale.seller_ntn_cnic),
+        sellerStrn: text(sale.seller_strn),
+        businessName: text(sale.fbr_business_name),
+      },
+      layout: resolveInvoiceLayout(sale.invoice_layout),
+      fbr: {
+        // The owner's switch governs printing: with FBR off no FBR block or QR is printed.
+        enabled: sale.fbr_invoicing_enabled === true && fiscalized,
+        status: String(sale.fiscal_status),
+        invoiceNumber: text(sale.fiscal_invoice_number),
+        qrPayload: text(sale.fiscal_qr_payload) ?? text(sale.fiscal_invoice_number),
+        posRegistrationNumber: text(sale.fbr_pos_registration_number),
+        lastError: text(sale.fiscal_last_error),
+      },
     };
   }
 
@@ -226,10 +257,18 @@ export class PosService {
     }
 
     const normalizedItems = new Map<string, bigint>();
+    const dosageByMedicine = new Map<string, string>();
     for (const item of input.items) {
       const medicineId = item.medicineId.toString();
       const quantity = decimalToScaledInteger(item.quantity, 3);
       normalizedItems.set(medicineId, (normalizedItems.get(medicineId) ?? 0n) + quantity);
+      if (item.dosageInstruction !== undefined) {
+        const existing = dosageByMedicine.get(medicineId);
+        if (existing !== undefined && existing !== item.dosageInstruction) {
+          throw new ConflictException('One medicine cannot carry two different dosage timings');
+        }
+        dosageByMedicine.set(medicineId, item.dosageInstruction);
+      }
     }
 
     return this.database.begin(async (transaction) => {
@@ -273,6 +312,7 @@ export class PosService {
           quantity,
           unitPrice,
           lineTotal: multiplyMoneyByQuantity(unitPrice, quantity),
+          dosageInstruction: dosageByMedicine.get(row.medicine_id) ?? null,
         };
       });
       const subtotal = sumMoney(lines.map((line) => line.lineTotal));
@@ -291,9 +331,11 @@ export class PosService {
       for (const line of lines) {
         await transaction`
           insert into sale_draft_items (
-            sale_draft_id, medicine_id, quantity, unit_price, discount_amount, line_total
+            sale_draft_id, medicine_id, quantity, unit_price, discount_amount, line_total,
+            dosage_instruction
           ) values (
-            ${draft.id}, ${line.medicineId}, ${line.quantity}, ${line.unitPrice}, 0, ${line.lineTotal}
+            ${draft.id}, ${line.medicineId}, ${line.quantity}, ${line.unitPrice}, 0, ${line.lineTotal},
+            ${line.dosageInstruction}
           )
         `;
       }
@@ -809,7 +851,8 @@ export class PosService {
           stock_reservations.status as reservation_status,
           stock_reservations.expires_at,
           medicines.name as medicine_name, medicines.hs_code,
-          medicines.tax_rate::text, medicines.fbr_uom, medicines.fbr_sale_type
+          medicines.tax_rate::text, medicines.fbr_uom, medicines.fbr_sale_type,
+          sale_draft_items.dosage_instruction
         from stock_reservations
         join sale_draft_items on sale_draft_items.id = stock_reservations.sale_draft_item_id
         join inventory_batches on inventory_batches.id = stock_reservations.inventory_batch_id
@@ -883,7 +926,8 @@ export class PosService {
           coalesce(branches.address, '') as seller_address,
           branches.fbr_scenario_id as scenario_id,
           coalesce(customers.name, 'Walk-in Customer') as buyer_business_name,
-          coalesce(customers.address, branches.address, '') as buyer_address
+          coalesce(customers.address, branches.address, '') as buyer_address,
+          branches.fbr_invoicing_enabled
         from branches
         left join customers on customers.id = ${customerId}::bigint
           and customers.branch_id = branches.id and customers.deleted_at is null
@@ -920,12 +964,12 @@ export class PosService {
           insert into sale_items (
             sale_id, medicine_id, inventory_batch_id, quantity,
             unit_price, unit_cost, discount_amount, tax_rate, tax_amount, line_total,
-            hs_code, fbr_uom, fbr_sale_type
+            hs_code, fbr_uom, fbr_sale_type, dosage_instruction
           ) values (
             ${sale.id}, ${line.medicine_id}, ${line.inventory_batch_id}, ${line.quantity},
             ${line.unit_price}, ${line.cost_price}, ${line.discountAmount}, ${line.tax.rate},
             ${line.tax.tax}, ${line.lineTotal}, ${line.hs_code}, ${line.fbr_uom},
-            ${line.fbr_sale_type}
+            ${line.fbr_sale_type}, ${line.dosage_instruction}
           )
           returning id::text
         `;
@@ -991,7 +1035,12 @@ export class PosService {
         where id = ${draft.id}
       `;
 
-      const fiscalStatus = this.environment.FBR_MODE === 'DISABLED' ? 'NOT_REQUIRED' : 'PENDING';
+      // A sale is fiscalized only while the server has an FBR mode and the shop owner keeps FBR
+      // invoicing switched on; otherwise it is recorded as not required and prints no FBR block.
+      const fiscalStatus =
+        this.environment.FBR_MODE !== 'DISABLED' && fiscalHeader.fbr_invoicing_enabled
+          ? 'PENDING'
+          : 'NOT_REQUIRED';
       const fiscalPayload: FiscalInvoice = {
         invoiceType: 'Sale Invoice',
         invoiceDate: fiscalHeader.invoice_date,

@@ -232,9 +232,18 @@ test('cart survives reload and keyboard controls remain complete', async ({ page
   );
   await page.goto('/#/pos');
   const search = page.getByPlaceholder('Brand, generic, barcode or company');
+  const quantity = page.getByLabel('Quantity', { exact: true });
   await search.fill('Panadol');
-  await expect(page.getByRole('button', { name: /Panadol 500 mg/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Panadol 500 mg/ })).toBeVisible();
   await search.press('Enter');
+  await expect(quantity).toBeFocused();
+  // There is no default quantity: Enter on an empty box asks for one instead of adding 1.
+  await quantity.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Enter a quantity');
+  await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
+  await quantity.fill('2');
+  await quantity.press('Enter');
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('2');
   await search.fill('*3');
   await search.press('Enter');
   await expect(page.getByLabel('Panadol quantity')).toHaveValue('3');
@@ -252,8 +261,9 @@ test('cart survives reload and keyboard controls remain complete', async ({ page
   await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
 
   await search.fill('Panadol');
-  await expect(page.getByRole('button', { name: /Panadol 500 mg/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Panadol 500 mg/ })).toBeVisible();
   await search.press('Enter');
+  await expect(quantity).toBeFocused();
   await page.keyboard.press('F2');
   await expect(page.getByRole('status')).toContainText('New sale ready');
   await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
@@ -464,7 +474,7 @@ test('cashier budgets and discounts ticked lines, then releases the reservation'
     // The unticked Risek (PKR 470) comes out of the PKR 2,000 budget before planning.
     expect(route.request().postDataJSON()).toMatchObject({
       budget: '1530.00',
-      items: [{ medicineId: '101', minimumSaleIncrement: '1', prescribedBaseUnitsPerDay: '3' }],
+      items: [{ medicineId: '101', minimumSaleIncrement: '1', prescribedBaseUnitsPerDay: '3.000' }],
     });
     return json(route, {
       completeDays: 14,
@@ -488,7 +498,7 @@ test('cashier budgets and discounts ticked lines, then releases the reservation'
   await page.route('**/api/v1/pos/drafts', (route) => {
     expect(route.request().postDataJSON()).toMatchObject({
       items: [
-        { medicineId: '101', quantity: '42' },
+        { dosageInstruction: '1+1+1 after meal', medicineId: '101', quantity: '42' },
         { medicineId: '103', quantity: '1' },
       ],
     });
@@ -516,40 +526,45 @@ test('cashier budgets and discounts ticked lines, then releases the reservation'
 
   await page.goto('/#/pos');
   const search = page.getByPlaceholder('Brand, generic, barcode or company');
+  const quantity = page.getByLabel('Quantity', { exact: true });
+  const timing = page.getByLabel('Timing', { exact: true });
   await search.fill('Panadol');
-  await expect(page.getByRole('button', { name: /Panadol 500 mg/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Panadol 500 mg/ })).toBeVisible();
   await search.press('Enter');
+  await quantity.fill('6');
+  await timing.fill('111a');
+  await timing.press('Enter');
+  await expect(page.getByLabel('Panadol timing')).toHaveValue('1+1+1 after meal');
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('6');
   const risekSearch = page.waitForResponse((response) => response.url().includes('query=Risek'));
   await search.fill('Risek');
   await risekSearch;
-  await expect(page.getByRole('button', { name: /Risek 20 mg/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /Risek 20 mg/ })).toBeVisible();
   await search.press('ArrowDown');
   await search.press('Enter');
+  await quantity.fill('1');
+  await quantity.press('Enter');
   await expect(page.getByLabel('Risek quantity')).toHaveValue('1');
 
+  // The plan reads Panadol's 3 a day from its timing; no popup and no second entry of the dose.
   await page.getByLabel('Tick Panadol').check();
-  await page.getByRole('button', { name: /Budget plan/ }).click();
-  const budget = page.getByRole('dialog', { name: 'Budget plan' });
-  await budget.getByLabel('Customer budget (PKR)').fill('2000');
-  await budget.getByLabel('Panadol units per day').fill('3');
-  await budget.getByRole('button', { name: 'Calculate' }).click();
-  await expect(budget).toContainText('PKR 1,470.00');
-  await budget.getByRole('button', { name: 'Set cart quantities' }).click();
+  await page.keyboard.press('F3');
+  const budget = page.getByLabel('Customer budget (PKR)');
+  await expect(budget).toBeFocused();
+  await budget.fill('2000');
+  await budget.press('Enter');
+  await expect(page.getByText('plan → 42')).toBeVisible();
+  await budget.press('Enter');
   await expect(page.getByLabel('Panadol quantity')).toHaveValue('42');
   await expect(page.getByLabel('Risek quantity')).toHaveValue('1');
   await expect(page.getByRole('status')).toContainText('14 complete days for 1 medicine');
 
-  await page.getByRole('button', { name: 'Discount', exact: true }).click();
-  const discount = page.getByRole('dialog', { name: 'Discount' });
-  await discount.getByLabel('Discount for ticked lines').fill('10');
-  await discount.getByRole('button', { name: 'Apply to 1' }).click();
-  await expect(
-    discount.getByRole('textbox', { name: 'Panadol discount', exact: true }),
-  ).toHaveValue('10');
-  await expect(discount.getByRole('button', { name: 'Apply discount' })).toBeDisabled();
-  await discount.getByRole('radio', { name: 'Senior citizen' }).click();
-  await discount.getByRole('button', { name: 'Apply discount' }).click();
-  await expect(page.getByText('−PKR 147.00')).toBeVisible();
+  await page.getByLabel('Discount for ticked lines').fill('10');
+  await page.getByLabel('Discount for ticked lines').press('Enter');
+  await expect(page.getByLabel('Panadol discount', { exact: true })).toHaveValue('10%');
+  await page.keyboard.press('F8');
+  await expect(page.getByRole('alert')).toContainText('discount reason');
+  await page.getByRole('radio', { name: 'Senior citizen' }).click();
 
   await page.getByRole('button', { name: /Take payment/ }).click();
   const payment = page.getByRole('dialog', { name: 'Take payment' });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { decimalToScaledInteger } from './decimal.js';
 import { PAYMENT_METHODS } from './domain.js';
+import { normalizeDosage } from './dosage.js';
 import { moneyToMinorUnits, sumMoney } from './money.js';
 
 const MAX_DATABASE_ID = 9_223_372_036_854_775_807n;
@@ -37,11 +38,15 @@ export const taxRateSchema = z
   .refine((value) => decimalToScaledInteger(value, 2) <= 10_000n, 'Tax rate cannot exceed 100%');
 export const clientRequestIdSchema = z.string().trim().min(8).max(128);
 
+/** Counter staff type this many times a day; lockout after failed attempts protects it. */
+export const PASSWORD_MIN_LENGTH = 6;
+const passwordSchema = z.string().min(PASSWORD_MIN_LENGTH).max(256);
+
 export const terminalCodeSchema = z.string().trim().min(2).max(64);
 
 export const loginSchema = z.object({
   username: z.string().trim().min(3).max(100),
-  password: z.string().min(8).max(256),
+  password: passwordSchema,
   /** Binds the session to exactly this terminal; sign-in fails when it cannot be used. */
   terminalCode: terminalCodeSchema.optional(),
   /** Terminal this device opened last. Used when available, ignored when it is not. */
@@ -53,6 +58,20 @@ export const medicineSearchSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
+/** Optional patient timing such as "1+0+1 after meal", stored in its canonical spelling. */
+export const dosageInstructionSchema = z
+  .string()
+  .trim()
+  .max(80)
+  .transform((value, context) => {
+    const normalized = normalizeDosage(value);
+    if (normalized === null) {
+      context.addIssue({ code: 'custom', message: 'Dosage timing is not recognized' });
+      return z.NEVER;
+    }
+    return normalized;
+  });
+
 export const createDraftSchema = z.object({
   terminalId: idSchema,
   items: z
@@ -60,6 +79,7 @@ export const createDraftSchema = z.object({
       z.object({
         medicineId: idSchema,
         quantity: positiveQuantitySchema,
+        dosageInstruction: dosageInstructionSchema.optional(),
       }),
     )
     .min(1)
@@ -196,27 +216,28 @@ const roleCodeSchema = z.enum([
   'MANAGER',
   'OWNER',
   'SYSTEM_ADMIN',
+  'SUPER_ADMIN',
 ]);
 
 export const createUserSchema = z.object({
   username: z.string().trim().min(3).max(100),
   displayName: z.string().trim().min(2).max(160),
-  password: z.string().min(12).max(256),
-  roles: z.array(roleCodeSchema).min(1).max(7),
+  password: passwordSchema,
+  roles: z.array(roleCodeSchema).min(1).max(8),
 });
 
 export const updateUserSchema = z
   .object({
     displayName: z.string().trim().min(2).max(160).optional(),
     isActive: z.boolean().optional(),
-    roles: z.array(roleCodeSchema).min(1).max(7).optional(),
+    roles: z.array(roleCodeSchema).min(1).max(8).optional(),
   })
   .refine((input) => Object.keys(input).length > 0, 'At least one field is required');
 
-export const resetPasswordSchema = z.object({ password: z.string().min(12).max(256) });
+export const resetPasswordSchema = z.object({ password: passwordSchema });
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(8).max(256),
-  newPassword: z.string().min(12).max(256),
+  currentPassword: z.string().min(1).max(256),
+  newPassword: passwordSchema,
 });
 
 export const createMedicineSchema = z.object({
@@ -802,3 +823,21 @@ export type OpenCashSessionRequest = z.infer<typeof openCashSessionSchema>;
 export type CashMovementRequest = z.infer<typeof cashMovementSchema>;
 export type CloseCashSessionRequest = z.infer<typeof closeCashSessionSchema>;
 export type ApproveCashVarianceRequest = z.infer<typeof approveCashVarianceSchema>;
+
+export const platformCreateUserSchema = createUserSchema.extend({ branchId: idSchema });
+
+export const platformUpdateUserSchema = z
+  .object({
+    displayName: z.string().trim().min(2).max(160).optional(),
+    isActive: z.boolean().optional(),
+    branchId: idSchema.optional(),
+    roles: z.array(roleCodeSchema).min(1).max(8).optional(),
+  })
+  .refine((input) => Object.keys(input).length > 0, 'At least one field is required');
+
+export const activeToggleSchema = z.object({ isActive: z.boolean() }).strict();
+
+export const platformAuditQuerySchema = z.object({
+  branchId: idSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});

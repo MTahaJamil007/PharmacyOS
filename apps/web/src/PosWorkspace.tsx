@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   createClientRequestId,
-  decimalToScaledInteger,
   PERMISSIONS,
   type CustomerSummary,
   type SalePaymentInput,
@@ -30,9 +29,7 @@ import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { useI18n } from './i18n';
 import { formatPkrMoney } from './money';
 import { previewMedicines } from './preview-data';
-import { usePharmacyStore, type CartLine } from './store';
-import type { RegimenEntry } from './modules/pos/budget-plan';
-import { BudgetPlanDialog } from './modules/pos/BudgetPlanner';
+import { usePharmacyStore } from './store';
 import {
   cartSignature,
   clearCheckoutAttempt,
@@ -44,94 +41,42 @@ import {
 } from './modules/pos/checkout-attempt';
 import {
   buildDiscountPlan,
-  describeDiscountSpec,
   discountRequestBody,
   discountSignature,
+  type DiscountSpec,
 } from './modules/pos/discount';
-import { DiscountDialog, type SupervisorApproval } from './modules/pos/DiscountDialog';
+import { EntryBar, isSellable, type EntryBarHandle } from './modules/pos/EntryBar';
 import { PaymentDialog } from './modules/pos/PaymentDialog';
 import { ReceiptDialog } from './modules/pos/ReceiptDialog';
 import { ReprintDialog } from './modules/pos/ReprintDialog';
 import { WedgeScannerBuffer } from './modules/pos/scanner';
+import { BudgetBox, DiscountBox, type SupervisorApproval } from './modules/pos/SidePanel';
+import { TicketGrid, type TicketGridActions } from './modules/pos/TicketGrid';
+import { useBudgetPlan } from './modules/pos/useBudgetPlan';
 
 const previewMode = import.meta.env.VITE_PREVIEW_MODE === 'true';
 const NO_APPROVAL: SupervisorApproval = { username: '', password: '' };
 
-function clockLabel(
-  now: Date,
-  timeZone?: string,
-): { readonly date: string; readonly time: string } {
+/** Isolated so its periodic tick never re-renders the ticket. */
+function CounterClock({ timeZone }: { readonly timeZone: string | undefined }): React.JSX.Element {
+  const now = useClock(timeZone);
   const options = timeZone ? { timeZone } : {};
-  return {
-    date: new Intl.DateTimeFormat('en-PK', {
-      ...options,
-      day: '2-digit',
-      month: 'short',
-      weekday: 'short',
-    }).format(now),
-    time: new Intl.DateTimeFormat('en-PK', {
-      ...options,
-      hour: 'numeric',
-      minute: '2-digit',
-    }).format(now),
-  };
-}
-
-function wholeUnits(quantity: string): string {
-  return quantity.replace(/\.0+$/, '');
-}
-
-function isSellable(medicine: MedicineSearchResult): boolean {
-  try {
-    return (
-      medicine.salePrice !== null && decimalToScaledInteger(medicine.availableQuantity, 3) > 0n
-    );
-  } catch {
-    return false;
-  }
-}
-
-function exceedsStock(line: CartLine): boolean {
-  try {
-    return (
-      BigInt(line.quantity) * 1000n > decimalToScaledInteger(line.medicine.availableQuantity, 3)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function QuantityField({
-  line,
-  disabled,
-  onCommit,
-}: {
-  readonly line: CartLine;
-  readonly disabled: boolean;
-  readonly onCommit: (quantity: number) => void;
-}): React.JSX.Element {
-  const [text, setText] = useState<string | null>(null);
   return (
-    <input
-      aria-label={`${line.medicine.name} quantity`}
-      inputMode="numeric"
-      value={text ?? String(line.quantity)}
-      disabled={disabled}
-      onChange={(event) => {
-        const digits = event.target.value.replace(/\D/g, '').slice(0, 4);
-        setText(digits);
-        const quantity = Number(digits);
-        if (digits && quantity >= 1) onCommit(quantity);
-      }}
-      onBlur={() => setText(null)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          setText(null);
-          event.currentTarget.blur();
-        }
-      }}
-    />
+    <span className="clock-label">
+      {new Intl.DateTimeFormat('en-PK', {
+        ...options,
+        day: '2-digit',
+        month: 'short',
+        weekday: 'short',
+      }).format(now)}{' '}
+      <strong>
+        {new Intl.DateTimeFormat('en-PK', {
+          ...options,
+          hour: 'numeric',
+          minute: '2-digit',
+        }).format(now)}
+      </strong>
+    </span>
   );
 }
 
@@ -143,6 +88,7 @@ export function PosWorkspace(): React.JSX.Element {
   const addMedicine = usePharmacyStore((state) => state.addMedicine);
   const changeQuantity = usePharmacyStore((state) => state.changeQuantity);
   const setQuantity = usePharmacyStore((state) => state.setQuantity);
+  const setDosage = usePharmacyStore((state) => state.setDosage);
   const applyQuantities = usePharmacyStore((state) => state.applyQuantities);
   const removeMedicine = usePharmacyStore((state) => state.removeMedicine);
   const removeMedicines = usePharmacyStore((state) => state.removeMedicines);
@@ -150,10 +96,8 @@ export function PosWorkspace(): React.JSX.Element {
   const clearCart = usePharmacyStore((state) => state.clearCart);
   const holdOrResumeCart = usePharmacyStore((state) => state.holdOrResumeCart);
   const { t } = useI18n();
-  const [query, setQuery] = useState('');
-  const [active, setActive] = useState({ query: '', index: 0 });
   const [selectedMedicineId, setSelectedMedicineId] = useState<string | null>(
-    cart[0]?.medicine.id ?? null,
+    cart.at(-1)?.medicine.id ?? null,
   );
   const [tickedIds, setTickedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [checkoutError, setCheckoutError] = useState('');
@@ -163,46 +107,26 @@ export function PosWorkspace(): React.JSX.Element {
   const [printReceipt, setPrintReceipt] = useState<SaleReceipt | null>(null);
   const [paymentTotal, setPaymentTotal] = useState<string | null>(null);
   const [reprintOpen, setReprintOpen] = useState(false);
-  const [discountOpen, setDiscountOpen] = useState(false);
-  const [budgetOpen, setBudgetOpen] = useState(false);
   const [approval, setApproval] = useState<SupervisorApproval>(NO_APPROVAL);
   const [approvalRequired, setApprovalRequired] = useState(false);
-  const [regimen, setRegimen] = useState<Record<string, RegimenEntry>>({});
   const [customerQuery, setCustomerQuery] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSummary | null>(null);
   const [attempt, setAttempt] = useState<CheckoutAttempt | null>(() =>
     session ? loadCheckoutAttempt(session.user.terminalId, cart) : null,
   );
-  const searchInput = useRef<HTMLInputElement>(null);
-  const tickAll = useRef<HTMLInputElement>(null);
-  const resultList = useRef<HTMLDivElement>(null);
+  const entry = useRef<EntryBarHandle>(null);
+  const budgetInput = useRef<HTMLInputElement>(null);
+  const discountInput = useRef<HTMLInputElement>(null);
   const scanner = useRef(new WedgeScannerBuffer());
-  const debouncedQuery = useDebouncedValue(query.trim(), 180);
   const debouncedCustomerQuery = useDebouncedValue(customerQuery.trim(), 180);
-  const now = useClock(session?.user.branchTimezone);
-  const clock = clockLabel(now, session?.user.branchTimezone);
   const permissions = session?.user.permissions ?? [];
   const canDiscount = previewMode || permissions.includes(PERMISSIONS.SALE_DISCOUNT_BASIC);
   const canBudget = previewMode || permissions.includes(PERMISSIONS.SALES_BUDGET_REGIMEN_CALCULATE);
+  const token = session?.accessToken ?? '';
 
-  const search = useQuery({
-    queryKey: ['medicine-search', debouncedQuery],
-    queryFn: () => searchMedicines(session?.accessToken ?? '', debouncedQuery),
-    enabled: !previewMode && Boolean(session) && debouncedQuery.length > 0,
-    staleTime: 10_000,
-  });
-  const results = previewMode
-    ? previewMedicines.filter((medicine) =>
-        `${medicine.name} ${medicine.genericName ?? ''} ${medicine.barcode ?? ''}`
-          .toLowerCase()
-          .includes(debouncedQuery.toLowerCase()),
-      )
-    : (search.data ?? []);
-  const activeIndex =
-    active.query === debouncedQuery ? Math.min(active.index, Math.max(results.length - 1, 0)) : 0;
   const customers = useQuery({
     queryKey: ['customer-search', debouncedCustomerQuery],
-    queryFn: () => searchCustomers(session?.accessToken ?? '', debouncedCustomerQuery),
+    queryFn: () => searchCustomers(token, debouncedCustomerQuery),
     enabled:
       !previewMode &&
       Boolean(session) &&
@@ -211,33 +135,18 @@ export function PosWorkspace(): React.JSX.Element {
   });
 
   const plan = useMemo(() => buildDiscountPlan(cart, discounts), [cart, discounts]);
-  const planById = useMemo(
+  const lineAmounts = useMemo(
     () => new Map(plan.lines.map((line) => [line.medicineId, line])),
     [plan.lines],
   );
-  const tickedLines = cart.filter((line) => tickedIds.has(line.medicine.id));
-  const targetLines = tickedLines.length > 0 ? tickedLines : cart;
-  const targetIds = targetLines.map((line) => line.medicine.id);
+  const budget = useBudgetPlan(token, previewMode, cart, tickedIds);
   const unitCount = cart.reduce((sum, line) => sum + line.quantity, 0);
   const lockedCart = Boolean(attempt?.reservedTotal || attempt?.finalizedSaleId);
   const customerId = attempt?.customerId ?? selectedCustomer?.id;
   const customerName = attempt?.customerName ?? selectedCustomer?.name;
   const canUseCredit =
     Boolean(customerId) && (previewMode || permissions.includes(PERMISSIONS.CUSTOMER_CREDIT));
-  const modalOpen = Boolean(
-    paymentTotal || reprintOpen || printReceipt || discountOpen || budgetOpen,
-  );
-
-  useEffect(() => {
-    if (!tickAll.current) return;
-    tickAll.current.indeterminate = tickedLines.length > 0 && tickedLines.length < cart.length;
-  }, [cart.length, tickedLines.length]);
-
-  useEffect(() => {
-    resultList.current
-      ?.querySelector<HTMLElement>(`[data-result-index="${activeIndex}"]`)
-      ?.scrollIntoView?.({ block: 'nearest' });
-  }, [activeIndex]);
+  const modalOpen = Boolean(paymentTotal || reprintOpen || printReceipt);
 
   const updateAttempt = useCallback((next: CheckoutAttempt | null): void => {
     setAttempt(next);
@@ -278,40 +187,48 @@ export function PosWorkspace(): React.JSX.Element {
     return () => window.clearTimeout(recoveryTimer);
   }, [attempt?.finalizedSaleId, recoverReceipt]);
 
-  const addSearchResult = useCallback(
-    (medicine: MedicineSearchResult, quantity = 1): void => {
+  const addLine = useCallback(
+    (medicine: MedicineSearchResult, quantity: number, dosage: string | null): void => {
       if (lockedCart) {
         setCounterNotice('Release the reservation before changing this ticket');
         return;
       }
-      if (!isSellable(medicine)) {
-        setCheckoutError(`${medicine.name} has no sellable stock or price at this branch`);
-        return;
-      }
       setCheckoutError('');
-      addMedicine(medicine, quantity);
+      addMedicine(medicine, quantity, dosage);
       setSelectedMedicineId(medicine.id);
-      setCounterNotice(`${medicine.name} added`);
+      setCounterNotice(
+        `${medicine.name} × ${String(quantity)} added${dosage ? ` · ${dosage}` : ''}`,
+      );
     },
     [addMedicine, lockedCart],
   );
 
+  /** A scan adds one unit, as at any till; repeat scans count up and the grid edits the rest. */
   const addBarcode = useCallback(
     async (barcode: string): Promise<void> => {
       setCheckoutError('');
+      entry.current?.reset();
       try {
         const matches = previewMode
           ? previewMedicines.filter((medicine) => medicine.barcode === barcode)
-          : await searchMedicines(session?.accessToken ?? '', barcode);
+          : await searchMedicines(token, barcode);
         const exact = matches.find((medicine) => medicine.barcode === barcode);
         if (!exact) throw new Error(`Barcode ${barcode} has no exact medicine match`);
-        addSearchResult(exact);
-        setQuery('');
+        if (!isSellable(exact)) {
+          throw new Error(`${exact.name} has no sellable stock or price at this branch`);
+        }
+        if (lockedCart) {
+          setCounterNotice('Release the reservation before changing this ticket');
+          return;
+        }
+        addMedicine(exact, 1);
+        setSelectedMedicineId(exact.id);
+        setCounterNotice(`${exact.name} scanned`);
       } catch (cause) {
         setCheckoutError(cause instanceof Error ? cause.message : 'Barcode lookup failed');
       }
     },
-    [addSearchResult, session],
+    [addMedicine, lockedCart, token],
   );
 
   const resetSale = useCallback((): void => {
@@ -332,9 +249,10 @@ export function PosWorkspace(): React.JSX.Element {
     setTickedIds(new Set());
     setApproval(NO_APPROVAL);
     setApprovalRequired(false);
-    setQuery('');
-    searchInput.current?.focus();
-  }, [abandonDraft, attempt, clearCart, lockedCart, session]);
+    budget.clear();
+    entry.current?.reset();
+    entry.current?.focusSearch();
+  }, [abandonDraft, attempt, budget, clearCart, lockedCart, session]);
 
   const toggleHeldCart = useCallback((): void => {
     if (lockedCart) {
@@ -374,16 +292,6 @@ export function PosWorkspace(): React.JSX.Element {
     }
   }, [attempt, checkoutPending, session]);
 
-  const openDiscount = useCallback((): void => {
-    if (cart.length === 0 || lockedCart || !canDiscount) return;
-    setDiscountOpen(true);
-  }, [canDiscount, cart.length, lockedCart]);
-
-  const openBudget = useCallback((): void => {
-    if (cart.length === 0 || lockedCart || !canBudget) return;
-    setBudgetOpen(true);
-  }, [canBudget, cart.length, lockedCart]);
-
   const beginCheckout = useCallback(async (): Promise<void> => {
     if (!session || cart.length === 0 || checkoutPending) return;
     setCheckoutPending(true);
@@ -395,7 +303,7 @@ export function PosWorkspace(): React.JSX.Element {
         return;
       }
       if (plan.errors.length > 0) {
-        setDiscountOpen(true);
+        discountInput.current?.focus();
         throw new Error(plan.errors[0]);
       }
       const reason = discounts.reason.trim();
@@ -430,6 +338,7 @@ export function PosWorkspace(): React.JSX.Element {
           cart.map((line) => ({
             medicineId: line.medicine.id,
             quantity: line.quantity.toString(),
+            ...(line.dosage ? { dosageInstruction: line.dosage } : {}),
           })),
         );
         current = { ...current, draftId: draft.id };
@@ -468,7 +377,6 @@ export function PosWorkspace(): React.JSX.Element {
             /supervisor/i.test(cause.message)
           ) {
             setApprovalRequired(true);
-            setDiscountOpen(true);
           }
           throw cause;
         }
@@ -549,9 +457,49 @@ export function PosWorkspace(): React.JSX.Element {
     [attempt, clearCart, recoverReceipt, session, updateAttempt],
   );
 
-  useEffect(() => {
-    searchInput.current?.focus();
-  }, []);
+  const gridActions = useMemo<TicketGridActions>(
+    () => ({
+      onToggle: (medicineId) =>
+        setTickedIds((current) => {
+          const next = new Set(current);
+          if (next.has(medicineId)) next.delete(medicineId);
+          else next.add(medicineId);
+          return next;
+        }),
+      onToggleAll: (ticked) =>
+        setTickedIds(
+          ticked
+            ? new Set(usePharmacyStore.getState().cart.map((line) => line.medicine.id))
+            : new Set(),
+        ),
+      onSelect: setSelectedMedicineId,
+      onSetQuantity: setQuantity,
+      onChangeQuantity: changeQuantity,
+      onSetDosage: setDosage,
+      onSetDiscount: (medicineIds: readonly string[], spec: DiscountSpec | null) => {
+        const state = usePharmacyStore.getState().discounts;
+        const lines = { ...state.lines };
+        for (const medicineId of medicineIds) {
+          if (spec) lines[medicineId] = spec;
+          else delete lines[medicineId];
+        }
+        setDiscounts({ ...state, lines });
+      },
+      onRemove: (medicineIds) => {
+        removeMedicines(medicineIds);
+        setTickedIds((current) => {
+          const next = new Set(current);
+          for (const medicineId of medicineIds) next.delete(medicineId);
+          return next;
+        });
+        setCounterNotice(
+          `${String(medicineIds.length)} line${medicineIds.length === 1 ? '' : 's'} removed`,
+        );
+      },
+      onNotice: setCounterNotice,
+    }),
+    [changeQuantity, removeMedicines, setDiscounts, setDosage, setQuantity],
+  );
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent): void => {
@@ -563,12 +511,13 @@ export function PosWorkspace(): React.JSX.Element {
         void addBarcode(barcode);
         return;
       }
+      const typing = event.target instanceof HTMLInputElement && event.target.type !== 'checkbox';
       if (event.key === 'F2') {
         event.preventDefault();
         resetSale();
       } else if (event.key === 'F3') {
         event.preventDefault();
-        openBudget();
+        if (canBudget) budgetInput.current?.focus();
       } else if (event.key === 'F4') {
         event.preventDefault();
         toggleHeldCart();
@@ -580,21 +529,13 @@ export function PosWorkspace(): React.JSX.Element {
         void beginCheckout();
       } else if (event.key === 'F9') {
         event.preventDefault();
-        openDiscount();
-      } else if (
-        event.key === 'Delete' &&
-        selectedMedicineId &&
-        !lockedCart &&
-        !(event.target instanceof HTMLInputElement && event.target.type !== 'checkbox')
-      ) {
+        if (canDiscount) discountInput.current?.focus();
+      } else if (event.key === 'Delete' && selectedMedicineId && !lockedCart && !typing) {
         event.preventDefault();
         removeMedicine(selectedMedicineId);
-      } else if (event.key === 'Escape') {
-        setQuery('');
-        searchInput.current?.focus();
-      } else if (event.key === '/' && !(event.target instanceof HTMLInputElement)) {
+      } else if ((event.key === 'Escape' || event.key === '/') && !typing) {
         event.preventDefault();
-        searchInput.current?.focus();
+        entry.current?.focusSearch();
       }
     };
     window.addEventListener('keydown', keyboard, true);
@@ -602,53 +543,15 @@ export function PosWorkspace(): React.JSX.Element {
   }, [
     addBarcode,
     beginCheckout,
+    canBudget,
+    canDiscount,
     lockedCart,
     modalOpen,
-    openBudget,
-    openDiscount,
     removeMedicine,
     resetSale,
     selectedMedicineId,
     toggleHeldCart,
   ]);
-
-  const searchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (results.length === 0) return;
-      const step = event.key === 'ArrowDown' ? 1 : -1;
-      setActive({
-        query: debouncedQuery,
-        index: (activeIndex + step + results.length) % results.length,
-      });
-      return;
-    }
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    const multiplier = /^\*(\d{1,4})$/.exec(query.trim());
-    if (multiplier) {
-      if (selectedMedicineId && !lockedCart) setQuantity(selectedMedicineId, Number(multiplier[1]));
-      setQuery('');
-      return;
-    }
-    if (query.trim() !== debouncedQuery || search.isFetching) {
-      setCounterNotice('Still searching — press Enter again when results appear');
-      return;
-    }
-    const chosen = results[activeIndex];
-    if (chosen) {
-      addSearchResult(chosen);
-      setQuery('');
-    }
-  };
-
-  const toggleTicked = (medicineId: string): void =>
-    setTickedIds((current) => {
-      const next = new Set(current);
-      if (next.has(medicineId)) next.delete(medicineId);
-      else next.add(medicineId);
-      return next;
-    });
 
   const ticketState = attempt?.finalizedSaleId
     ? { tone: 'done', label: 'Finalized', detail: 'Receipt recovery' }
@@ -664,8 +567,6 @@ export function PosWorkspace(): React.JSX.Element {
         ? { tone: 'draft', label: 'Draft created', detail: 'Not reserved' }
         : { tone: 'new', label: 'New sale', detail: 'Stock not reserved' };
   const grandTotal = attempt?.reservedTotal ?? plan.total;
-  const hasLineDiscount = plan.lineDiscountTotal !== '0.00';
-  const hasInvoiceDiscount = plan.invoiceDiscount !== '0.00';
   const showMatches = !selectedCustomer && customerQuery.trim() !== '' && !lockedCart;
 
   return (
@@ -674,6 +575,7 @@ export function PosWorkspace(): React.JSX.Element {
         <ReceiptDialog
           key={printReceipt.sale.id}
           receipt={printReceipt}
+          token={token}
           onClose={() => setPrintReceipt(null)}
         />
       ) : null}
@@ -697,219 +599,68 @@ export function PosWorkspace(): React.JSX.Element {
           }}
         />
       ) : null}
-      {discountOpen ? (
-        <DiscountDialog
-          cart={cart}
-          discounts={discounts}
-          targetIds={tickedLines.map((line) => line.medicine.id)}
-          approval={approval}
-          approvalRequired={approvalRequired}
-          onApprovalChange={setApproval}
-          onClose={() => setDiscountOpen(false)}
-          onApply={(next) => {
-            setDiscounts(next);
-            setDiscountOpen(false);
-            setCheckoutError('');
-            const nextPlan = buildDiscountPlan(cart, next);
-            setCounterNotice(
-              nextPlan.hasDiscount
-                ? `Discount set: ${formatPkrMoney(nextPlan.discountTotal)} off (${nextPlan.discountPercent}%)`
-                : 'Discounts removed',
-            );
-          }}
-        />
-      ) : null}
-      {budgetOpen ? (
-        <BudgetPlanDialog
-          token={session?.accessToken ?? ''}
-          previewMode={previewMode}
-          planLines={targetLines}
-          otherLines={cart.filter((line) => !targetIds.includes(line.medicine.id))}
-          regimen={regimen}
-          onRegimenChange={(medicineId, entry) =>
-            setRegimen((current) => ({ ...current, [medicineId]: entry }))
-          }
-          onClose={() => setBudgetOpen(false)}
-          onApply={({ quantities, completeDays }) => {
-            applyQuantities(quantities);
-            setBudgetOpen(false);
-            setCounterNotice(
-              `Budget plan set: ${completeDays} complete day${completeDays === 1 ? '' : 's'} for ${Object.keys(quantities).length} medicine${Object.keys(quantities).length === 1 ? '' : 's'}`,
-            );
-          }}
-        />
-      ) : null}
       <main className="pos-layout" id="pos">
-        <section className="catalog-pane">
+        <section className="counter-main">
           <div className="counter-heading">
-            <div>
-              <p className="eyebrow">{session?.user.terminalName ?? 'Training counter'}</p>
-              <h1>{t('pos.findMedicine')}</h1>
-            </div>
-            <span className="clock-label">
-              {clock.date}
-              <br />
-              <strong>{clock.time}</strong>
-            </span>
+            <p className="eyebrow">{session?.user.terminalName ?? 'Training counter'}</p>
+            <h1>{t('pos.findMedicine')}</h1>
+            {counterNotice ? (
+              <p className="counter-notice" role="status">
+                {counterNotice}
+              </p>
+            ) : (
+              <span className="counter-notice-placeholder" />
+            )}
+            <CounterClock timeZone={session?.user.branchTimezone} />
           </div>
-          <label className="search-box">
-            <span aria-hidden="true">⌕</span>
-            <input
-              ref={searchInput}
-              placeholder={t('pos.searchPlaceholder')}
-              value={query}
-              aria-controls="medicine-results"
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActive({ query: '', index: 0 });
-              }}
-              onKeyDown={searchKeyDown}
-            />
-            <kbd>/</kbd>
-          </label>
-          <div className="search-caption">
-            <span>{t('pos.scanHint')} · ↑ ↓ to choose, Enter to add</span>
-            <span>
-              {search.isFetching ? 'Searching…' : debouncedQuery ? `${results.length} matches` : ''}
-            </span>
-          </div>
-          {search.error ? (
-            <p className="inline-error" role="alert">
-              Search is unavailable. Check the local API connection.
-            </p>
-          ) : null}
-          {counterNotice ? (
-            <p className="counter-notice" role="status">
-              {counterNotice}
-            </p>
-          ) : null}
-          {debouncedQuery && query.trim() ? (
-            <div
-              className="medicine-list"
-              id="medicine-results"
-              ref={resultList}
-              aria-live="polite"
-            >
-              {results.length > 0 ? (
-                <div className="medicine-list-head" aria-hidden="true">
-                  <span>#</span>
-                  <span>Medicine</span>
-                  <span>Shelf</span>
-                  <span>FEFO batch</span>
-                  <span>Price</span>
-                </div>
-              ) : null}
-              {results.map((medicine, index) => {
-                const expiringSoon = medicine.daysToExpiry !== null && medicine.daysToExpiry <= 90;
-                const sellable = isSellable(medicine);
-                const classes = ['medicine-row'];
-                if (index === activeIndex) classes.push('active');
-                if (!sellable) classes.push('unavailable');
-                return (
-                  <button
-                    type="button"
-                    className={classes.join(' ')}
-                    key={medicine.id}
-                    data-result-index={index}
-                    onClick={() => addSearchResult(medicine)}
-                    onMouseEnter={() => setActive({ query: debouncedQuery, index })}
-                  >
-                    <span className="result-index">{String(index + 1).padStart(2, '0')}</span>
-                    <span className="medicine-identity">
-                      <strong>
-                        {medicine.name} <em>{medicine.strength}</em>
-                      </strong>
-                      <small>
-                        {[medicine.genericName, medicine.manufacturer].filter(Boolean).join(' · ')}
-                      </small>
-                    </span>
-                    <span className="shelf-code">
-                      <small>Shelf</small>
-                      <strong>{medicine.shelf ?? 'Not set'}</strong>
-                    </span>
-                    <span className={expiringSoon ? 'batch-status warning' : 'batch-status'}>
-                      <small>{sellable ? 'In stock' : 'Unavailable'}</small>
-                      <strong>{wholeUnits(medicine.availableQuantity)} units</strong>
-                      <em>
-                        {medicine.nearestExpiry ? `Exp ${medicine.nearestExpiry}` : 'No stock'}
-                      </em>
-                    </span>
-                    <span className="result-price">
-                      {medicine.salePrice ? formatPkrMoney(medicine.salePrice) : 'No price'}
-                      <small>{sellable ? 'Enter to add' : 'Cannot sell'}</small>
-                    </span>
-                  </button>
-                );
-              })}
-              {!search.isFetching && results.length === 0 ? (
-                <p className="empty-results">
-                  No medicine matches “{debouncedQuery}”. Try the generic name or company.
-                </p>
-              ) : null}
-            </div>
-          ) : (
-            <div className="counter-idle">
-              {heldCart ? (
-                <div className="held-card">
-                  <div>
-                    <p className="eyebrow">Held ticket</p>
-                    <strong>
-                      {heldCart.lines.length} line{heldCart.lines.length === 1 ? '' : 's'} · held{' '}
-                      {new Date(heldCart.heldAt).toLocaleTimeString('en-PK', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </strong>
-                    <small>
-                      {heldCart.lines
-                        .slice(0, 3)
-                        .map((line) => line.medicine.name)
-                        .join(', ')}
-                      {heldCart.lines.length > 3 ? '…' : ''}
-                    </small>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={cart.length > 0}
-                    onClick={toggleHeldCart}
-                  >
-                    Resume <kbd>F4</kbd>
-                  </button>
-                </div>
-              ) : null}
-              <div className="idle-grid">
-                <div>
-                  <b>1</b>
-                  <strong>Scan or search</strong>
-                  <span>Brand, generic, company or barcode. ↑ ↓ then Enter adds.</span>
-                </div>
-                <div>
-                  <b>2</b>
-                  <strong>Tick lines</strong>
-                  <span>Tick medicines on the ticket to plan a budget or discount them.</span>
-                </div>
-                <div>
-                  <b>3</b>
-                  <strong>Budget plan · F3</strong>
-                  <span>
-                    Customer has a fixed amount? Get complete days for the ticked medicines.
-                  </span>
-                </div>
-                <div>
-                  <b>4</b>
-                  <strong>Pay · F8</strong>
-                  <span>Stock is reserved only when payment starts.</span>
-                </div>
+          <EntryBar
+            handleRef={entry}
+            token={token}
+            previewMode={previewMode}
+            locked={lockedCart}
+            onAdd={addLine}
+            onNotice={setCounterNotice}
+            onSetActiveQuantity={(quantity) => {
+              if (selectedMedicineId && !lockedCart) setQuantity(selectedMedicineId, quantity);
+            }}
+          />
+          <TicketGrid
+            cart={cart}
+            lineAmounts={lineAmounts}
+            lineDiscounts={discounts.lines}
+            tickedIds={tickedIds}
+            selectedId={selectedMedicineId}
+            locked={lockedCart}
+            budgetPreview={budget.preview}
+            actions={gridActions}
+          />
+          {heldCart && cart.length === 0 ? (
+            <div className="held-card">
+              <div>
+                <p className="eyebrow">Held ticket</p>
+                <strong>
+                  {heldCart.lines.length} line{heldCart.lines.length === 1 ? '' : 's'} ·{' '}
+                  {heldCart.lines
+                    .slice(0, 3)
+                    .map((line) => line.medicine.name)
+                    .join(', ')}
+                  {heldCart.lines.length > 3 ? '…' : ''}
+                </strong>
               </div>
+              <button type="button" className="secondary-button" onClick={toggleHeldCart}>
+                Resume <kbd>F4</kbd>
+              </button>
             </div>
-          )}
+          ) : null}
           <footer className="shortcut-rail">
+            <span>
+              <kbd>/</kbd> Search
+            </span>
             <span>
               <kbd>F2</kbd> {t('pos.newSale')}
             </span>
             <span>
-              <kbd>F3</kbd> Budget plan
+              <kbd>F3</kbd> Budget
             </span>
             <span>
               <kbd>F4</kbd> {t('pos.holdCart')} {heldCart ? '•' : ''}
@@ -950,206 +701,94 @@ export function PosWorkspace(): React.JSX.Element {
             <span>{ticketState.detail}</span>
           </div>
 
-          <div className="ticket-customer">
-            {customerId ? (
-              <div className="customer-chip">
-                <span>Customer</span>
-                <strong>{customerName}</strong>
-                <button
-                  type="button"
-                  aria-label="Remove customer"
-                  disabled={lockedCart}
-                  onClick={() => {
-                    setSelectedCustomer(null);
-                    if (attempt) updateAttempt(withCustomer(attempt, null));
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ) : (
-              <label className="customer-search">
-                <span className="sr-only">Customer account</span>
-                <input
-                  value={customerQuery}
-                  placeholder="Attach customer — phone or name"
-                  disabled={lockedCart}
-                  onChange={(event) => setCustomerQuery(event.target.value)}
-                />
-              </label>
-            )}
-            {showMatches ? (
-              <div className="customer-matches">
-                {(customers.data ?? []).slice(0, 4).map((customer) => (
+          <div className="side-scroll">
+            <div className="ticket-customer">
+              {customerId ? (
+                <div className="customer-chip">
+                  <span>Customer</span>
+                  <strong>{customerName}</strong>
                   <button
                     type="button"
-                    key={customer.id}
+                    aria-label="Remove customer"
+                    disabled={lockedCart}
                     onClick={() => {
-                      setSelectedCustomer(customer);
-                      setCustomerQuery('');
-                      if (attempt) {
-                        updateAttempt(
-                          withCustomer(attempt, { id: customer.id, name: customer.name }),
-                        );
-                      }
+                      setSelectedCustomer(null);
+                      if (attempt) updateAttempt(withCustomer(attempt, null));
                     }}
                   >
-                    <strong>{customer.name}</strong>
-                    <span>
-                      {customer.phone ?? 'No phone'} · credit{' '}
-                      {formatPkrMoney(customer.availableCredit)}
-                    </span>
+                    ×
                   </button>
-                ))}
-                {customers.isFetched && (customers.data ?? []).length === 0 ? (
-                  <p>No customer found</p>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-
-          {cart.length > 0 ? (
-            <div className="ticket-toolbar">
-              <label className="tick-all">
-                <input
-                  ref={tickAll}
-                  type="checkbox"
-                  aria-label="Tick all lines"
-                  checked={tickedLines.length > 0 && tickedLines.length === cart.length}
-                  disabled={lockedCart}
-                  onChange={(event) =>
-                    setTickedIds(
-                      event.target.checked
-                        ? new Set(cart.map((line) => line.medicine.id))
-                        : new Set(),
-                    )
-                  }
-                />
-                <span>
-                  {tickedLines.length > 0 ? `${tickedLines.length} ticked` : 'Tick lines'}
-                </span>
-              </label>
-              <div className="toolbar-actions">
-                <button
-                  type="button"
-                  disabled={lockedCart || !canBudget}
-                  title={canBudget ? 'Budget plan (F3)' : 'You do not have budget plan access'}
-                  onClick={openBudget}
-                >
-                  Budget plan
-                  <small>{tickedLines.length > 0 ? tickedLines.length : 'all'}</small>
-                </button>
-                <button
-                  type="button"
-                  disabled={lockedCart || !canDiscount}
-                  title={canDiscount ? 'Discount (F9)' : 'You do not have discount access'}
-                  onClick={openDiscount}
-                >
-                  Discount
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  disabled={lockedCart || tickedLines.length === 0}
-                  onClick={() => {
-                    removeMedicines(tickedLines.map((line) => line.medicine.id));
-                    setCounterNotice(
-                      `${tickedLines.length} line${tickedLines.length === 1 ? '' : 's'} removed`,
-                    );
-                    setTickedIds(new Set());
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="cart-lines">
-            {cart.length === 0 ? (
-              <div className="empty-cart">
-                <span>+</span>
-                <h3>No items yet</h3>
-                <p>
-                  Select a medicine or scan its barcode. Stock is reserved only when payment starts.
-                </p>
-              </div>
-            ) : (
-              cart.map((line) => {
-                const amounts = planById.get(line.medicine.id);
-                const lineDiscount = discounts.lines[line.medicine.id];
-                const discounted = amounts !== undefined && amounts.discount !== '0.00';
-                const overStock = exceedsStock(line);
-                const classes = ['cart-line'];
-                if (selectedMedicineId === line.medicine.id) classes.push('selected');
-                if (tickedIds.has(line.medicine.id)) classes.push('ticked');
-                return (
-                  <div
-                    className={classes.join(' ')}
-                    key={line.medicine.id}
-                    onFocusCapture={() => setSelectedMedicineId(line.medicine.id)}
-                  >
-                    <label className="line-identity">
-                      <input
-                        type="checkbox"
-                        aria-label={`Tick ${line.medicine.name}`}
-                        checked={tickedIds.has(line.medicine.id)}
-                        disabled={lockedCart}
-                        onChange={() => toggleTicked(line.medicine.id)}
-                      />
+                </div>
+              ) : (
+                <label className="customer-search">
+                  <span className="sr-only">Customer account</span>
+                  <input
+                    value={customerQuery}
+                    placeholder="Attach customer — phone or name"
+                    disabled={lockedCart}
+                    onChange={(event) => setCustomerQuery(event.target.value)}
+                  />
+                </label>
+              )}
+              {showMatches ? (
+                <div className="customer-matches">
+                  {(customers.data ?? []).slice(0, 4).map((customer) => (
+                    <button
+                      type="button"
+                      key={customer.id}
+                      onClick={() => {
+                        setSelectedCustomer(customer);
+                        setCustomerQuery('');
+                        if (attempt) {
+                          updateAttempt(
+                            withCustomer(attempt, { id: customer.id, name: customer.name }),
+                          );
+                        }
+                      }}
+                    >
+                      <strong>{customer.name}</strong>
                       <span>
-                        <strong>{line.medicine.name}</strong>
-                        <small>
-                          {line.medicine.strength ? `${line.medicine.strength} · ` : ''}
-                          {formatPkrMoney(line.medicine.salePrice ?? '0.00')} / unit
-                        </small>
-                        {lineDiscount || overStock ? (
-                          <span className="line-tags">
-                            {lineDiscount ? (
-                              <em className="tag discount">
-                                −{describeDiscountSpec(lineDiscount)}
-                              </em>
-                            ) : null}
-                            {overStock ? (
-                              <em className="tag warning">
-                                Only {wholeUnits(line.medicine.availableQuantity)} in stock
-                              </em>
-                            ) : null}
-                          </span>
-                        ) : null}
+                        {customer.phone ?? 'No phone'} · credit{' '}
+                        {formatPkrMoney(customer.availableCredit)}
                       </span>
-                    </label>
-                    <div className="quantity-control">
-                      <button
-                        type="button"
-                        aria-label={`Remove one ${line.medicine.name}`}
-                        disabled={lockedCart}
-                        onClick={() => changeQuantity(line.medicine.id, -1)}
-                      >
-                        −
-                      </button>
-                      <QuantityField
-                        line={line}
-                        disabled={lockedCart}
-                        onCommit={(quantity) => setQuantity(line.medicine.id, quantity)}
-                      />
-                      <button
-                        type="button"
-                        aria-label={`Add one ${line.medicine.name}`}
-                        disabled={lockedCart}
-                        onClick={() => changeQuantity(line.medicine.id, 1)}
-                      >
-                        +
-                      </button>
-                    </div>
-                    <div className="line-amount">
-                      {discounted ? <s>{formatPkrMoney(amounts.gross)}</s> : null}
-                      <b>{formatPkrMoney(amounts?.net ?? '0.00')}</b>
-                    </div>
-                  </div>
-                );
-              })
-            )}
+                    </button>
+                  ))}
+                  {customers.isFetched && (customers.data ?? []).length === 0 ? (
+                    <p>No customer found</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {canBudget && cart.length > 0 ? (
+              <BudgetBox
+                plan={budget}
+                locked={lockedCart}
+                inputRef={budgetInput}
+                onApply={(quantities, days) => {
+                  applyQuantities(quantities);
+                  const count = Object.keys(quantities).length;
+                  setCounterNotice(
+                    `Budget plan set: ${String(days)} complete day${days === 1 ? '' : 's'} for ${String(count)} medicine${count === 1 ? '' : 's'}`,
+                  );
+                }}
+              />
+            ) : null}
+            {canDiscount && cart.length > 0 ? (
+              <DiscountBox
+                plan={plan}
+                discounts={discounts}
+                locked={lockedCart}
+                inputRef={discountInput}
+                approval={approval}
+                approvalRequired={approvalRequired}
+                onApprovalChange={setApproval}
+                onChange={(next) => {
+                  setDiscounts(next);
+                  setCheckoutError('');
+                }}
+              />
+            ) : null}
           </div>
 
           <div className="cart-summary">
@@ -1157,36 +796,16 @@ export function PosWorkspace(): React.JSX.Element {
               <span>Subtotal</span>
               <strong>{formatPkrMoney(plan.gross)}</strong>
             </div>
-            {hasLineDiscount ? (
-              <div className="discount-row">
-                <span>Line discounts</span>
-                <strong>−{formatPkrMoney(plan.lineDiscountTotal)}</strong>
-              </div>
-            ) : null}
-            {hasInvoiceDiscount ? (
-              <div className="discount-row">
-                <span>
-                  Invoice discount
-                  {discounts.invoice ? ` (${describeDiscountSpec(discounts.invoice)})` : ''}
-                </span>
-                <strong>−{formatPkrMoney(plan.invoiceDiscount)}</strong>
-              </div>
-            ) : null}
             {plan.hasDiscount ? (
-              <button
-                type="button"
-                className="discount-reason"
-                disabled={lockedCart}
-                onClick={openDiscount}
-              >
-                {plan.discountPercent}% off · {discounts.reason || 'reason needed'} · Edit
-              </button>
+              <div className="discount-row">
+                <span>Discount ({plan.discountPercent}%)</span>
+                <strong>−{formatPkrMoney(plan.discountTotal)}</strong>
+              </div>
             ) : null}
             <div className="grand-total">
               <span>{attempt?.reservedTotal ? 'Reserved total' : 'Total'}</span>
               <strong>{formatPkrMoney(grandTotal)}</strong>
             </div>
-            <p>Final price and FEFO batches are confirmed by the server.</p>
           </div>
           <div className="cart-actions">
             {checkoutError ? (

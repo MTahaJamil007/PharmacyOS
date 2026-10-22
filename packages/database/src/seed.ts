@@ -10,6 +10,7 @@ const roles: ReadonlyArray<readonly [string, string]> = [
   ['MANAGER', 'Manager'],
   ['OWNER', 'Owner'],
   ['SYSTEM_ADMIN', 'System administrator'],
+  ['SUPER_ADMIN', 'Super admin (software owner)'],
 ];
 
 const permissions = [
@@ -53,6 +54,7 @@ const permissions = [
   'analytics.owner.read',
   'ai.owner.use',
   'ai.audit.read',
+  'platform.super_admin',
 ] as const;
 
 const rolePermissions: Readonly<Record<string, readonly string[]>> = {
@@ -129,10 +131,13 @@ const rolePermissions: Readonly<Record<string, readonly string[]>> = {
       !permission.startsWith('settings.') &&
       permission !== 'backup.restore' &&
       permission !== 'ai.owner.use' &&
-      permission !== 'ai.audit.read',
+      permission !== 'ai.audit.read' &&
+      permission !== 'platform.super_admin',
   ),
-  OWNER: permissions,
+  // The shop owner controls the shop; only the software owner holds the platform permission.
+  OWNER: permissions.filter((permission) => permission !== 'platform.super_admin'),
   SYSTEM_ADMIN: ['fbr.retry', 'settings.manage_users', 'settings.manage_system', 'backup.restore'],
+  SUPER_ADMIN: permissions,
 };
 
 async function seed(): Promise<void> {

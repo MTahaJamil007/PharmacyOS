@@ -275,3 +275,125 @@ The new integration test, "cancels a reserved draft once and releases its stock 
 ticket" in `tests/integration/pos-idempotency.integration.test.ts`, has not run because it needs
 Docker. The discount and cancel endpoints were exercised only through mocked e2e routes, not
 against a live API. Run `npm run verify` with Docker available before merging.
+
+## 7. Post-gate change record — 2026-10-22: single-screen counter, dosage timing, test catalog
+
+### What changed
+
+- **One screen for selling.** The budget-plan and discount popups are gone. The counter is an
+  entry bar (medicine → quantity → timing → Enter), an invoice grid that edits timing, quantity, and
+  line discount inline, and a side panel holding the customer, the budget plan (`F3`), the invoice
+  discount (`F9`), and the totals. Ticking lines opens a bulk bar to set timing or discount at once.
+  The payment, receipt, and reprint dialogs are unchanged.
+- **No default quantity.** Choosing a search result stages it and moves focus to an empty quantity
+  box; Enter on an empty box asks for a quantity instead of adding 1. The box takes units (`20`) or
+  days of the chosen timing (`5d`). A barcode scan still adds one unit per scan, as at any till.
+- **Dosage timing (optional).** Typed shorthand, with preset chips for the mouse: `101` = 1+0+1,
+  `h` = ½, `q` = ¼, `t` = ¾, and a trailing `a`/`b` for after/before meal; written forms such as
+  `1/2+0+1/2` are also accepted (`packages/shared/src/dosage.ts`). It is stored in canonical text on
+  `sale_draft_items` and `sale_items` (migration `016_phase6_dosage_instructions.sql`), validated by
+  `createDraftSchema`, and printed on the receipt in English and Urdu, and in ASCII on the thermal
+  printer. It never changes quantity, price, stock, or tax. The budget plan reads each line's daily
+  units from its timing, falling back to 1 a day.
+- **Lag.** Search state lives in the entry bar and the clock in its own component, so typing and
+  the clock no longer re-render the ticket; grid rows are memoized. Search debounce dropped from
+  180 ms to 120 ms and keeps the previous results while the next request runs. Catalog search
+  ranks name prefixes, then all-words matches across name, generic, strength, and company, ahead of
+  fuzzy trigram matches, and escapes LIKE wildcards.
+- **Test catalog.** `scripts/generate-test-catalog.mjs` writes
+  `docs/examples/medicine-catalog-test-large.csv`: 3,178 products from 178 molecules in 21 dosage
+  forms, with EAN-13 barcodes in the 896 prefix. Prices are plausible test values, not DRAP prices.
+  The loader now links each SKU to the manufacturer named in the file.
+
+### Evidence
+
+| Command                                                                             | Exit | Notes                                                    |
+| ----------------------------------------------------------------------------------- | ---- | -------------------------------------------------------- |
+| `npm run db:migrate` (local cluster)                                                | 0    | Applied `016_phase6_dosage_instructions.sql`             |
+| `load:medicines … medicine-catalog-test-large.csv --with-demo-stock --quantity 200` | 0    | 3,178 created, 3,178 manufacturers linked, 3,178 batches |
+| `npm run format:check`                                                              | 0    |                                                          |
+| `npm run lint`                                                                      | 0    |                                                          |
+| `npm run typecheck`                                                                 | 0    |                                                          |
+| `npm run test:unit`                                                                 | 0    | Adds dosage, quantity/discount shorthand, printer tests  |
+| `npm run test:e2e`                                                                  | 0    | 15 passed; counter journeys rewritten for the new flow   |
+| `npm run build`                                                                     | 0    |                                                          |
+| `npm run test:integration`                                                          | 1    | Docker not running: no container runtime                 |
+
+Catalog search on the local cluster with that data took 4–17 ms per query (12 queries, second
+run). A direct `PosService.createDraft` call against the local cluster stored `h0h a` as
+`½+0+½ after meal` and the schema rejected `12`.
+
+### Unverified
+
+Finalizing a sale with a timing and printing its receipt was exercised only through unit tests and
+mocked e2e routes, not against the live API. The new integration test "stores the patient timing in
+canonical form and rejects an unreadable one" needs Docker and has not run. The API reads
+`@pharmacy/shared` from its build output, so `npm run build:packages` (part of `npm run dev`) must
+run before the API accepts timings.
+
+## 8. Post-gate change record — 2026-10-22: super admin, invoice service, printing, FBR switch
+
+### What changed
+
+- **Super admin (software owner).** Migration `017_phase6_platform_owner_and_invoicing.sql` adds the
+  `SUPER_ADMIN` role and the `platform.super_admin` permission, which no other role holds (the seed
+  excludes it from OWNER and MANAGER too). `/platform` (API and screen) manages every shop's profile and
+  FBR registration, creates shops (with policies and an admin terminal), activates or deactivates shops,
+  approves live FBR sending, creates and edits users in any shop with any role, resets passwords,
+  unlocks accounts, and reads roles, the audit log, and the server's FBR configuration. A shop owner
+  cannot see, edit, reset, or grant the super admin. The account is created on the server only:
+  `SUPER_ADMIN_USERNAME=… SUPER_ADMIN_PASSWORD=… npm run bootstrap:super-admin --workspace @pharmacy/api`
+  (it receives the role in every shop).
+- **Shop profile.** Name, address, phone, email, drug sale license, NTN/CNIC, STRN, FBR POS ID,
+  registered name, province: set by the super admin, printed on invoices, read only for the owner.
+  Editing the fiscal identity through `/admin/fiscal-settings` now requires the platform permission.
+- **FBR switch (shop owner).** `PATCH /admin/shop/fbr-invoicing`, refused until the registration is
+  complete. A sale is fiscalized only when the server has an FBR mode and the switch is on. The receipt
+  prints the FBR block (POS ID, FBR number, QR of the FBR number) only while the switch is on; with it
+  off no FBR block or QR is printed.
+- **Live FBR sending (ADR 0004).** The worker now submits through the existing `FbrHttpGateway` only for
+  shops whose live sending the super admin approved (with a reason, audited). It marks the invoice
+  `SUBMITTING` before the request and turns a leftover `SUBMITTING` into `FAILED_NEEDS_REVIEW` instead of
+  sending again, records every attempt, and stores FBR's number as the QR payload. Unapproved shops keep
+  the previous blocked behaviour and error code.
+- **Invoice service and layout.** One invoice model renders both the HTML invoice and the ESC/POS
+  bytes, so the preview is what prints: shop profile, lines with batch/expiry, discounts, dosage timing
+  (English and Urdu on HTML, ASCII on thermal), totals, payments, FBR block, return QR, footer. The owner
+  edits the layout under Admin → invoice layout (paper 58 mm / 80 mm / A4, text size, title, notes,
+  14 show/hide switches, copies) with a live sample preview and test print. Stored layouts are read
+  leniently so a damaged layout still prints with defaults.
+- **Universal printing.** Per-counter printer profile: installed printer through the print dialog (any
+  Windows-driver printer, A4 or thermal), raw ESC/POS over WebUSB, Web Serial (COM and paired Bluetooth
+  serial), or a LAN printer's port 9100 relayed by `POST /printing/network`, which only reaches private
+  IPv4 addresses on ports 9100–9109. Optional auto-print and cash drawer. The receipt waits up to about
+  20 seconds for the FBR number before printing "pending".
+- **Shorter passwords.** Minimum 6 characters for staff, bootstrap, and seed passwords
+  (`PASSWORD_MIN_LENGTH`); repeated failures still lock the account.
+
+### Evidence
+
+| Command                                                         | Exit | Notes                                                       |
+| --------------------------------------------------------------- | ---- | ----------------------------------------------------------- |
+| `npm run db:migrate` (local cluster)                            | 0    | Applied `017_phase6_platform_owner_and_invoicing.sql`       |
+| Throwaway database on the local cluster (created, then dropped) | 0    | 25 of 25 end-to-end checks passed; see below                |
+| `npm run format:check`                                          | 0    |                                                             |
+| `npm run lint`                                                  | 0    |                                                             |
+| `npm run typecheck`                                             | 0    |                                                             |
+| `npm run test:unit`                                             | 0    | Adds invoice layout, invoice model, ESC/POS, printer, relay |
+| `npm run test:e2e`                                              | 0    | 18 passed, including three new platform/invoice journeys    |
+| `npm run build`                                                 | 0    |                                                             |
+| `npm run test:integration`                                      | 1    | Docker not running: no container runtime                    |
+
+The throwaway-database run used the real services, migrations, worker, and a stand-in FBR gateway (no
+request to FBR): FBR switch refused before registration, owner cannot see or touch the super admin,
+receipt carries shop profile and dosage, unapproved shops are never sent, an approved shop gets the
+FBR number and QR on the receipt and is never sent twice, switching FBR off hides the block and stops
+fiscalization, the saved layout reaches the receipt, and every control is audited. The same flow is
+kept as `tests/integration/phase6-platform-invoicing.integration.test.ts`.
+
+### Unverified
+
+No request was made to the real FBR API, and no physical printer was driven: USB, serial, and
+network printing were verified against test doubles and a local TCP socket. WebUSB cannot claim a
+printer whose Windows driver holds it; such printers print through the print dialog. The new
+integration test needs Docker and has not run in this session.

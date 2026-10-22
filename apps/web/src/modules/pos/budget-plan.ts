@@ -1,7 +1,9 @@
 import {
   calculateBudgetRegimen,
   decimalToScaledInteger,
+  dosageUnitsPerDay,
   minorUnitsToMoney,
+  parseDosage,
   moneyToMinorUnits,
   type BudgetRegimenResult,
 } from '@pharmacy/shared';
@@ -16,6 +18,15 @@ export interface RegimenEntry {
 }
 
 export const DEFAULT_REGIMEN: RegimenEntry = { unitsPerDay: '1', saleIncrement: '1' };
+
+/** A line's timing already says how much is taken a day, so the plan reads it from there. */
+export function regimenForLine(line: CartLine): RegimenEntry {
+  if (!line.dosage) return DEFAULT_REGIMEN;
+  const parsed = parseDosage(line.dosage);
+  return 'schedule' in parsed
+    ? { unitsPerDay: dosageUnitsPerDay(parsed.schedule), saleIncrement: '1' }
+    : DEFAULT_REGIMEN;
+}
 
 const UNITS_PATTERN = /^\d{1,6}(?:\.\d{1,3})?$/;
 const INCREMENT_PATTERN = /^\d{1,6}$/;
@@ -101,7 +112,7 @@ export function calculateBudgetLocally(
   return calculateBudgetRegimen(
     budget,
     lines.map((line) => {
-      const entry = regimen[line.medicine.id] ?? DEFAULT_REGIMEN;
+      const entry = regimen[line.medicine.id] ?? regimenForLine(line);
       return {
         medicineId: line.medicine.id,
         medicineName: line.medicine.name,

@@ -1,3 +1,4 @@
+import { normalizeDosage } from '@pharmacy/shared';
 import { create } from 'zustand';
 
 import type { LoginResponse, MedicineSearchResult } from './api';
@@ -15,6 +16,8 @@ const CART_KEY = 'pharmacy-counter-cart-v1';
 export interface CartLine {
   readonly medicine: MedicineSearchResult;
   readonly quantity: number;
+  /** Optional canonical patient timing such as "1+0+1 after meal". */
+  readonly dosage?: string;
 }
 
 export interface HeldCart {
@@ -32,9 +35,10 @@ interface PersistedCartState {
 interface PharmacyState extends PersistedCartState {
   readonly session: LoginResponse | null;
   setSession: (session: LoginResponse | null) => void;
-  addMedicine: (medicine: MedicineSearchResult, quantity?: number) => void;
+  addMedicine: (medicine: MedicineSearchResult, quantity?: number, dosage?: string | null) => void;
   changeQuantity: (medicineId: string, delta: number) => void;
   setQuantity: (medicineId: string, quantity: number) => void;
+  setDosage: (medicineIds: readonly string[], dosage: string | null) => void;
   applyQuantities: (quantities: Readonly<Record<string, number>>) => void;
   removeMedicine: (medicineId: string) => void;
   removeMedicines: (medicineIds: readonly string[]) => void;
@@ -62,8 +66,15 @@ function isCartLine(value: unknown): value is CartLine {
     typeof line.medicine === 'object' &&
     line.medicine !== null &&
     typeof line.medicine.id === 'string' &&
-    typeof line.medicine.name === 'string'
+    typeof line.medicine.name === 'string' &&
+    (line.dosage === undefined ||
+      (typeof line.dosage === 'string' && normalizeDosage(line.dosage) === line.dosage))
   );
+}
+
+function withDosage(line: CartLine, dosage: string | null): CartLine {
+  if (dosage) return { ...line, dosage };
+  return { medicine: line.medicine, quantity: line.quantity };
 }
 
 /** Drops anything malformed and any line discount whose medicine is no longer on the ticket. */
@@ -138,17 +149,27 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
     } else localStorage.removeItem(SESSION_KEY);
     set({ session });
   },
-  addMedicine: (medicine, quantity = 1) =>
+  addMedicine: (medicine, quantity = 1, dosage) =>
     set((state) => {
-      const safeQuantity = Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 1;
+      if (!Number.isSafeInteger(quantity) || quantity < 1) return state;
       const existing = state.cart.find((line) => line.medicine.id === medicine.id);
+      // An explicit timing replaces the line's; adding more without one keeps what is there.
       const cart = existing
-        ? state.cart.map((line) =>
-            line.medicine.id === medicine.id
-              ? { ...line, quantity: line.quantity + safeQuantity }
-              : line,
-          )
-        : [...state.cart, { medicine, quantity: safeQuantity }];
+        ? state.cart.map((line) => {
+            if (line.medicine.id !== medicine.id) return line;
+            const next = { ...line, quantity: line.quantity + quantity };
+            return dosage === undefined ? next : withDosage(next, dosage);
+          })
+        : [...state.cart, withDosage({ medicine, quantity }, dosage ?? null)];
+      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
+      return { cart };
+    }),
+  setDosage: (medicineIds, dosage) =>
+    set((state) => {
+      const targets = new Set(medicineIds);
+      const cart = state.cart.map((line) =>
+        targets.has(line.medicine.id) ? withDosage(line, dosage) : line,
+      );
       persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
       return { cart };
     }),

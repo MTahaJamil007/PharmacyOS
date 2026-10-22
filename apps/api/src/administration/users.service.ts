@@ -7,11 +7,12 @@ import {
 } from '@nestjs/common';
 import { hash, verify } from 'argon2';
 import type { Database, DatabaseTransaction } from '@pharmacy/database';
-import type { CreateUserRequest, UpdateUserRequest } from '@pharmacy/shared';
+import { PERMISSIONS, type CreateUserRequest, type UpdateUserRequest } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { DATABASE } from '../database.module.js';
 
+const SOFTWARE_OWNER_ROLE = 'SUPER_ADMIN';
 const HASH_OPTIONS = { type: 2, memoryCost: 65_536, timeCost: 3, parallelism: 1 } as const;
 type AuditMetadata = Readonly<
   Record<string, string | number | boolean | null | readonly string[] | undefined>
@@ -33,19 +34,26 @@ export class UsersService {
         and user_branch_roles.branch_id = ${user.branchId}
       join roles on roles.id = user_branch_roles.role_id
       where users.deleted_at is null
+        and (${this.isSoftwareOwner(user)} or not exists (
+          select 1 from user_branch_roles owner_roles
+          join roles platform_roles on platform_roles.id = owner_roles.role_id
+          where owner_roles.user_id = users.id and platform_roles.code = ${SOFTWARE_OWNER_ROLE}))
       group by users.id order by users.display_name, users.id
     `;
     return { data };
   }
 
-  async roles() {
+  async roles(user: AuthenticatedUser) {
     const data = await this.database<Array<Record<string, unknown>>>`
-      select code, name, description from roles order by code
+      select code, name, description from roles
+      where ${this.isSoftwareOwner(user)} or code <> ${SOFTWARE_OWNER_ROLE}
+      order by code
     `;
     return { data };
   }
 
   async create(user: AuthenticatedUser, input: CreateUserRequest) {
+    this.assertCanGrant(user, input.roles);
     const passwordHash = await hash(input.password, HASH_OPTIONS);
     const roleCodes = [...new Set(input.roles)];
     return this.database.begin(async (transaction) => {
@@ -75,6 +83,7 @@ export class UsersService {
       throw new ConflictException('You cannot deactivate your own account');
     }
     const roleCodes = input.roles ? [...new Set(input.roles)] : undefined;
+    if (roleCodes) this.assertCanGrant(user, roleCodes);
     return this.database.begin(async (transaction) => {
       const [target] = await transaction<Array<{ id: string; is_active: boolean }>>`
         select users.id::text, users.is_active from users
@@ -84,6 +93,7 @@ export class UsersService {
         for update
       `;
       if (!target) throw new NotFoundException('User not found');
+      await this.assertCanManage(transaction, user, id);
 
       const targetIsOwner = await this.isOwner(transaction, user.branchId, id);
       const keepsOwner = roleCodes?.includes('OWNER') ?? targetIsOwner;
@@ -141,6 +151,7 @@ export class UsersService {
     const passwordHash = await hash(password, HASH_OPTIONS);
     const id = userId.toString();
     return this.database.begin(async (transaction) => {
+      await this.assertCanManage(transaction, user, id);
       const [updated] = await transaction<Array<{ id: string }>>`
         update users set password_hash = ${passwordHash}, failed_login_count = 0, locked_until = null
         where id = ${id} and deleted_at is null
@@ -178,6 +189,33 @@ export class UsersService {
       await this.audit(transaction, user, 'USER.PASSWORD_CHANGED', user.id, {});
       return { id: user.id, otherSessionsRevoked: true };
     });
+  }
+
+  private isSoftwareOwner(user: AuthenticatedUser): boolean {
+    return user.permissions.includes(PERMISSIONS.PLATFORM_SUPER_ADMIN);
+  }
+
+  /** A shop owner can never create or promote the software owner. */
+  private assertCanGrant(user: AuthenticatedUser, roleCodes: readonly string[]): void {
+    if (roleCodes.includes(SOFTWARE_OWNER_ROLE) && !this.isSoftwareOwner(user)) {
+      throw new ForbiddenException('Only the super admin can grant the super admin role');
+    }
+  }
+
+  /** The software owner's account is invisible to, and untouchable by, a shop owner. */
+  private async assertCanManage(
+    transaction: DatabaseTransaction,
+    user: AuthenticatedUser,
+    targetId: string,
+  ): Promise<void> {
+    if (this.isSoftwareOwner(user)) return;
+    const [row] = await transaction<Array<{ protected: boolean }>>`
+      select exists (select 1 from user_branch_roles
+        join roles on roles.id = user_branch_roles.role_id
+        where user_branch_roles.user_id = ${targetId} and roles.code = ${SOFTWARE_OWNER_ROLE}
+      ) as protected
+    `;
+    if (row?.protected) throw new NotFoundException('User not found');
   }
 
   private async resolveRoleIds(transaction: DatabaseTransaction, codes: readonly string[]) {

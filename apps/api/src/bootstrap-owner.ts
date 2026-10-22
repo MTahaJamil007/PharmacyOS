@@ -1,12 +1,13 @@
 import { hash } from 'argon2';
 import { parseEnvironment } from '@pharmacy/config';
 import { createDatabase } from '@pharmacy/database';
+import { PASSWORD_MIN_LENGTH } from '@pharmacy/shared';
 
 const username = process.env.BOOTSTRAP_OWNER_USERNAME;
 const password = process.env.BOOTSTRAP_OWNER_PASSWORD;
-if (!username || !password || password.length < 12) {
+if (!username || !password || password.length < PASSWORD_MIN_LENGTH) {
   throw new Error(
-    'BOOTSTRAP_OWNER_USERNAME and a 12+ character BOOTSTRAP_OWNER_PASSWORD are required',
+    `BOOTSTRAP_OWNER_USERNAME and a ${String(PASSWORD_MIN_LENGTH)}+ character BOOTSTRAP_OWNER_PASSWORD are required`,
   );
 }
 const ownerUsername = username;
