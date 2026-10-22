@@ -269,6 +269,81 @@ describe('POS endpoint idempotency', () => {
     expect(evidence).toEqual({ active_quantity: '1.000', current_qty: '1.000' });
   });
 
+  it('cancels a reserved draft once and releases its stock for the next ticket', async () => {
+    const [medicine] = await database.admin<{ id: string }[]>`
+      insert into medicines (name, pack_size, unit_name)
+      values ('Cancellable Medicine', 1, 'unit') returning id::text
+    `;
+    if (!medicine) throw new Error('Failed to create cancellable medicine');
+    await database.admin.begin(async (transaction) => {
+      const [batch] = await transaction<{ id: string }[]>`
+        insert into inventory_batches (
+          branch_id, medicine_id, batch_number, expiry_date,
+          cost_price, sale_price, current_qty, status
+        ) values (
+          ${fixture.branchId}, ${medicine.id}, 'CANCEL-UNIT', current_date + 365,
+          25, 40, 1, 'SELLABLE'
+        ) returning id::text
+      `;
+      if (!batch) throw new Error('Failed to create cancellable batch');
+      await transaction`
+        insert into stock_movements (
+          branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after, reason
+        ) values (
+          ${fixture.branchId}, ${batch.id}, 'ADJUSTMENT_IN', 1, 1, 'Integration fixture'
+        )
+      `;
+    });
+    const createDraft = async (): Promise<string> => {
+      const response = await api.app.inject({
+        headers: AUTHORIZATION,
+        method: 'POST',
+        payload: {
+          items: [{ medicineId: medicine.id, quantity: '1' }],
+          terminalId: fixture.terminalId,
+        },
+        url: '/api/v1/pos/drafts',
+      });
+      expect(response.statusCode).toBe(201);
+      return requiredString(recordBody(response.body), 'id');
+    };
+    const reserve = (draftId: string) =>
+      api.app.inject({
+        headers: AUTHORIZATION,
+        method: 'POST',
+        url: `/api/v1/pos/drafts/${draftId}/reserve`,
+      });
+    const cancel = (draftId: string) =>
+      api.app.inject({
+        headers: AUTHORIZATION,
+        method: 'POST',
+        url: `/api/v1/pos/drafts/${draftId}/cancel`,
+      });
+
+    const firstDraft = await createDraft();
+    const secondDraft = await createDraft();
+    expect((await reserve(firstDraft)).statusCode).toBe(201);
+    expect((await reserve(secondDraft)).statusCode).toBe(409);
+
+    const cancelled = await cancel(firstDraft);
+    expect(cancelled.statusCode).toBe(201);
+    expect(recordBody(cancelled.body)).toMatchObject({
+      idempotentReplay: false,
+      releasedReservations: 1,
+      status: 'CANCELLED',
+    });
+    const replay = await cancel(firstDraft);
+    expect(recordBody(replay.body)).toMatchObject({ idempotentReplay: true, status: 'CANCELLED' });
+    expect((await reserve(firstDraft)).statusCode).toBe(409);
+    expect((await reserve(secondDraft)).statusCode).toBe(201);
+
+    const [audit] = await database.admin<Array<{ count: string }>>`
+      select count(*)::text as count from audit_events
+      where event_type = 'POS.DRAFT_CANCELLED' and entity_id = ${firstDraft}
+    `;
+    expect(audit?.count).toBe('1');
+  });
+
   it('derives the persisted subtotal from separately rounded FEFO sale lines', async () => {
     const [medicine] = await database.admin<{ id: string }[]>`
       insert into medicines (name, pack_size, unit_name)

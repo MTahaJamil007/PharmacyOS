@@ -427,3 +427,137 @@ test('authorized return moves from lookup through refund', async ({ page }) => {
   await expect(page.getByText('Status: REFUNDED')).toBeVisible();
   await expect(page.getByText('Refunded PKR 35.00')).toBeVisible();
 });
+
+test('cashier budgets and discounts ticked lines, then releases the reservation', async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (value) => localStorage.setItem('pharmacy-session', JSON.stringify(value)),
+    {
+      ...session,
+      user: {
+        ...session.user,
+        permissions: [
+          ...session.user.permissions,
+          'sale.discount.basic',
+          'sales.budget_regimen.calculate',
+        ],
+      },
+    },
+  );
+  const stockedPanadol = { ...panadol, availableQuantity: '100.000' };
+  const risek = {
+    ...panadol,
+    availableQuantity: '50.000',
+    barcode: '8961100000103',
+    genericName: 'Omeprazole',
+    id: '103',
+    name: 'Risek',
+    salePrice: '470.00',
+    strength: '20 mg',
+  };
+  let cancelled = false;
+  await page.route('**/api/v1/catalog/medicines/search**', (route) =>
+    json(route, { data: [stockedPanadol, risek] }),
+  );
+  await page.route('**/api/v1/budget-regimen/calculate', (route) => {
+    // The unticked Risek (PKR 470) comes out of the PKR 2,000 budget before planning.
+    expect(route.request().postDataJSON()).toMatchObject({
+      budget: '1530.00',
+      items: [{ medicineId: '101', minimumSaleIncrement: '1', prescribedBaseUnitsPerDay: '3' }],
+    });
+    return json(route, {
+      completeDays: 14,
+      lines: [
+        {
+          lineCost: '1470.00',
+          medicineId: '101',
+          medicineName: 'Panadol',
+          priceVersion: 'v1',
+          requiredQuantity: '42.000',
+          unitPrice: '35.00',
+        },
+      ],
+      oneDayCost: '105.00',
+      remainder: '60.00',
+      safetyMessage: 'Affordability only',
+      totalCost: '1470.00',
+    });
+  });
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, cashSession));
+  await page.route('**/api/v1/pos/drafts', (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      items: [
+        { medicineId: '101', quantity: '42' },
+        { medicineId: '103', quantity: '1' },
+      ],
+    });
+    return json(route, { id: '21', status: 'DRAFT', total: '1940.00' }, 201);
+  });
+  await page.route('**/api/v1/pos/drafts/21/discount', (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      invoiceDiscount: '0.00',
+      lineDiscounts: [{ amount: '147.00', medicineId: '101' }],
+      reason: 'Senior citizen',
+    });
+    return json(route, { approvalLevel: 'BASIC', total: '1793.00' }, 201);
+  });
+  await page.route('**/api/v1/pos/drafts/21/reserve', (route) =>
+    json(
+      route,
+      { id: '21', reservedUntil: '2099-01-01T00:00:00.000Z', status: 'RESERVED', total: '1793.00' },
+      201,
+    ),
+  );
+  await page.route('**/api/v1/pos/drafts/21/cancel', (route) => {
+    cancelled = true;
+    return json(route, { id: '21', status: 'CANCELLED' }, 201);
+  });
+
+  await page.goto('/#/pos');
+  const search = page.getByPlaceholder('Brand, generic, barcode or company');
+  await search.fill('Panadol');
+  await expect(page.getByRole('button', { name: /Panadol 500 mg/ })).toBeVisible();
+  await search.press('Enter');
+  const risekSearch = page.waitForResponse((response) => response.url().includes('query=Risek'));
+  await search.fill('Risek');
+  await risekSearch;
+  await expect(page.getByRole('button', { name: /Risek 20 mg/ })).toBeVisible();
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  await expect(page.getByLabel('Risek quantity')).toHaveValue('1');
+
+  await page.getByLabel('Tick Panadol').check();
+  await page.getByRole('button', { name: /Budget plan/ }).click();
+  const budget = page.getByRole('dialog', { name: 'Budget plan' });
+  await budget.getByLabel('Customer budget (PKR)').fill('2000');
+  await budget.getByLabel('Panadol units per day').fill('3');
+  await budget.getByRole('button', { name: 'Calculate' }).click();
+  await expect(budget).toContainText('PKR 1,470.00');
+  await budget.getByRole('button', { name: 'Set cart quantities' }).click();
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('42');
+  await expect(page.getByLabel('Risek quantity')).toHaveValue('1');
+  await expect(page.getByRole('status')).toContainText('14 complete days for 1 medicine');
+
+  await page.getByRole('button', { name: 'Discount', exact: true }).click();
+  const discount = page.getByRole('dialog', { name: 'Discount' });
+  await discount.getByLabel('Discount for ticked lines').fill('10');
+  await discount.getByRole('button', { name: 'Apply to 1' }).click();
+  await expect(
+    discount.getByRole('textbox', { name: 'Panadol discount', exact: true }),
+  ).toHaveValue('10');
+  await expect(discount.getByRole('button', { name: 'Apply discount' })).toBeDisabled();
+  await discount.getByRole('radio', { name: 'Senior citizen' }).click();
+  await discount.getByRole('button', { name: 'Apply discount' }).click();
+  await expect(page.getByText('−PKR 147.00')).toBeVisible();
+
+  await page.getByRole('button', { name: /Take payment/ }).click();
+  const payment = page.getByRole('dialog', { name: 'Take payment' });
+  await expect(payment).toContainText('PKR 1,793.00');
+  await payment.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByLabel('Panadol quantity')).toBeDisabled();
+  await page.getByRole('button', { name: 'Release & edit' }).click();
+  await expect(page.getByRole('status')).toContainText('Reservation released');
+  await expect(page.getByLabel('Panadol quantity')).toBeEnabled();
+  expect(cancelled).toBe(true);
+});

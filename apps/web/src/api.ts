@@ -414,6 +414,7 @@ export function applySaleDiscount(
   token: string,
   draftId: string,
   input: {
+    readonly lineDiscounts: ReadonlyArray<{ readonly medicineId: string; readonly amount: string }>;
     readonly invoiceDiscount: string;
     readonly reason: string;
     readonly clientRequestId: string;
@@ -423,8 +424,15 @@ export function applySaleDiscount(
 ): Promise<{ readonly total: string; readonly approvalLevel: string }> {
   return authenticatedRequest(token, `/pos/drafts/${draftId}/discount`, {
     method: 'POST',
-    body: JSON.stringify({ ...input, lineDiscounts: [] }),
+    body: JSON.stringify(input),
   });
+}
+
+export function cancelSaleDraft(
+  token: string,
+  draftId: string,
+): Promise<{ readonly id: string; readonly status: 'CANCELLED' }> {
+  return authenticatedRequest(token, `/pos/drafts/${draftId}/cancel`, { method: 'POST' });
 }
 
 export async function searchCustomers(token: string, query: string): Promise<CustomerSummary[]> {

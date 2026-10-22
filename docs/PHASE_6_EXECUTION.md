@@ -224,3 +224,54 @@ untyped-parameter behaviour recorded in Phase 2; the expiry offset is now cast e
 A real Pakistani catalog with DRAP-published prices has not been loaded. The published datasets that
 carry those figures sit behind a Kaggle login, so the operator supplies the file; the loader and its
 column mapping are proven against the sample above, not against that file.
+
+## 6. Post-gate change record — 2026-10-21: counter budget plan, discounts, and release
+
+### What changed
+
+- **Budget plan on the counter.** Ticket lines can be ticked; the budget plan (`F3` or the toolbar)
+  runs the existing complete-regimen calculation on the ticked lines only (all lines when none are
+  ticked) and writes the planned whole-unit quantities back to the cart. By default the cost of the
+  unticked lines comes out of the customer's budget first. The Budget page uses the same planner
+  component. Shared logic: `apps/web/src/modules/pos/budget-plan.ts`.
+- **Discounts.** Per-line and invoice discounts, each as a percentage or a rupee amount, a reason
+  preset or free text, and supervisor credentials when the branch limit is exceeded (`F9`). The
+  cashier's entry is kept with the cart and with a held cart. The exact-money plan
+  (`apps/web/src/modules/pos/discount.ts`) rounds half up to the paisa and fills the server's existing
+  `lineDiscounts` and `invoiceDiscount` fields; the counter previously never sent line discounts. The
+  server remains authoritative for the policy limit and approval.
+- **Loopholes closed.** A supervisor-required discount no longer locks the cashier out of entering
+  approval. A reserved ticket can be released and edited through the new
+  `POST /pos/drafts/:draftId/cancel`, which locks the draft, is limited to the opening terminal, is
+  idempotent, releases active reservations, and writes `POS.DRAFT_CANCELLED`. Changing the discount
+  money issues a new discount request ID; removing an applied discount starts a fresh draft, because
+  the server cannot set a discount back to zero. Enter during a stale debounced search no longer adds
+  the previous query's result. Out-of-stock or unpriced results cannot be added. Malformed discount
+  input can no longer break the summary.
+- **Counter layout.** Arrow-key result navigation, a results column header, an idle panel showing
+  the held ticket, a dense ticket with tick boxes, bulk Budget plan, Discount, and Remove, per-line
+  discount and stock-shortfall tags, a pay button that shows the total, and responsive rules. The
+  top navigation now scrolls inside its own row instead of widening the page.
+
+### Evidence
+
+| Command                    | Exit | Notes                                                                    |
+| -------------------------- | ---- | ------------------------------------------------------------------------ |
+| `npm run format:check`     | 0    |                                                                          |
+| `npm run lint`             | 0    |                                                                          |
+| `npm run typecheck`        | 0    |                                                                          |
+| `npm run test:unit`        | 0    | Adds `discount.test.ts` and `budget-plan.test.ts` (10 tests)             |
+| `npm run test:e2e`         | 0    | 15 passed, including a new budget, discount, and release counter journey |
+| `npm run build`            | 0    |                                                                          |
+| `npm run test:integration` | 1    | Docker was not running: `Could not find a working container runtime`     |
+
+The counter was also exercised in the browser in preview mode (sample data): keyboard adding, `*N`,
+ticking, budget plan, bulk and invoice discounts, reason enforcement, hold and resume with discounts,
+and the 1100 px layout.
+
+### Unverified
+
+The new integration test, "cancels a reserved draft once and releases its stock for the next
+ticket" in `tests/integration/pos-idempotency.integration.test.ts`, has not run because it needs
+Docker. The discount and cancel endpoints were exercised only through mocked e2e routes, not
+against a live API. Run `npm run verify` with Docker available before merging.

@@ -477,6 +477,58 @@ export class PosService {
     });
   }
 
+  async cancelDraft(user: AuthenticatedUser, draftId: bigint): Promise<Record<string, unknown>> {
+    return this.database.begin(async (transaction) => {
+      const [draft] = await transaction<DraftRow[]>`
+        select id::text, branch_id::text, terminal_id::text, status,
+          subtotal::text, discount_total::text, total::text, reserved_until,
+          discount_approval_id::text
+        from sale_drafts where id = ${draftId.toString()} for update
+      `;
+      if (!draft || draft.branch_id !== user.branchId)
+        throw new NotFoundException('Draft not found');
+      if (draft.terminal_id !== user.terminalId) {
+        throw new ForbiddenException('Only the terminal that opened this draft can cancel it');
+      }
+      if (draft.status === 'CANCELLED') {
+        return {
+          id: draft.id,
+          status: 'CANCELLED',
+          releasedReservations: 0,
+          idempotentReplay: true,
+        };
+      }
+      if (!['DRAFT', 'SENT_TO_CASHIER', 'RESERVED', 'EXPIRED'].includes(draft.status)) {
+        throw new ConflictException(`Draft cannot be cancelled from ${draft.status}`);
+      }
+      const released = await transaction<Array<{ id: string }>>`
+        update stock_reservations set status = 'RELEASED', released_at = now()
+        where sale_draft_item_id in (select id from sale_draft_items where sale_draft_id = ${draft.id})
+          and status = 'ACTIVE'
+        returning id::text
+      `;
+      await transaction`
+        update sale_drafts set status = 'CANCELLED', reserved_until = null, updated_at = now()
+        where id = ${draft.id}
+      `;
+      await transaction`
+        insert into audit_events (
+          branch_id, user_id, terminal_id, event_type, entity_type, entity_id, metadata
+        ) values (
+          ${user.branchId}, ${user.id}, ${user.terminalId},
+          'POS.DRAFT_CANCELLED', 'sale_draft', ${draft.id},
+          ${transaction.json({ previousStatus: draft.status, releasedReservations: released.length })}
+        )
+      `;
+      return {
+        id: draft.id,
+        status: 'CANCELLED',
+        releasedReservations: released.length,
+        idempotentReplay: false,
+      };
+    });
+  }
+
   async reserveDraft(user: AuthenticatedUser, draftId: bigint): Promise<Record<string, unknown>> {
     const draftIdText = draftId.toString();
     return this.database.begin(async (transaction) => {

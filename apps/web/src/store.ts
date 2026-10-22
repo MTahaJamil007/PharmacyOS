@@ -2,6 +2,12 @@ import { create } from 'zustand';
 
 import type { LoginResponse, MedicineSearchResult } from './api';
 import { rememberDeviceTerminalCode } from './deviceTerminal';
+import {
+  EMPTY_DISCOUNTS,
+  isDiscountSpec,
+  type CartDiscounts,
+  type DiscountSpec,
+} from './modules/pos/discount';
 
 const SESSION_KEY = 'pharmacy-session';
 const CART_KEY = 'pharmacy-counter-cart-v1';
@@ -14,10 +20,12 @@ export interface CartLine {
 export interface HeldCart {
   readonly heldAt: string;
   readonly lines: readonly CartLine[];
+  readonly discounts: CartDiscounts;
 }
 
 interface PersistedCartState {
   readonly cart: readonly CartLine[];
+  readonly discounts: CartDiscounts;
   readonly heldCart: HeldCart | null;
 }
 
@@ -27,7 +35,10 @@ interface PharmacyState extends PersistedCartState {
   addMedicine: (medicine: MedicineSearchResult, quantity?: number) => void;
   changeQuantity: (medicineId: string, delta: number) => void;
   setQuantity: (medicineId: string, quantity: number) => void;
+  applyQuantities: (quantities: Readonly<Record<string, number>>) => void;
   removeMedicine: (medicineId: string) => void;
+  removeMedicines: (medicineIds: readonly string[]) => void;
+  setDiscounts: (discounts: CartDiscounts) => void;
   clearCart: () => void;
   holdOrResumeCart: () => 'HELD' | 'RESUMED' | 'UNCHANGED';
 }
@@ -55,22 +66,59 @@ function isCartLine(value: unknown): value is CartLine {
   );
 }
 
+/** Drops anything malformed and any line discount whose medicine is no longer on the ticket. */
+function readDiscounts(value: unknown, lines: readonly CartLine[]): CartDiscounts {
+  if (typeof value !== 'object' || value === null) return EMPTY_DISCOUNTS;
+  const candidate = value as Partial<CartDiscounts>;
+  const ids = new Set(lines.map((line) => line.medicine.id));
+  const lineEntries: Array<[string, DiscountSpec]> = [];
+  if (typeof candidate.lines === 'object' && candidate.lines !== null) {
+    for (const [medicineId, spec] of Object.entries(candidate.lines)) {
+      if (ids.has(medicineId) && isDiscountSpec(spec)) lineEntries.push([medicineId, spec]);
+    }
+  }
+  return {
+    lines: Object.fromEntries(lineEntries),
+    invoice: isDiscountSpec(candidate.invoice) ? candidate.invoice : null,
+    reason: typeof candidate.reason === 'string' ? candidate.reason.slice(0, 500) : '',
+  };
+}
+
+function withoutLineDiscounts(
+  discounts: CartDiscounts,
+  medicineIds: readonly string[],
+): CartDiscounts {
+  const removed = new Set(medicineIds);
+  return {
+    ...discounts,
+    lines: Object.fromEntries(
+      Object.entries(discounts.lines).filter(([medicineId]) => !removed.has(medicineId)),
+    ),
+  };
+}
+
 function readCartState(): PersistedCartState {
   const value = readJson(CART_KEY);
-  if (typeof value !== 'object' || value === null) return { cart: [], heldCart: null };
+  if (typeof value !== 'object' || value === null) {
+    return { cart: [], discounts: EMPTY_DISCOUNTS, heldCart: null };
+  }
   const candidate = value as Partial<PersistedCartState>;
   const cart = Array.isArray(candidate.cart) ? candidate.cart.filter(isCartLine) : [];
-  const heldCart =
+  let heldCart: HeldCart | null = null;
+  if (
     typeof candidate.heldCart === 'object' &&
     candidate.heldCart !== null &&
     typeof candidate.heldCart.heldAt === 'string' &&
     Array.isArray(candidate.heldCart.lines)
-      ? {
-          heldAt: candidate.heldCart.heldAt,
-          lines: candidate.heldCart.lines.filter(isCartLine),
-        }
-      : null;
-  return { cart, heldCart };
+  ) {
+    const lines = candidate.heldCart.lines.filter(isCartLine);
+    heldCart = {
+      heldAt: candidate.heldCart.heldAt,
+      lines,
+      discounts: readDiscounts(candidate.heldCart.discounts, lines),
+    };
+  }
+  return { cart, discounts: readDiscounts(candidate.discounts, cart), heldCart };
 }
 
 function persistCartState(state: PersistedCartState): void {
@@ -101,7 +149,7 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
               : line,
           )
         : [...state.cart, { medicine, quantity: safeQuantity }];
-      persistCartState({ cart, heldCart: state.heldCart });
+      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
       return { cart };
     }),
   changeQuantity: (medicineId, delta) =>
@@ -113,8 +161,11 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
             : line,
         )
         .filter((line) => line.quantity > 0);
-      persistCartState({ cart, heldCart: state.heldCart });
-      return { cart };
+      const discounts = cart.some((line) => line.medicine.id === medicineId)
+        ? state.discounts
+        : withoutLineDiscounts(state.discounts, [medicineId]);
+      persistCartState({ cart, discounts, heldCart: state.heldCart });
+      return { cart, discounts };
     }),
   setQuantity: (medicineId, quantity) =>
     set((state) => {
@@ -122,34 +173,67 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
       const cart = state.cart.map((line) =>
         line.medicine.id === medicineId ? { ...line, quantity } : line,
       );
-      persistCartState({ cart, heldCart: state.heldCart });
+      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
+      return { cart };
+    }),
+  applyQuantities: (quantities) =>
+    set((state) => {
+      const valid = Object.values(quantities).every(
+        (quantity) => Number.isSafeInteger(quantity) && quantity >= 1,
+      );
+      if (!valid) return state;
+      const cart = state.cart.map((line) => {
+        const quantity = quantities[line.medicine.id];
+        return quantity === undefined ? line : { ...line, quantity };
+      });
+      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
       return { cart };
     }),
   removeMedicine: (medicineId) =>
     set((state) => {
       const cart = state.cart.filter((line) => line.medicine.id !== medicineId);
-      persistCartState({ cart, heldCart: state.heldCart });
-      return { cart };
+      const discounts = withoutLineDiscounts(state.discounts, [medicineId]);
+      persistCartState({ cart, discounts, heldCart: state.heldCart });
+      return { cart, discounts };
+    }),
+  removeMedicines: (medicineIds) =>
+    set((state) => {
+      const removed = new Set(medicineIds);
+      const cart = state.cart.filter((line) => !removed.has(line.medicine.id));
+      const discounts = withoutLineDiscounts(state.discounts, medicineIds);
+      persistCartState({ cart, discounts, heldCart: state.heldCart });
+      return { cart, discounts };
+    }),
+  setDiscounts: (next) =>
+    set((state) => {
+      const discounts = readDiscounts(next, state.cart);
+      persistCartState({ cart: state.cart, discounts, heldCart: state.heldCart });
+      return { discounts };
     }),
   clearCart: () =>
     set((state) => {
-      persistCartState({ cart: [], heldCart: state.heldCart });
-      return { cart: [] };
+      persistCartState({ cart: [], discounts: EMPTY_DISCOUNTS, heldCart: state.heldCart });
+      return { cart: [], discounts: EMPTY_DISCOUNTS };
     }),
   holdOrResumeCart: () => {
     let outcome: 'HELD' | 'RESUMED' | 'UNCHANGED' = 'UNCHANGED';
     set((state) => {
       if (state.cart.length > 0 && state.heldCart === null) {
-        const heldCart = { heldAt: new Date().toISOString(), lines: state.cart };
-        persistCartState({ cart: [], heldCart });
+        const heldCart = {
+          heldAt: new Date().toISOString(),
+          lines: state.cart,
+          discounts: state.discounts,
+        };
+        persistCartState({ cart: [], discounts: EMPTY_DISCOUNTS, heldCart });
         outcome = 'HELD';
-        return { cart: [], heldCart };
+        return { cart: [], discounts: EMPTY_DISCOUNTS, heldCart };
       }
       if (state.cart.length === 0 && state.heldCart?.lines.length) {
         const cart = state.heldCart.lines;
-        persistCartState({ cart, heldCart: null });
+        const discounts = state.heldCart.discounts;
+        persistCartState({ cart, discounts, heldCart: null });
         outcome = 'RESUMED';
-        return { cart, heldCart: null };
+        return { cart, discounts, heldCart: null };
       }
       return state;
     });

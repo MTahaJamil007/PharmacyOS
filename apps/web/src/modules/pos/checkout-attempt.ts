@@ -13,9 +13,11 @@ export interface CheckoutAttempt {
   readonly terminalId: string;
   readonly customerId?: string;
   readonly customerName?: string;
-  readonly discountAmount?: string;
+  /** The discount money the pending request carries; a retry reuses its request ID only if equal. */
+  readonly discountRequestSignature?: string;
   readonly discountRequestId?: string;
-  readonly discountApplied?: boolean;
+  /** The discount money the server has applied to this draft. */
+  readonly discountAppliedSignature?: string;
 }
 
 function storageKey(terminalId: string): string {
@@ -64,6 +66,16 @@ export function loadCheckoutAttempt(
     clearCheckoutAttempt(terminalId);
     return null;
   }
+}
+
+export function withCustomer(
+  attempt: CheckoutAttempt,
+  customer: { readonly id: string; readonly name: string } | null,
+): CheckoutAttempt {
+  const next: { -readonly [Key in keyof CheckoutAttempt]: CheckoutAttempt[Key] } = { ...attempt };
+  delete next.customerId;
+  delete next.customerName;
+  return customer ? { ...next, customerId: customer.id, customerName: customer.name } : next;
 }
 
 export function saveCheckoutAttempt(attempt: CheckoutAttempt): void {
