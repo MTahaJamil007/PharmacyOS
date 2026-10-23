@@ -11,9 +11,12 @@ import {
   sumMoney,
   type CreateReturnRequest,
   type RefundReturnRequest,
+  type ReturnSearchPolicy,
 } from '@pharmacy/shared';
 
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import type { z } from 'zod';
+import type { returnSalesSearchSchema } from '@pharmacy/shared';
 import { cashSessionsEnabled, resolveCashSession } from '../common/cash-session-resolver.js';
 import { lockIdempotencyKey } from '../common/idempotency.js';
 import { DATABASE } from '../database.module.js';
@@ -28,6 +31,110 @@ interface ReturnRow {
 @Injectable()
 export class ReturnsService {
   constructor(@Inject(DATABASE) private readonly database: Database) {}
+
+  async searchPolicy(branchId: string): Promise<ReturnSearchPolicy> {
+    const [policy] = await this.database<
+      Array<{ allow_invoice_less_returns: boolean; timezone: string }>
+    >`
+      select policies.allow_invoice_less_returns, branches.timezone
+      from branches join operational_intelligence_policies policies
+        on policies.branch_id = branches.id where branches.id = ${branchId}
+    `;
+    if (!policy) throw new NotFoundException('Return search policy is unavailable');
+    return {
+      allowInvoiceLessReturns: policy.allow_invoice_less_returns,
+      timezone: policy.timezone,
+    };
+  }
+
+  async searchSales(
+    branchId: string,
+    input: z.infer<typeof returnSalesSearchSchema>,
+  ): Promise<{ readonly data: readonly Record<string, unknown>[] }> {
+    const policy = await this.searchPolicy(branchId);
+    if (!policy.allowInvoiceLessReturns)
+      throw new ForbiddenException('The owner has disabled invoice-less return search');
+    const terms = input.medicines
+      .split(/\s*,\s*|\s*;\s*|\s+and\s+/i)
+      .map((term) => term.trim())
+      .filter(Boolean);
+    if (terms.length > 5) throw new ConflictException('Search at most five medicines at once');
+    if (terms.some((term) => term.length < 2))
+      throw new ConflictException('Each medicine name must contain at least two characters');
+    const query = input.query.trim();
+    const match = `%${query}%`;
+    const data = await this.database<Array<Record<string, unknown>>>`
+      select sales.id::text as sale_id, sales.invoice_number, sales.status,
+        sales.total::text as total, sales.created_at::text as created_at,
+        customers.name as customer_name, customers.phone as customer_phone,
+        coalesce(json_agg(json_build_object(
+          'id', sale_items.id::text,
+          'medicine_name', medicines.name,
+          'sold_quantity', sale_items.quantity::text,
+          'returned_quantity', coalesce(returned.returned_quantity, 0)::text,
+          'eligible_quantity', greatest(sale_items.quantity - coalesce(returned.returned_quantity, 0), 0)::text,
+          'unit_price', sale_items.unit_price::text,
+          'line_total', sale_items.line_total::text,
+          'batch_number', inventory_batches.batch_number
+        ) order by sale_items.id) filter (
+          where sale_items.quantity > coalesce(returned.returned_quantity, 0)
+        ), '[]'::json) as items
+      from sales
+      join branches on branches.id = sales.branch_id
+      left join customers on customers.id = sales.customer_id
+      join sale_items on sale_items.sale_id = sales.id
+      join medicines on medicines.id = sale_items.medicine_id
+      join inventory_batches on inventory_batches.id = sale_items.inventory_batch_id
+      left join lateral (
+        select coalesce(sum(return_items.quantity), 0) as returned_quantity
+        from return_items join returns on returns.id = return_items.return_id
+        where return_items.sale_item_id = sale_items.id and returns.status <> 'REJECTED'
+      ) returned on true
+      where sales.branch_id = ${branchId} and sales.status <> 'VOIDED'
+        and (sales.created_at at time zone branches.timezone)::date between ${input.from}::date and ${input.to}::date
+        and (
+          ${query} = '' or sales.invoice_number ilike ${match}
+          or coalesce(customers.name, '') ilike ${match}
+          or coalesce(customers.phone, '') ilike ${match}
+          or exists (
+            select 1 from sale_items searchable_item
+            join medicines searchable_medicine on searchable_medicine.id = searchable_item.medicine_id
+            where searchable_item.sale_id = sales.id and (
+              concat_ws(' ', searchable_medicine.name, searchable_medicine.strength) ilike ${match}
+              or similarity(concat_ws(' ', searchable_medicine.name, searchable_medicine.strength), ${query}) > 0.18
+            )
+          )
+        )
+        and not exists (
+          select 1 from unnest(${terms}::text[]) requested(term)
+          where not exists (
+            select 1 from sale_items requested_item
+            join medicines requested_medicine on requested_medicine.id = requested_item.medicine_id
+            where requested_item.sale_id = sales.id and (
+              concat_ws(' ', requested_medicine.name, requested_medicine.strength) ilike '%' || requested.term || '%'
+              or similarity(concat_ws(' ', requested_medicine.name, requested_medicine.strength), requested.term) > 0.18
+            )
+          )
+        )
+        and sale_items.quantity > coalesce(returned.returned_quantity, 0)
+      group by sales.id, customers.id
+      order by sales.created_at desc, sales.id desc
+      limit 25
+    `;
+    return {
+      data: data.map((sale) => ({
+        sale: {
+          id: sale.sale_id,
+          invoice_number: sale.invoice_number,
+          total: sale.total,
+          created_at: sale.created_at,
+          customer_name: sale.customer_name,
+          customer_phone: sale.customer_phone,
+        },
+        items: sale.items,
+      })),
+    };
+  }
 
   async lookup(branchId: string, token: string): Promise<Record<string, unknown>> {
     const [sale] = await this.database<Array<Record<string, unknown>>>`
@@ -66,6 +173,22 @@ export class ReturnsService {
     token: string,
     input: CreateReturnRequest,
   ): Promise<Record<string, unknown>> {
+    return this.createReturn(user, { token }, input);
+  }
+
+  async requestSaleReturn(
+    user: AuthenticatedUser,
+    saleId: bigint,
+    input: CreateReturnRequest,
+  ): Promise<Record<string, unknown>> {
+    return this.createReturn(user, { saleId: saleId.toString() }, input);
+  }
+
+  private async createReturn(
+    user: AuthenticatedUser,
+    lookup: { readonly token?: string; readonly saleId?: string },
+    input: CreateReturnRequest,
+  ): Promise<Record<string, unknown>> {
     return this.database.begin(async (transaction) => {
       await lockIdempotencyKey(transaction, 'RETURN.REQUEST', user.branchId, input.clientRequestId);
       const [existing] = await transaction<ReturnRow[]>`
@@ -73,13 +196,29 @@ export class ReturnsService {
         where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}
       `;
       if (existing) return { id: existing.id, status: existing.status, idempotentReplay: true };
-      const [sale] = await transaction<Array<{ id: string; invoice_number: string }>>`
-        select sales.id::text, sales.invoice_number
-        from return_lookup_tokens join sales on sales.id = return_lookup_tokens.sale_id
-        where return_lookup_tokens.token = ${token}::uuid and return_lookup_tokens.revoked_at is null
-          and sales.branch_id = ${user.branchId} and sales.status <> 'VOIDED'
-        for update of sales
-      `;
+      let sale: { id: string; invoice_number: string } | undefined;
+      if (lookup.saleId) {
+        const [policy] = await transaction<Array<{ allowed: boolean }>>`
+          select allow_invoice_less_returns as allowed from operational_intelligence_policies
+          where branch_id = ${user.branchId}
+        `;
+        if (!policy?.allowed)
+          throw new ForbiddenException('The owner has disabled returns without an invoice');
+        [sale] = await transaction<Array<{ id: string; invoice_number: string }>>`
+          select id::text, invoice_number from sales
+          where id = ${lookup.saleId} and branch_id = ${user.branchId} and status <> 'VOIDED'
+          for update
+        `;
+      } else {
+        [sale] = await transaction<Array<{ id: string; invoice_number: string }>>`
+            select sales.id::text, sales.invoice_number
+            from return_lookup_tokens join sales on sales.id = return_lookup_tokens.sale_id
+            where return_lookup_tokens.token = ${lookup.token!}::uuid
+              and return_lookup_tokens.revoked_at is null
+              and sales.branch_id = ${user.branchId} and sales.status <> 'VOIDED'
+            for update of sales
+          `;
+      }
       if (!sale) throw new NotFoundException('Receipt was not found');
       const saleItemIds = input.items.map((item) => item.saleItemId.toString());
       const saleItems = await transaction<

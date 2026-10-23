@@ -333,6 +333,9 @@ export class AdministrationService {
         require_regimen_verification as "requireRegimenVerification",
         cash_variance_approval_threshold::text as "cashVarianceApprovalThreshold",
         basic_discount_limit_percent::text as "basicDiscountLimitPercent",
+        order_taker_discount_enabled as "orderTakerDiscountEnabled",
+        cashier_discount_enabled as "cashierDiscountEnabled",
+        allow_invoice_less_returns as "allowInvoiceLessReturns",
         updated_at as "updatedAt"
       from operational_intelligence_policies where branch_id = ${user.branchId}
     `;
@@ -368,6 +371,9 @@ export class AdministrationService {
           require_regimen_verification = coalesce(${input.requireRegimenVerification ?? null}, require_regimen_verification),
           cash_variance_approval_threshold = coalesce(${input.cashVarianceApprovalThreshold ?? null}::numeric, cash_variance_approval_threshold),
           basic_discount_limit_percent = coalesce(${input.basicDiscountLimitPercent ?? null}::numeric, basic_discount_limit_percent),
+          order_taker_discount_enabled = coalesce(${input.orderTakerDiscountEnabled ?? null}, order_taker_discount_enabled),
+          cashier_discount_enabled = coalesce(${input.cashierDiscountEnabled ?? null}, cashier_discount_enabled),
+          allow_invoice_less_returns = coalesce(${input.allowInvoiceLessReturns ?? null}, allow_invoice_less_returns),
           updated_by_user_id = ${user.id}
         where branch_id = ${user.branchId}
       `;

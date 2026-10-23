@@ -1,10 +1,20 @@
-import { BadRequestException, Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   createReturnSchema,
   idSchema,
   PERMISSIONS,
   refundReturnSchema,
   returnLookupTokenSchema,
+  returnSalesSearchSchema,
 } from '@pharmacy/shared';
 
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
@@ -14,6 +24,34 @@ import { ReturnsService } from './returns.service.js';
 @Controller('returns')
 export class ReturnsController {
   constructor(@Inject(ReturnsService) private readonly returnsService: ReturnsService) {}
+
+  @Get('search-policy')
+  @RequirePermissions(PERMISSIONS.RETURNS_LOOKUP)
+  searchPolicy(@CurrentUser() user: AuthenticatedUser) {
+    return this.returnsService.searchPolicy(user.branchId);
+  }
+
+  @Get('search')
+  @RequirePermissions(PERMISSIONS.RETURNS_LOOKUP)
+  search(@CurrentUser() user: AuthenticatedUser, @Query() query: unknown) {
+    const parsed = returnSalesSearchSchema.safeParse(query);
+    if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
+    return this.returnsService.searchSales(user.branchId, parsed.data);
+  }
+
+  @Post('sale/:saleId/request')
+  @RequirePermissions(PERMISSIONS.RETURNS_REQUEST)
+  requestBySale(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('saleId') saleId: string,
+    @Body() body: unknown,
+  ) {
+    const parsedId = idSchema.safeParse(saleId);
+    const parsedBody = createReturnSchema.safeParse(body);
+    if (!parsedId.success || !parsedBody.success)
+      throw new BadRequestException('Invalid invoice-less return request');
+    return this.returnsService.requestSaleReturn(user, parsedId.data, parsedBody.data);
+  }
 
   @Get('lookup/:token')
   @RequirePermissions(PERMISSIONS.RETURNS_LOOKUP)

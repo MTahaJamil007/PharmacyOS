@@ -330,10 +330,75 @@ async function orderDesk(page: Page, settings: { cashSessionsEnabled: boolean })
   await expect(page.getByLabel('Panadol quantity')).toHaveValue('20');
 }
 
+test('cashier requests manager approval and preserves existing line discounts', async ({
+  page,
+}) => {
+  await signIn(
+    page,
+    ['pos.search', 'pos.send_to_cashier', 'sale.finalize_payment'],
+    'Cash counter',
+  );
+  await page.route('**/api/v1/pos/counter-settings', (route) =>
+    json(route, { cashSessionsEnabled: true, cashierDiscountEnabled: false }),
+  );
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, summary({})));
+  await page.route('**/api/v1/pos/cash-counter/queue', (route) =>
+    json(route, {
+      data: [
+        {
+          id: '55',
+          total: '1300.00',
+          invoiceDiscount: '0.00',
+          queuedAt: new Date().toISOString(),
+          reservedUntil: null,
+          status: 'RESERVED',
+          orderTaker: 'Ali',
+          counterName: 'Order desk 1',
+          customerName: null,
+          items: [
+            {
+              medicineId: '101',
+              discountAmount: '40.00',
+              name: 'Panadol',
+              strength: '500 mg',
+              quantity: '20.000',
+              lineTotal: '260.00',
+              dosage: null,
+            },
+          ],
+        },
+      ],
+      recent: [],
+    }),
+  );
+  let discountBody: Record<string, unknown> | null = null;
+  await page.route('**/api/v1/pos/drafts/55/discount', (route) => {
+    discountBody = route.request().postDataJSON() as Record<string, unknown>;
+    return json(route, { total: '1250.00', approvalLevel: 'BASIC' }, 201);
+  });
+  await page.goto('/#/cash');
+  await page.getByRole('button', { name: 'Apply discount / manager approval' }).click();
+  await page.getByLabel('Invoice discount total (PKR)').fill('50.00');
+  await page.getByPlaceholder('Customer discount approved').fill('Owner approved at counter');
+  await page.getByLabel('Manager username').fill('owner');
+  await page.getByLabel('Manager password').fill('owner-password');
+  await page.getByRole('button', { name: 'Apply before payment' }).click();
+  await expect(page.getByRole('status')).toContainText('new total PKR 1,250.00');
+  const recorded = discountBody as unknown as Record<string, unknown> | null;
+  expect(recorded).toMatchObject({
+    invoiceDiscount: '50.00',
+    lineDiscounts: [{ medicineId: '101', amount: '40.00' }],
+    reason: 'Owner approved at counter',
+    approverUsername: 'owner',
+  });
+  expect(recorded?.clientRequestId).toEqual(expect.any(String));
+});
+
 test('order desk sends the bill to the cash counter with one key', async ({ page }) => {
   let sent = false;
   await page.route('**/api/v1/pos/drafts/20/send-to-cashier', (route) => {
     sent = true;
+    expect(route.request().postData()).toBeNull();
     return json(route, { id: '20', total: '300.00' }, 201);
   });
   await orderDesk(page, { cashSessionsEnabled: true });
@@ -343,6 +408,11 @@ test('order desk sends the bill to the cash counter with one key', async ({ page
     'Sent to the cash counter · order #20 · PKR 300.00',
   );
   expect(sent).toBe(true);
+  const collectionTicket = page.getByRole('dialog', { name: 'Medicine collection ticket' });
+  await expect(collectionTicket).toContainText('not a tax invoice');
+  await expect(collectionTicket).toContainText('Panadol 500 mg');
+  await expect(collectionTicket).toContainText('cashier for final invoice and payment');
+  await collectionTicket.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
   await expect(page.getByPlaceholder('Brand, generic, barcode or company')).toBeFocused();
 });

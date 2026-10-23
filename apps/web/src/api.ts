@@ -44,6 +44,7 @@ import {
   type ReservedSaleDraft,
   type ReturnCommandResult,
   type ReturnLookup,
+  type ReturnSearchPolicy,
   type SaleDraftResult,
   type SalePaymentInput,
   type SaleReceipt,
@@ -84,6 +85,7 @@ export type {
   ReservedSaleDraft,
   ReturnCommandResult,
   ReturnLookup,
+  ReturnSearchPolicy,
   SaleDraftResult,
   SaleReceipt,
   ShelfRecommendation,
@@ -91,7 +93,11 @@ export type {
 };
 
 const runtimeEnvironment = import.meta.env as unknown as { readonly VITE_API_URL?: string };
-const API_URL = runtimeEnvironment.VITE_API_URL ?? 'http://localhost:3000/api/v1';
+// A same-origin default works for LAN clients behind the production reverse proxy.
+// Local development sets VITE_API_URL=http://localhost:3001/api/v1 in the workspace env.
+const API_URL =
+  runtimeEnvironment.VITE_API_URL ??
+  (import.meta.env.DEV ? 'http://localhost:3001/api/v1' : '/api/v1');
 
 export class ApiError extends Error {
   constructor(
@@ -282,10 +288,45 @@ export function lookupReturn(token: string, receiptToken: string): Promise<Retur
   return authenticatedRequest(token, `/returns/lookup/${encodeURIComponent(receiptToken)}`);
 }
 
+export function getReturnSearchPolicy(token: string): Promise<ReturnSearchPolicy> {
+  return authenticatedRequest(token, '/returns/search-policy');
+}
+
+export async function searchReturns(
+  token: string,
+  input: {
+    readonly from: string;
+    readonly to: string;
+    readonly query?: string;
+    readonly medicines?: string;
+  },
+): Promise<readonly ReturnLookup[]> {
+  const params = new URLSearchParams({ from: input.from, to: input.to });
+  if (input.query?.trim()) params.set('query', input.query.trim());
+  if (input.medicines?.trim()) params.set('medicines', input.medicines.trim());
+  const response = await authenticatedRequest<{ readonly data: readonly ReturnLookup[] }>(
+    token,
+    `/returns/search?${params.toString()}`,
+  );
+  return response.data;
+}
+
+export function requestReturnBySale(
+  token: string,
+  saleId: string,
+  input: Parameters<typeof requestReturn>[2],
+): Promise<ReturnCommandResult> {
+  return authenticatedRequest(token, `/returns/sale/${encodeURIComponent(saleId)}/request`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
 export function requestReturn(
   token: string,
   receiptToken: string,
   input: {
+    readonly clientRequestId: string;
     readonly reason: string;
     readonly items: ReadonlyArray<{
       readonly saleItemId: string;
@@ -299,7 +340,7 @@ export function requestReturn(
     `/returns/lookup/${encodeURIComponent(receiptToken)}/request`,
     {
       method: 'POST',
-      body: JSON.stringify({ ...input, clientRequestId: createClientRequestId() }),
+      body: JSON.stringify(input),
     },
   );
 }
@@ -390,6 +431,8 @@ export function approveCashVariance(
 
 export interface CounterSettings {
   readonly cashSessionsEnabled: boolean;
+  readonly orderTakerDiscountEnabled?: boolean;
+  readonly cashierDiscountEnabled?: boolean;
 }
 
 export function getCounterSettings(token: string): Promise<CounterSettings> {
@@ -403,12 +446,13 @@ export function sendToCashCounter(
   customerId?: string,
   cashCounterTerminalId?: string,
 ): Promise<{ readonly id: string; readonly total: string }> {
+  const routing = {
+    ...(customerId ? { customerId } : {}),
+    ...(cashCounterTerminalId ? { cashCounterTerminalId } : {}),
+  };
   return authenticatedRequest(token, `/pos/drafts/${draftId}/send-to-cashier`, {
     method: 'POST',
-    body: JSON.stringify({
-      ...(customerId ? { customerId } : {}),
-      ...(cashCounterTerminalId ? { cashCounterTerminalId } : {}),
-    }),
+    ...(Object.keys(routing).length > 0 ? { body: JSON.stringify(routing) } : {}),
   });
 }
 
@@ -443,6 +487,8 @@ export interface CashCounterOrder {
   readonly claimedBy?: string | null;
   readonly claimedHere?: boolean | null;
   readonly items: ReadonlyArray<{
+    readonly medicineId: string;
+    readonly discountAmount: string;
     readonly name: string;
     readonly strength: string | null;
     readonly quantity: string;

@@ -33,10 +33,23 @@ export class CashCounterService {
   ) {}
 
   async settings(user: AuthenticatedUser) {
-    const [branch] = await this.database<Array<{ cash_sessions_enabled: boolean }>>`
-      select cash_sessions_enabled from branches where id = ${user.branchId}
+    const [branch] = await this.database<
+      Array<{
+        cash_sessions_enabled: boolean;
+        order_taker_discount_enabled: boolean;
+        cashier_discount_enabled: boolean;
+      }>
+    >`
+      select branches.cash_sessions_enabled, policies.order_taker_discount_enabled,
+        policies.cashier_discount_enabled
+      from branches left join operational_intelligence_policies policies
+        on policies.branch_id = branches.id where branches.id = ${user.branchId}
     `;
-    return { cashSessionsEnabled: branch?.cash_sessions_enabled ?? true };
+    return {
+      cashSessionsEnabled: branch?.cash_sessions_enabled ?? true,
+      orderTakerDiscountEnabled: branch?.order_taker_discount_enabled ?? false,
+      cashierDiscountEnabled: branch?.cashier_discount_enabled ?? false,
+    };
   }
 
   /** Cash counters the order taker can send a bill to, with who is taking money there now. */
@@ -158,6 +171,8 @@ export class CashCounterService {
           as "claimedHere",
         coalesce((
           select json_agg(json_build_object(
+            'medicineId', sale_draft_items.medicine_id::text,
+            'discountAmount', sale_draft_items.discount_amount::text,
             'name', medicines.name, 'strength', medicines.strength,
             'quantity', sale_draft_items.quantity::text,
             'lineTotal', sale_draft_items.line_total::text,

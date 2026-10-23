@@ -32,6 +32,9 @@ interface AdminRecord {
 interface OperationalPolicies {
   readonly basicDiscountLimitPercent: string;
   readonly cashVarianceApprovalThreshold: string;
+  readonly orderTakerDiscountEnabled: boolean;
+  readonly cashierDiscountEnabled: boolean;
+  readonly allowInvoiceLessReturns: boolean;
 }
 
 /** Server-enforced input rules worth stating before an operator submits the form. */
@@ -154,8 +157,21 @@ export function AdministrationScreen(): React.JSX.Element {
   const updatePolicies = async (): Promise<void> => {
     try {
       await adminPatch(token, '/policies', {
-        basicDiscountLimitPercent: form.basicDiscountLimitPercent,
-        cashVarianceApprovalThreshold: form.cashVarianceApprovalThreshold,
+        ...(form.basicDiscountLimitPercent === undefined
+          ? {}
+          : { basicDiscountLimitPercent: form.basicDiscountLimitPercent }),
+        ...(form.cashVarianceApprovalThreshold === undefined
+          ? {}
+          : { cashVarianceApprovalThreshold: form.cashVarianceApprovalThreshold }),
+        ...(form.orderTakerDiscountEnabled === undefined
+          ? {}
+          : { orderTakerDiscountEnabled: form.orderTakerDiscountEnabled === 'true' }),
+        ...(form.cashierDiscountEnabled === undefined
+          ? {}
+          : { cashierDiscountEnabled: form.cashierDiscountEnabled === 'true' }),
+        ...(form.allowInvoiceLessReturns === undefined
+          ? {}
+          : { allowInvoiceLessReturns: form.allowInvoiceLessReturns === 'true' }),
       });
       await client.invalidateQueries({ queryKey: ['admin', 'policies'] });
       setMessage('Branch policies updated');
@@ -342,6 +358,61 @@ export function AdministrationScreen(): React.JSX.Element {
                         }))
                       }
                     />
+                  </label>
+                  <p className="side-hint">
+                    Set to 100% for no percentage cap. The sale must still have a positive total;
+                    larger discounts require an authorized manager.
+                  </p>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={
+                        form.orderTakerDiscountEnabled === 'true' ||
+                        (form.orderTakerDiscountEnabled === undefined &&
+                          policies.data?.orderTakerDiscountEnabled === true)
+                      }
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          orderTakerDiscountEnabled: String(event.target.checked),
+                        }))
+                      }
+                    />
+                    Allow order takers to apply discounts within the limit above
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={
+                        form.cashierDiscountEnabled === 'true' ||
+                        (form.cashierDiscountEnabled === undefined &&
+                          policies.data?.cashierDiscountEnabled === true)
+                      }
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          cashierDiscountEnabled: String(event.target.checked),
+                        }))
+                      }
+                    />
+                    Allow cashiers to apply discounts within the limit above
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={
+                        form.allowInvoiceLessReturns === 'true' ||
+                        (form.allowInvoiceLessReturns === undefined &&
+                          policies.data?.allowInvoiceLessReturns === true)
+                      }
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          allowInvoiceLessReturns: String(event.target.checked),
+                        }))
+                      }
+                    />
+                    Allow returns after staff find the original sale without an invoice
                   </label>
                   <label>
                     Cash variance threshold

@@ -52,6 +52,7 @@ import {
 import { EntryBar, isSellable, type EntryBarHandle } from './modules/pos/EntryBar';
 import { PaymentDialog } from './modules/pos/PaymentDialog';
 import { ReceiptDialog } from './modules/pos/ReceiptDialog';
+import { CollectionTicketDialog } from './modules/pos/CollectionTicketDialog';
 import { ReprintDialog } from './modules/pos/ReprintDialog';
 import { WedgeScannerBuffer } from './modules/pos/scanner';
 import { useFeatures } from './features';
@@ -114,6 +115,12 @@ export function PosWorkspace(): React.JSX.Element {
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [receipt, setReceipt] = useState<FinalizedSale | null>(null);
   const [printReceipt, setPrintReceipt] = useState<SaleReceipt | null>(null);
+  const [collectionTicket, setCollectionTicket] = useState<{
+    readonly orderNumber: string;
+    readonly customerName: string | null;
+    readonly total: string;
+    readonly lines: typeof cart;
+  } | null>(null);
   const [paymentTotal, setPaymentTotal] = useState<string | null>(null);
   const [reprintOpen, setReprintOpen] = useState(false);
   const [approval, setApproval] = useState<SupervisorApproval>(NO_APPROVAL);
@@ -129,7 +136,6 @@ export function PosWorkspace(): React.JSX.Element {
   const scanner = useRef(new WedgeScannerBuffer());
   const debouncedCustomerQuery = useDebouncedValue(customerQuery.trim(), 180);
   const permissions = session?.user.permissions ?? [];
-  const canDiscount = previewMode || permissions.includes(PERMISSIONS.SALE_DISCOUNT_BASIC);
   const canBudget = previewMode || permissions.includes(PERMISSIONS.SALES_BUDGET_REGIMEN_CALCULATE);
   const token = session?.accessToken ?? '';
   const canUseTill =
@@ -155,6 +161,10 @@ export function PosWorkspace(): React.JSX.Element {
   });
   const sessionsOn = counterSettings.data?.cashSessionsEnabled ?? true;
   const tillOpen = till.data?.status === 'OPEN';
+  const canDiscount =
+    previewMode ||
+    permissions.includes(PERMISSIONS.SALE_DISCOUNT_BASIC) ||
+    counterSettings.data?.orderTakerDiscountEnabled === true;
   const features = useFeatures();
   const routing = features.MULTI_COUNTER.enabled && sessionsOn && canSend && !tillOpen;
   const cashCounters = useQuery({
@@ -210,7 +220,7 @@ export function PosWorkspace(): React.JSX.Element {
   const customerName = attempt?.customerName ?? selectedCustomer?.name;
   const canUseCredit =
     Boolean(customerId) && (previewMode || permissions.includes(PERMISSIONS.CUSTOMER_CREDIT));
-  const modalOpen = Boolean(paymentTotal || reprintOpen || printReceipt);
+  const modalOpen = Boolean(paymentTotal || reprintOpen || printReceipt || collectionTicket);
 
   const updateAttempt = useCallback((next: CheckoutAttempt | null): void => {
     setAttempt(next);
@@ -555,6 +565,9 @@ export function PosWorkspace(): React.JSX.Element {
       const draftId = current.draftId;
       if (!draftId) throw new Error('Sale draft could not be resumed');
       if (mode === 'SEND') {
+        const queuedLines = cart;
+        const queuedCustomerName = customerName;
+        const queuedTotal = current.reservedTotal;
         await sendToCashCounter(
           session.accessToken,
           draftId,
@@ -563,6 +576,12 @@ export function PosWorkspace(): React.JSX.Element {
         );
         clearCheckoutAttempt(session.user.terminalId);
         setAttempt(null);
+        setCollectionTicket({
+          orderNumber: draftId,
+          customerName: queuedCustomerName ?? null,
+          total: queuedTotal,
+          lines: queuedLines,
+        });
         clearCart();
         setTickedIds(new Set());
         setSelectedCustomer(null);
@@ -759,6 +778,15 @@ export function PosWorkspace(): React.JSX.Element {
 
   return (
     <AppShell>
+      {collectionTicket ? (
+        <CollectionTicketDialog
+          {...collectionTicket}
+          onClose={() => {
+            setCollectionTicket(null);
+            entry.current?.focusSearch();
+          }}
+        />
+      ) : null}
       {printReceipt ? (
         <ReceiptDialog
           key={printReceipt.sale.id}

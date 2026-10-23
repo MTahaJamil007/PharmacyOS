@@ -115,6 +115,8 @@ export interface ReturnLookup {
     readonly invoice_number: string;
     readonly total: string;
     readonly created_at: string;
+    readonly customer_name?: string | null;
+    readonly customer_phone?: string | null;
   };
   readonly items: ReadonlyArray<{
     readonly id: string;
@@ -124,6 +126,19 @@ export interface ReturnLookup {
     readonly eligible_quantity: string;
     readonly batch_number: string;
   }>;
+}
+
+export interface ReturnSearchPolicy {
+  readonly allowInvoiceLessReturns: boolean;
+  readonly timezone: string;
+}
+
+export interface OperationalPolicies {
+  readonly basicDiscountLimitPercent: string;
+  readonly orderTakerDiscountEnabled: boolean;
+  readonly cashierDiscountEnabled: boolean;
+  readonly allowInvoiceLessReturns: boolean;
+  readonly cashVarianceApprovalThreshold: string;
 }
 
 export interface ReturnCommandResult {

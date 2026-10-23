@@ -392,6 +392,26 @@ export class PosService {
       `;
       if (!draft || draft.branch_id !== user.branchId)
         throw new NotFoundException('Draft not found');
+      const [discountPolicy] = await transaction<
+        Array<{
+          order_taker_discount_enabled: boolean;
+          cashier_discount_enabled: boolean;
+        }>
+      >`
+        select order_taker_discount_enabled, cashier_discount_enabled
+        from operational_intelligence_policies
+        where branch_id = ${user.branchId}
+      `;
+      const mayDiscount =
+        user.permissions.includes(PERMISSIONS.SALE_DISCOUNT_BASIC) ||
+        (user.permissions.includes(PERMISSIONS.POS_SEND_TO_CASHIER) &&
+          discountPolicy?.order_taker_discount_enabled === true) ||
+        (user.permissions.includes(PERMISSIONS.SALE_FINALIZE_PAYMENT) &&
+          discountPolicy?.cashier_discount_enabled === true) ||
+        authenticatedApprover !== null;
+      if (!mayDiscount) {
+        throw new ForbiddenException('The owner has not enabled discounts for this role');
+      }
       if (!['DRAFT', 'SENT_TO_CASHIER', 'RESERVED', 'EXPIRED'].includes(draft.status)) {
         throw new ConflictException(`Discount cannot be applied to a ${draft.status} draft`);
       }
@@ -441,7 +461,7 @@ export class PosService {
       `;
       const limit = decimalToScaledInteger(policy?.limit_percent ?? '5', 2);
       const needsOverride = percentHundredths > limit;
-      let approverId = user.id;
+      let approverId = authenticatedApprover ?? user.id;
       if (needsOverride && !user.permissions.includes(PERMISSIONS.SALE_DISCOUNT_OVERRIDE)) {
         if (!authenticatedApprover)
           throw new ForbiddenException('Supervisor approval is required for this discount');

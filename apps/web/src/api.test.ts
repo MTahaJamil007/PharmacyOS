@@ -23,12 +23,28 @@ describe('HTTP request bodies', () => {
     }
   });
 
-  it('sends JSON and authentication for routing and variance approval', async () => {
+  it('sends an empty-routing cash-counter handoff without an empty JSON body', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
     vi.stubGlobal('fetch', fetchMock);
     await sendToCashCounter('token', '20');
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer token');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('sends JSON and authentication for routing and variance approval', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    await sendToCashCounter('token', '20', '42', '7');
     await approveCashVariance('token', '10', 'Count reviewed by manager');
-    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+    const [, routing] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(routing.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(routing.body as string)).toEqual({
+      customerId: '42',
+      cashCounterTerminalId: '7',
+    });
+    for (const [, init] of fetchMock.mock.calls.slice(1) as [string, RequestInit][]) {
       expect(new Headers(init.headers).get('content-type')).toBe('application/json');
       expect(new Headers(init.headers).get('authorization')).toBe('Bearer token');
       expect(typeof init.body).toBe('string');

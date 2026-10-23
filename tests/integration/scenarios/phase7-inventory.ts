@@ -306,7 +306,9 @@ export async function phase7InventoryScenario(
     const [old] = await transaction<Array<{ id: string }>>`
       insert into inventory_batches (branch_id, medicine_id, batch_number, expiry_date,
         cost_price, sale_price, current_qty, status, received_at)
-      values (${branchId}, ${glucophage}, 'OLD-1', current_date + 20, 5, 9, 30, 'SELLABLE',
+      values (${branchId}, ${glucophage}, 'OLD-1',
+        (select (now() at time zone timezone)::date + 20 from branches where id = ${branchId}),
+        5, 9, 30, 'SELLABLE',
         now() - interval '200 days')
       returning id::text`;
     await transaction`

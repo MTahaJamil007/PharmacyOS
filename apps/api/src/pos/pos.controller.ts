@@ -17,7 +17,7 @@ import {
   saleReceiptSearchSchema,
 } from '@pharmacy/shared';
 
-import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
+import { CurrentUser, RequireAnyPermission, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { PosService } from './pos.service.js';
 
@@ -92,7 +92,7 @@ export class PosController {
   }
 
   @Post('drafts/:draftId/discount')
-  @RequirePermissions(PERMISSIONS.SALE_DISCOUNT_BASIC)
+  @RequireAnyPermission(PERMISSIONS.SALE_DISCOUNT_BASIC, PERMISSIONS.POS_SEND_TO_CASHIER)
   async applyDiscount(
     @CurrentUser() user: AuthenticatedUser,
     @Param('draftId') draftId: string,

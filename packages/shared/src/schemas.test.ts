@@ -7,10 +7,25 @@ import {
   moneySchema,
   positiveQuantitySchema,
   quantitySchema,
+  returnSalesSearchSchema,
   supplierQuoteSchema,
 } from './schemas.js';
 
 describe('shared request magnitude boundaries', () => {
+  it('requires valid, ordered shop-date return searches with a usable search term', () => {
+    const valid = {
+      from: '2026-02-10',
+      to: '2026-03-02',
+      medicines: 'Panadol 500 mg, Coldex 500 mg',
+    };
+    expect(returnSalesSearchSchema.safeParse(valid).success).toBe(true);
+    expect(returnSalesSearchSchema.safeParse({ ...valid, to: '2026-02-30' }).success).toBe(false);
+    expect(returnSalesSearchSchema.safeParse({ ...valid, from: '2026-03-03' }).success).toBe(false);
+    expect(returnSalesSearchSchema.safeParse({ from: valid.from, to: valid.to }).success).toBe(
+      false,
+    );
+  });
+
   it('matches PostgreSQL bigint, numeric quantity, and money ceilings exactly', () => {
     expect(idSchema.safeParse('9223372036854775807').success).toBe(true);
     expect(idSchema.safeParse('9223372036854775808').success).toBe(false);

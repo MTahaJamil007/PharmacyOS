@@ -1,5 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createClientRequestId, PERMISSIONS, type FiscalInvoiceStatus } from '@pharmacy/shared';
+import {
+  createClientRequestId,
+  PERMISSIONS,
+  type FiscalInvoiceStatus,
+  type SaleReceipt,
+} from '@pharmacy/shared';
 import { useState } from 'react';
 
 import {
@@ -7,8 +12,10 @@ import {
   getBackupOverview,
   getFiscalAttempts,
   getFiscalOverview,
+  getSaleReceipt,
   retryFiscalInvoice,
 } from '../../api';
+import { ReceiptDialog } from '../pos/ReceiptDialog';
 import { formatPkrMoney } from '../../money';
 import { usePharmacyStore } from '../../store';
 
@@ -45,6 +52,7 @@ export function OperationsScreen(): React.JSX.Element | null {
   const token = session?.accessToken ?? '';
   const permissions = session?.user.permissions ?? [];
   const canViewFiscal = permissions.includes(PERMISSIONS.FBR_VIEW_STATUS);
+  const canViewReceipt = permissions.includes(PERMISSIONS.SALE_FINALIZE_PAYMENT);
   const canRetryFiscal = permissions.includes(PERMISSIONS.FBR_RETRY);
   const canViewBackups = permissions.includes(PERMISSIONS.BACKUP_RESTORE);
   const canViewAiAudits = permissions.includes(PERMISSIONS.AI_AUDIT_READ);
@@ -57,6 +65,7 @@ export function OperationsScreen(): React.JSX.Element | null {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState<SaleReceipt | null>(null);
 
   const fiscal = useQuery({
     queryKey: ['fiscal-overview', statusFilter],
@@ -108,6 +117,15 @@ export function OperationsScreen(): React.JSX.Element | null {
       setError(cause instanceof Error ? cause.message : 'Retry could not be queued');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const viewInvoice = async (saleId: string): Promise<void> => {
+    try {
+      setError('');
+      setSelectedReceipt(await getSaleReceipt(token, saleId));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Invoice could not be loaded');
     }
   };
 
@@ -199,6 +217,9 @@ export function OperationsScreen(): React.JSX.Element | null {
                   <td>{invoice.lastErrorMessage ?? '—'}</td>
                   <td>
                     <button onClick={() => openInvoice(invoice.id)}>Inspect</button>
+                    {canViewReceipt ? (
+                      <button onClick={() => void viewInvoice(invoice.saleId)}>View invoice</button>
+                    ) : null}
                   </td>
                 </tr>
               ))}
@@ -358,6 +379,14 @@ export function OperationsScreen(): React.JSX.Element | null {
             <p className="empty-state">The assistant has not been used on this branch.</p>
           ) : null}
         </section>
+      ) : null}
+      {selectedReceipt ? (
+        <ReceiptDialog
+          token={token}
+          receipt={selectedReceipt}
+          autoPrint={false}
+          onClose={() => setSelectedReceipt(null)}
+        />
       ) : null}
     </main>
   );

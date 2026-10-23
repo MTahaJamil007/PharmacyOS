@@ -21,6 +21,7 @@ import {
   getCurrentCashSession,
   getPendingCashVariances,
   getSaleReceipt,
+  applySaleDiscount,
   openCashSession,
   type CashCounterOrder,
 } from '../../api';
@@ -57,15 +58,31 @@ function OrderCard({
   onClear,
   onCancel,
   onClaim,
+  canDiscount,
+  requiresManagerApproval,
+  onDiscount,
 }: {
   readonly order: CashCounterOrder;
   readonly busy: boolean;
   readonly onClear: (tendered: string | null) => void;
   readonly onCancel: () => void;
   readonly onClaim: () => void;
+  readonly canDiscount: boolean;
+  readonly requiresManagerApproval: boolean;
+  readonly onDiscount: (input: {
+    amount: string;
+    reason: string;
+    username: string;
+    password: string;
+  }) => void;
 }): React.JSX.Element {
   const elsewhere = order.claimedBy && !order.claimedHere ? order.claimedBy : null;
   const [received, setReceived] = useState('');
+  const [discountOpen, setDiscountOpen] = useState(false);
+  const [discount, setDiscount] = useState('');
+  const [discountReason, setDiscountReason] = useState('');
+  const [approverUsername, setApproverUsername] = useState('');
+  const [approverPassword, setApproverPassword] = useState('');
   const change = changeFor(received, order.total);
   const short = received.trim() !== '' && MONEY.test(received.trim()) && change === null;
   const clear = (): void => onClear(received.trim() && change !== null ? received.trim() : null);
@@ -108,6 +125,92 @@ function OrderCard({
         <span>Bill</span>
         <strong>{formatPkrMoney(order.total)}</strong>
       </div>
+      {canDiscount ? (
+        <div className="bill-discount">
+          {!discountOpen ? (
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || Boolean(elsewhere)}
+              onClick={() => setDiscountOpen(true)}
+            >
+              Apply discount / manager approval
+            </button>
+          ) : (
+            <div className="movement-form">
+              <label>
+                Invoice discount total (PKR)
+                <input
+                  inputMode="decimal"
+                  value={discount}
+                  onChange={(event) => setDiscount(event.target.value)}
+                  placeholder="0.00"
+                />
+              </label>
+              <label>
+                Reason
+                <input
+                  value={discountReason}
+                  onChange={(event) => setDiscountReason(event.target.value)}
+                  placeholder="Customer discount approved"
+                />
+              </label>
+              {requiresManagerApproval ? (
+                <>
+                  <label>
+                    Manager username
+                    <input
+                      autoComplete="username"
+                      value={approverUsername}
+                      onChange={(event) => setApproverUsername(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Manager password
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={approverPassword}
+                      onChange={(event) => setApproverPassword(event.target.value)}
+                    />
+                  </label>
+                  <small>Owner approval is required while cashier discounts are disabled.</small>
+                </>
+              ) : null}
+              <div className="bill-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={
+                    busy ||
+                    !MONEY.test(discount.trim()) ||
+                    discountReason.trim().length < 3 ||
+                    (requiresManagerApproval &&
+                      (!approverUsername.trim() || approverPassword.length < 8))
+                  }
+                  onClick={() =>
+                    onDiscount({
+                      amount: discount.trim(),
+                      reason: discountReason.trim(),
+                      username: approverUsername.trim(),
+                      password: approverPassword,
+                    })
+                  }
+                >
+                  Apply before payment
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setDiscountOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
       {elsewhere ? (
         <p className="bill-elsewhere" role="status">
           Being paid at {elsewhere}
@@ -167,6 +270,9 @@ export function CashCounterScreen(): React.JSX.Element {
   const permissions = session?.user.permissions ?? [];
   const canApprove = permissions.includes(PERMISSIONS.CASH_APPROVE_VARIANCE);
   const canClear = permissions.includes(PERMISSIONS.SALE_FINALIZE_PAYMENT);
+  const hasDiscountAuthority =
+    permissions.includes(PERMISSIONS.SALE_DISCOUNT_BASIC) ||
+    permissions.includes(PERMISSIONS.SALE_DISCOUNT_OVERRIDE);
   const client = useQueryClient();
   const settings = useQuery({
     queryKey: ['counter-settings'],
@@ -174,6 +280,12 @@ export function CashCounterScreen(): React.JSX.Element {
     staleTime: 60_000,
     retry: false,
   });
+  const canOfferDiscount =
+    hasDiscountAuthority ||
+    permissions.includes(PERMISSIONS.POS_SEND_TO_CASHIER) ||
+    settings.data?.cashierDiscountEnabled === true;
+  const requiresManagerApproval =
+    !hasDiscountAuthority && settings.data?.cashierDiscountEnabled !== true;
   const current = useQuery({
     queryKey: ['cash-session-current'],
     queryFn: () => getCurrentCashSession(token),
@@ -192,6 +304,7 @@ export function CashCounterScreen(): React.JSX.Element {
     enabled: canApprove,
   });
   const requestIds = useRef(new Map<string, string>());
+  const discountRequestIds = useRef(new Map<string, string>());
   const [openingFloat, setOpeningFloat] = useState('');
   const [counted, setCounted] = useState('');
   const [closingNotes, setClosingNotes] = useState('');
@@ -252,6 +365,39 @@ export function CashCounterScreen(): React.JSX.Element {
       setPrintReceipt(await getSaleReceipt(token, sale.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Payment could not be cleared');
+    } finally {
+      setBusyOrder(null);
+    }
+  };
+
+  const discountOrder = async (
+    order: CashCounterOrder,
+    input: { amount: string; reason: string; username: string; password: string },
+  ): Promise<void> => {
+    const requestId = discountRequestIds.current.get(order.id) ?? createClientRequestId();
+    discountRequestIds.current.set(order.id, requestId);
+    setBusyOrder(order.id);
+    setError('');
+    setMessage('');
+    try {
+      const result = await applySaleDiscount(token, order.id, {
+        lineDiscounts: order.items
+          .filter((item) => item.discountAmount !== '0.00')
+          .map((item) => ({ medicineId: item.medicineId, amount: item.discountAmount })),
+        invoiceDiscount: input.amount,
+        reason: input.reason,
+        clientRequestId: requestId,
+        ...(input.username && input.password
+          ? { approverUsername: input.username, approverPassword: input.password }
+          : {}),
+      });
+      discountRequestIds.current.delete(order.id);
+      await refresh();
+      setMessage(
+        `Discount applied to bill #${order.id}; new total ${formatPkrMoney(result.total)}`,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Discount could not be approved');
     } finally {
       setBusyOrder(null);
     }
@@ -442,6 +588,9 @@ export function CashCounterScreen(): React.JSX.Element {
                   busy={busyOrder === order.id}
                   onClear={(tendered) => void clearOrder(order, tendered)}
                   onClaim={() => claim(order)}
+                  canDiscount={canOfferDiscount}
+                  requiresManagerApproval={requiresManagerApproval}
+                  onDiscount={(input) => void discountOrder(order, input)}
                   onCancel={() =>
                     void act(
                       () => cancelCashCounterOrder(token, order.id),

@@ -382,6 +382,9 @@ export const updateOperationalPoliciesSchema = z
       .string()
       .regex(/^\d{1,3}(?:\.\d{1,2})?$/)
       .optional(),
+    orderTakerDiscountEnabled: z.boolean().optional(),
+    cashierDiscountEnabled: z.boolean().optional(),
+    allowInvoiceLessReturns: z.boolean().optional(),
   })
   .refine((input) => Object.keys(input).length > 0, 'At least one field is required')
   .superRefine((input, context) => {
@@ -617,6 +620,35 @@ export const budgetRegimenSchema = z.object({
 });
 
 export const returnLookupTokenSchema = z.uuid();
+
+function isIsoCalendarDate(value: string): boolean {
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
+export const returnSalesSearchSchema = z
+  .object({
+    from: z.iso.date(),
+    to: z.iso.date(),
+    query: z.string().trim().max(120).default(''),
+    medicines: z.string().trim().max(500).default(''),
+  })
+  .refine((input) => input.from <= input.to, {
+    message: 'End date must be on or after start date',
+    path: ['to'],
+  })
+  .refine((input) => isIsoCalendarDate(input.from), {
+    message: 'Start date must be a real calendar date',
+    path: ['from'],
+  })
+  .refine((input) => isIsoCalendarDate(input.to), {
+    message: 'End date must be a real calendar date',
+    path: ['to'],
+  })
+  .refine((input) => input.query.length > 0 || input.medicines.length > 0, {
+    message: 'Enter an invoice/customer detail or at least one medicine name',
+    path: ['query'],
+  });
 
 export const createReturnSchema = z.object({
   clientRequestId: z.string().trim().min(8).max(128),

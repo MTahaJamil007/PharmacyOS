@@ -3906,6 +3906,81 @@ kbd {
   }
 }
 
+.collection-ticket-overlay {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 24px;
+  background: rgb(13 27 32 / 68%);
+}
+
+.collection-ticket-paper {
+  width: min(100%, 620px);
+  padding: 32px;
+  color: #17292d;
+  background: #fff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 25%);
+}
+
+.collection-ticket-paper table {
+  width: 100%;
+  margin: 24px 0;
+  border-collapse: collapse;
+}
+
+.collection-ticket-paper th,
+.collection-ticket-paper td {
+  padding: 10px 6px;
+  border-bottom: 1px solid #cbd4d1;
+  text-align: left;
+}
+
+.collection-ticket-paper th:last-child,
+.collection-ticket-paper td:last-child {
+  text-align: right;
+}
+
+.collection-ticket-total {
+  font-size: 1.1rem;
+}
+
+.collection-ticket-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+@media print {
+  body:has(.collection-ticket-overlay) * {
+    visibility: hidden !important;
+  }
+  .collection-ticket-overlay,
+  .collection-ticket-paper,
+  .collection-ticket-paper * {
+    visibility: visible !important;
+  }
+  .collection-ticket-overlay {
+    position: absolute;
+    inset: 0;
+    display: block;
+    padding: 0;
+    overflow: visible;
+    background: #fff;
+  }
+  .collection-ticket-paper {
+    width: 100%;
+    padding: 0;
+    box-shadow: none;
+  }
+  .collection-ticket-controls {
+    display: none !important;
+  }
+}
+
 /* Printer setup */
 .printer-setup {
   display: grid;

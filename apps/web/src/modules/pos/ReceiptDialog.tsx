@@ -27,10 +27,12 @@ export function ReceiptDialog({
   onClose,
   receipt: initialReceipt,
   token,
+  autoPrint = true,
 }: {
   readonly onClose: () => void;
   readonly receipt: SaleReceipt;
   readonly token?: string;
+  readonly autoPrint?: boolean;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const printButton = useRef<HTMLButtonElement>(null);
@@ -86,11 +88,11 @@ export function ReceiptDialog({
   );
 
   useEffect(() => {
-    if (!profile.autoPrint || autoPrinted.current || waitingForFbr) return;
+    if (!autoPrint || !profile.autoPrint || autoPrinted.current || waitingForFbr) return;
     autoPrinted.current = true;
     const timer = window.setTimeout(() => void print(profile), 0);
     return () => window.clearTimeout(timer);
-  }, [print, profile, waitingForFbr]);
+  }, [autoPrint, print, profile, waitingForFbr]);
 
   return (
     <div

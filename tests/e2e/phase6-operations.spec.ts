@@ -294,3 +294,66 @@ test('catalog import validates a file before anything is written', async ({ page
   await expect(page.getByText('Applied: 2 created, 0 updated')).toBeVisible();
   expect(applied).toBe(true);
 });
+
+test('operations can inspect the finalized invoice for a fiscal transaction', async ({ page }) => {
+  const managerSession = {
+    ...session,
+    user: {
+      ...session.user,
+      permissions: ['fbr.view_status', 'sale.finalize_payment'],
+    },
+  };
+  await page.addInitScript((value) => {
+    localStorage.setItem('pharmacy-session', JSON.stringify(value));
+  }, managerSession);
+  await page.route('**/api/v1/fiscal/invoices?*', (route) =>
+    json(route, {
+      counts: {
+        FAILED_NEEDS_REVIEW: 1,
+        FAILED_RETRYABLE: 0,
+        NOT_REQUIRED: 0,
+        PENDING: 0,
+        SUBMITTED: 0,
+        SUBMITTING: 0,
+        VALIDATED: 0,
+        VALIDATING: 0,
+        VOID_OR_CREDIT_NOTE_PENDING: 0,
+      },
+      invoices: [failedInvoice],
+      mode: 'DISABLED',
+      outboundEnabled: false,
+    }),
+  );
+  await page.route('**/api/v1/pos/sales/44/receipt', (route) =>
+    json(route, {
+      sale: {
+        id: '44',
+        invoice_number: failedInvoice.invoiceNumber,
+        subtotal: failedInvoice.total,
+        discount_total: '0.00',
+        tax_total: '0.00',
+        total: failedInvoice.total,
+        created_at: failedInvoice.saleCreatedAt,
+        branch_name: 'Al-Shifa Pharmacy',
+        branch_address: null,
+        branch_phone: null,
+        cashier_name: 'Counter Staff',
+        customer_id: null,
+        customer_name: null,
+        customer_phone: null,
+        return_lookup_token: '00000000-0000-4000-8000-000000000090',
+        fiscal_status: 'FAILED_NEEDS_REVIEW',
+        fiscal_invoice_number: null,
+      },
+      items: [],
+      payments: [],
+      returnQrPayload: '00000000-0000-4000-8000-000000000090',
+    }),
+  );
+  await page.goto('/#/operations');
+  const row = page.getByRole('row', { name: /MAIN-20260920-000044/ });
+  await row.getByRole('button', { name: 'View invoice' }).click();
+  await expect(page.getByRole('dialog', { name: 'Sale receipt' })).toContainText(
+    failedInvoice.invoiceNumber,
+  );
+});

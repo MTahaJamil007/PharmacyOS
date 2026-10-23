@@ -659,3 +659,45 @@ outstanding physical and pilot exit gates.
   and `suppliers`) in the existing stock/features specs; all assertions passed. Follow up by
   completing those unrelated fixtures rather than treating the run as browser-console-clean.
 - Physical printer/drawer, second LAN terminal, power-loss and pilot gates remain unchanged.
+
+## 10. Post-gate change record — 2026-10-24: returns and controlled counter handoff
+
+- Operations can open the finalized sale invoice from its fiscal transaction row. The invoice opens
+  as a preview and prints only when an operator asks.
+- Invoice-less return search is owner-controlled. It accepts inclusive start/end dates interpreted
+  in the branch timezone, an invoice/customer name/phone query, and up to five comma-separated
+  medicine names. Every requested medicine must match; fuzzy medicine matching uses `pg_trgm`.
+  Search is branch-scoped and only shows remaining return-eligible items. The policy is checked again
+  under the return transaction lock before a request can be created. Receipt-token lookup remains
+  available. Return writes retain their request ID across retries.
+- A successful order-desk handoff displays a printable medicine collection ticket marked as not a
+  tax invoice. It carries the draft number and ordered medicines. The cashier still finalizes payment
+  and opens the actual sale invoice for printing or reprinting.
+- Owner branch controls now independently enable order-taker and cashier discounts. The configured
+  basic percentage limit still applies; 100% removes the percentage cap while the service prevents a
+  zero-total sale. A cashier can request an authorized manager's credentials when cashier discounts
+  are disabled. The manager is recorded as approver. Default cashier role no longer grants basic
+  discount authority on its own. Cashier adjustments carry forward existing line discounts.
+- Development API fallback now targets port 3001, and production defaults to the same-origin `/api/v1`
+  reverse proxy. An unrouted send-to-cashier request omits the empty JSON body and its content type.
+
+### Execution evidence
+
+| Command or probe           | Exit | Result                                                                                                                           |
+| -------------------------- | ---: | -------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run format:check`     |    0 | All files formatted.                                                                                                             |
+| `npm run lint`             |    0 | No lint warnings or errors.                                                                                                      |
+| `npm run typecheck`        |    0 | Root and all workspace TypeScript checks passed.                                                                                 |
+| `npm run test` unit stage  |    0 | 228 unit tests passed across API, web, worker, config, database, and shared packages.                                            |
+| `npm run test:integration` |    0 | 83 integration tests passed across 16 files, including migration checks.                                                         |
+| `npm run test:e2e`         |    0 | All 38 browser workflows passed, including holds across reload, lost-invoice return search, discount approval, and invoice view. |
+| `npm run build`            |    0 | Config, shared, database, API, worker, and web production builds passed.                                                         |
+| Local health probes        |    0 | API readiness HTTP 200 (`database=connected`); web HTTP 200.                                                                     |
+| `npm run verify`           |    0 | All format, lint, typecheck, unit, integration, browser, and build gates passed.                                                 |
+
+The first integration attempt exposed a timezone-sensitive fixture that chose an expiry date from
+the database server's date instead of the shop's date. The fixture now follows the branch timezone
+that the service evaluates. The database test harness applies migration 021 to its isolated
+databases. Deployments must apply `packages/database/migrations/021_return_search_and_discount_controls.sql`
+before running the updated API. The original service-unreachable screenshot was not reproduced; its
+cause at the time of the screenshot remains undetermined.

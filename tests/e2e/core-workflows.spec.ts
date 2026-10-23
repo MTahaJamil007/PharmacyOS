@@ -457,6 +457,79 @@ test('authorized return moves from lookup through refund', async ({ page }) => {
   await expect(page.getByText('Refunded PKR 35.00')).toBeVisible();
 });
 
+test('owner-enabled lost-invoice search finds a sale by several medicines and requests return by sale id', async ({
+  page,
+}) => {
+  await authenticated(page);
+  await page.route('**/api/v1/returns/search-policy', (route) =>
+    json(route, { allowInvoiceLessReturns: true, timezone: 'Asia/Karachi' }),
+  );
+  let searchUrl = '';
+  await page.route('**/api/v1/returns/search?*', (route) => {
+    searchUrl = route.request().url();
+    return json(route, {
+      data: [
+        {
+          sale: {
+            id: '30',
+            invoice_number: 'MAIN-000030',
+            total: '350.00',
+            created_at: '2026-02-18T12:00:00.000Z',
+            customer_name: 'Amina Khan',
+            customer_phone: '03001234567',
+          },
+          items: [
+            {
+              id: '1',
+              medicine_name: 'Panadol 500 mg',
+              sold_quantity: '1.000',
+              returned_quantity: '0.000',
+              eligible_quantity: '1.000',
+              unit_price: '35.00',
+              line_total: '35.00',
+              batch_number: 'B-1',
+            },
+            {
+              id: '2',
+              medicine_name: 'Coldex 500 mg',
+              sold_quantity: '1.000',
+              returned_quantity: '0.000',
+              eligible_quantity: '1.000',
+              unit_price: '315.00',
+              line_total: '315.00',
+              batch_number: 'C-1',
+            },
+          ],
+        },
+      ],
+    });
+  });
+  let requestBody: Record<string, unknown> | null = null;
+  await page.route('**/api/v1/returns/sale/30/request', (route) => {
+    requestBody = route.request().postDataJSON() as Record<string, unknown>;
+    return json(route, { id: '40', returnNumber: 'RET-1', status: 'REQUESTED' }, 201);
+  });
+  await page.goto('/#/returns');
+  await page.getByLabel('Purchase from date').fill('2026-02-10');
+  await page.getByLabel('Purchase through date').fill('2026-03-02');
+  await page
+    .getByPlaceholder('Panadol 500 mg, Amoxil 675 mg')
+    .fill('Panadol 500 mg, Coldex 500 mg');
+  await page.getByRole('button', { name: 'Search past sales' }).click();
+  await expect(page.getByRole('button', { name: /MAIN-000030/ })).toBeVisible();
+  expect(new URL(searchUrl).searchParams.get('from')).toBe('2026-02-10');
+  expect(new URL(searchUrl).searchParams.get('to')).toBe('2026-03-02');
+  await page.getByRole('button', { name: /MAIN-000030/ }).click();
+  await page.getByLabel('Return quantity').first().fill('1');
+  await page.getByLabel('Return reason').fill('Customer has lost the invoice');
+  await page.getByRole('button', { name: 'Submit return request' }).click();
+  await expect(page.getByText('Status: REQUESTED')).toBeVisible();
+  expect(requestBody).toMatchObject({ reason: 'Customer has lost the invoice' });
+  const recorded = requestBody as unknown as Record<string, unknown> | null;
+  expect(recorded?.clientRequestId).toEqual(expect.any(String));
+  expect(String(recorded?.clientRequestId).length).toBeGreaterThanOrEqual(8);
+});
+
 test('cashier budgets and discounts ticked lines, then releases the reservation', async ({
   page,
 }) => {
