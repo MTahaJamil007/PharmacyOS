@@ -13,6 +13,7 @@ import {
   createDraftPurchaseOrderSchema,
   idSchema,
   orderPurchaseOrderSchema,
+  quickReceiptSchema,
   PERMISSIONS,
   purchaseOrderQuerySchema,
   receivePurchaseOrderSchema,
@@ -23,6 +24,7 @@ import {
 
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { ProcurementService } from './procurement.service.js';
 
 @Controller()
@@ -32,6 +34,7 @@ export class ProcurementController {
   ) {}
 
   @Post('supplier-quotes')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
   addQuote(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
     const parsed = supplierQuoteSchema.safeParse(body);
@@ -40,6 +43,7 @@ export class ProcurementController {
   }
 
   @Get('purchase-orders')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
   listPurchaseOrders(@CurrentUser() user: AuthenticatedUser, @Query() query: unknown) {
     const parsed = purchaseOrderQuerySchema.safeParse(query);
@@ -53,6 +57,7 @@ export class ProcurementController {
   }
 
   @Get('purchase-orders/:id')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
   getPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     const parsed = idSchema.safeParse(id);
@@ -61,6 +66,7 @@ export class ProcurementController {
   }
 
   @Post('purchase-orders')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
   createPurchaseOrder(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
     const parsed = createPurchaseOrderSchema.safeParse(body);
@@ -69,6 +75,7 @@ export class ProcurementController {
   }
 
   @Post('purchase-orders/:id/order')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_PURCHASE_DRAFT_APPROVE)
   orderPurchaseOrder(
     @CurrentUser() user: AuthenticatedUser,
@@ -83,6 +90,7 @@ export class ProcurementController {
   }
 
   @Post('purchase-orders/:id/receive')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
   receivePurchaseOrder(
     @CurrentUser() user: AuthenticatedUser,
@@ -97,6 +105,7 @@ export class ProcurementController {
   }
 
   @Get('products/:medicineId/supplier-comparison')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_SUPPLIER_PRICE_READ)
   comparison(@CurrentUser() user: AuthenticatedUser, @Param('medicineId') medicineId: string) {
     const parsed = idSchema.safeParse(medicineId);
@@ -105,6 +114,7 @@ export class ProcurementController {
   }
 
   @Get('reorder-suggestions')
+  @RequireFeature('LOW_STOCK')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_REORDER_REVIEW)
   listReorders(@CurrentUser() user: AuthenticatedUser, @Query() query: unknown) {
     const parsed = reorderSuggestionQuerySchema.safeParse(query);
@@ -118,6 +128,7 @@ export class ProcurementController {
   }
 
   @Post('reorder-suggestions/:id/review')
+  @RequireFeature('LOW_STOCK')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_REORDER_REVIEW)
   reviewReorder(
     @CurrentUser() user: AuthenticatedUser,
@@ -132,6 +143,7 @@ export class ProcurementController {
   }
 
   @Post('reorder-suggestions/:id/create-draft-po')
+  @RequireFeature('PURCHASE_ORDERS')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_PURCHASE_DRAFT_APPROVE)
   createDraft(
     @CurrentUser() user: AuthenticatedUser,
@@ -143,5 +155,15 @@ export class ProcurementController {
     if (!parsedId.success || !parsedBody.success)
       throw new BadRequestException('Invalid purchase draft request');
     return this.procurementService.createDraftPurchaseOrder(user, parsedId.data, parsedBody.data);
+  }
+
+  /** Scan-and-receive: a delivery without a purchase order, received in one step. */
+  @Post('quick-receipts')
+  @RequirePermissions(PERMISSIONS.INVENTORY_PURCHASE)
+  @RequireFeature('SCAN_RECEIVING')
+  quickReceipt(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
+    const parsed = quickReceiptSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
+    return this.procurementService.quickReceipt(user, parsed.data);
   }
 }

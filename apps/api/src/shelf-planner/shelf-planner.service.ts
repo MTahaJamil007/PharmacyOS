@@ -8,9 +8,11 @@ import {
 } from '@nestjs/common';
 import type { Database, DatabaseTransaction } from '@pharmacy/database';
 import {
+  alphabetRanges,
   applyFixtureChanges,
   fixtureKey,
   pickPriorityFromSeconds,
+  placeAlphabetically,
   plannerSlots,
   planPlacements,
   PERMISSIONS,
@@ -19,6 +21,7 @@ import {
   suggestFixtureChanges,
   suggestNewFixtures,
   validateLayout,
+  type AlphabetLevel,
   type ApplyShelfProposalRequest,
   type FixtureChange,
   type FixtureKind,
@@ -78,6 +81,7 @@ interface ShelfRow {
   readonly level_number: number | null;
   readonly code: string;
   readonly name: string;
+  readonly label: string | null;
   readonly used: number;
 }
 
@@ -245,7 +249,7 @@ export class ShelfPlannerService {
     const layout = await this.loadLayout(this.database, user.branchId);
     const shelves = await this.database<ShelfRow[]>`
       select shelves.id::text, shelves.fixture_id::text, shelves.level_number, shelves.code,
-        shelves.name, count(locations.medicine_id)::int as used
+        shelves.name, shelves.label, count(locations.medicine_id)::int as used
       from shelves
       left join medicine_shelf_locations locations
         on locations.shelf_id = shelves.id and locations.is_primary
@@ -279,7 +283,7 @@ export class ShelfPlannerService {
     `;
     const levels = new Map<
       string,
-      Array<{ level: number; shelfId: string; code: string; used: number }>
+      Array<{ level: number; shelfId: string; code: string; label: string | null; used: number }>
     >();
     for (const shelf of shelves) {
       if (!shelf.fixture_id || shelf.level_number === null) continue;
@@ -289,6 +293,7 @@ export class ShelfPlannerService {
         level: shelf.level_number,
         shelfId: shelf.id,
         code: shelf.code,
+        label: shelf.label,
         used: shelf.used,
       });
     }
@@ -1059,6 +1064,139 @@ export class ShelfPlannerService {
         {},
       );
       return { id, rejected: true };
+    });
+  }
+
+  /** Gives a shelf level a short name staff use, such as "Antibiotic syrups". */
+  async setShelfLabel(user: AuthenticatedUser, shelfId: bigint, label: string | null) {
+    const id = shelfId.toString();
+    return this.database.begin(async (transaction) => {
+      const [shelf] = await transaction<Array<{ code: string }>>`
+        update shelves set label = ${label}, updated_at = now()
+        where id = ${id} and branch_id = ${user.branchId} and is_active
+        returning code`;
+      if (!shelf) throw new NotFoundException('Shelf not found');
+      await this.audit(transaction, user, 'SHELF.LABELLED', 'shelf', id, {
+        code: shelf.code,
+        label: label ?? '',
+      });
+      return { shelfId: id, code: shelf.code, label };
+    });
+  }
+
+  /**
+   * Ordinary racks in A to Z reading order (rack label, then level 1 at the top). Fridges and
+   * locked cabinets keep their own rules and are left out.
+   */
+  private async alphabetLevels(sql: Sql, branchId: string, exclude?: string) {
+    const rows = await sql<
+      Array<{
+        shelf_id: string;
+        fixture_id: string;
+        code: string;
+        fixture_code: string;
+        level_number: number;
+        label: string | null;
+        capacity: number;
+        medicines: Array<{ id: string; name: string }>;
+      }>
+    >`
+      select shelves.id::text as shelf_id, shelf_fixtures.id::text as fixture_id, shelves.code,
+        shelf_fixtures.code as fixture_code, shelves.level_number, shelves.label,
+        shelf_fixtures.facings_per_level as capacity,
+        coalesce((
+          select json_agg(json_build_object('id', medicines.id::text, 'name', medicines.name))
+          from medicine_shelf_locations locations
+          join medicines on medicines.id = locations.medicine_id
+          where locations.shelf_id = shelves.id and locations.is_primary
+            and medicines.id::text <> ${exclude ?? ''}
+        ), '[]'::json) as medicines
+      from shelves join shelf_fixtures on shelf_fixtures.id = shelves.fixture_id
+      where shelves.branch_id = ${branchId} and shelves.is_active and shelf_fixtures.is_active
+        and shelf_fixtures.storage_class = 'AMBIENT' and not shelf_fixtures.is_secured
+    `;
+    rows.sort(
+      (a, b) =>
+        a.fixture_code.localeCompare(b.fixture_code, 'en', { numeric: true }) ||
+        a.level_number - b.level_number,
+    );
+    const shelfBySlot = new Map<string, string>();
+    const levels: AlphabetLevel[] = rows.map((row) => {
+      const slot = { fixtureKey: fixtureKey(row.fixture_id), level: row.level_number };
+      shelfBySlot.set(`${slot.fixtureKey}#${slot.level}`, row.shelf_id);
+      return {
+        slot,
+        label: row.code,
+        capacity: row.capacity,
+        medicines: row.medicines,
+      };
+    });
+    const labels = new Map(rows.map((row) => [row.shelf_id, row.label]));
+    return { levels, shelfBySlot, labels };
+  }
+
+  async alphabet(user: AuthenticatedUser) {
+    const { levels, shelfBySlot, labels } = await this.alphabetLevels(this.database, user.branchId);
+    return {
+      data: alphabetRanges(levels).map((range) => {
+        const shelfId = shelfBySlot.get(`${range.slot.fixtureKey}#${range.slot.level}`)!;
+        return { ...range, shelfId, shelfLabel: labels.get(shelfId) ?? null };
+      }),
+    };
+  }
+
+  /**
+   * Where a medicine belongs on A to Z shelves and which neighbours shift to make room. With
+   * apply, the place and the shifts are saved together, so the order never breaks halfway.
+   */
+  async alphabetPlace(user: AuthenticatedUser, medicineId: bigint, apply: boolean) {
+    const id = medicineId.toString();
+    const run = async (sql: Sql) => {
+      const [medicine] = await sql<
+        Array<{ name: string; storage_class: ShelfStorageClass; requires_secured_storage: boolean }>
+      >`
+        select name, storage_class, requires_secured_storage from medicines
+        where id = ${id} and deleted_at is null`;
+      if (!medicine) throw new NotFoundException('Medicine not found');
+      if (medicine.storage_class !== 'AMBIENT' || medicine.requires_secured_storage) {
+        throw new BadRequestException(
+          `${medicine.name} is kept ${medicine.requires_secured_storage ? 'locked' : STORAGE_WORDS[medicine.storage_class]}, not on the A to Z racks.`,
+        );
+      }
+      const { levels, shelfBySlot } = await this.alphabetLevels(sql, user.branchId, id);
+      if (levels.length === 0) {
+        throw new BadRequestException('Add ordinary racks in the shelf planner first.');
+      }
+      const placement = placeAlphabetically(levels, { id, name: medicine.name });
+      if (!placement) {
+        throw new ConflictException(
+          'Every shelf after this place is full. Add a rack or raise medicines per level.',
+        );
+      }
+      const shelfOf = (slot: SlotRef) => shelfBySlot.get(`${slot.fixtureKey}#${slot.level}`)!;
+      return { medicine, placement, shelfOf };
+    };
+    if (!apply) {
+      const { placement } = await run(this.database);
+      return { ...placement, applied: false };
+    }
+    return this.database.begin(async (transaction) => {
+      await transaction`
+        select branch_id from shop_floor_plans where branch_id = ${user.branchId} for update`;
+      const { medicine, placement, shelfOf } = await run(transaction);
+      await this.setPrimary(transaction, user.branchId, [
+        ...placement.moves.map((move) => ({
+          medicine_id: move.medicineId,
+          shelf_id: shelfOf(move.to),
+        })),
+        { medicine_id: id, shelf_id: shelfOf(placement.target) },
+      ]);
+      await this.audit(transaction, user, 'SHELF.ALPHABET_PLACED', 'medicine', id, {
+        name: medicine.name,
+        shelf: placement.targetLabel,
+        shifted: placement.moves.length,
+      });
+      return { ...placement, applied: true };
     });
   }
 

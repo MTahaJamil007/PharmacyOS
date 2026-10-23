@@ -5,6 +5,7 @@ import { PASSWORD_MIN_LENGTH, shopProfileSchema } from '@pharmacy/shared';
 import { platformRequest } from '../../api';
 import { usePharmacyStore } from '../../store';
 import { fbrReadiness, type ShopRecord } from '../administration/shop-types';
+import { ShopFeaturesPanel } from './ShopFeaturesPanel';
 
 type Tab = 'shops' | 'users' | 'roles' | 'audit' | 'system';
 const TABS: ReadonlyArray<readonly [Tab, string]> = [
@@ -266,6 +267,7 @@ function ShopEditor({
           )}
         </aside>
       </div>
+      <ShopFeaturesPanel shopId={shop.id} shopName={shop.name} token={token} />
       {error ? (
         <p className="inline-error" role="alert">
           {error}

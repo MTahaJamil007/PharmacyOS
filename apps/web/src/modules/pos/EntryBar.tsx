@@ -1,12 +1,14 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { decimalToScaledInteger, formatDosage } from '@pharmacy/shared';
+import { decimalToScaledInteger, formatDosage, numberSetting } from '@pharmacy/shared';
 
-import { searchMedicines, type MedicineSearchResult } from '../../api';
+import { recordCustomerRequest, searchMedicines, type MedicineSearchResult } from '../../api';
+import { useFeatures } from '../../features';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { formatPkrMoney } from '../../money';
 import { previewMedicines } from '../../preview-data';
 import { parseQuantityEntry, parseTimingEntry } from './line-entry';
+import { OutOfStockPanel } from './OutOfStockPanel';
 import { TimingPresets, timingPreview } from './TimingField';
 
 export interface EntryBarHandle {
@@ -65,6 +67,12 @@ export function EntryBar({
   const [timingText, setTimingText] = useState('');
   const [timingFocused, setTimingFocused] = useState(false);
   const [error, setError] = useState('');
+  const [missing, setMissing] = useState<MedicineSearchResult | null>(null);
+  const [askedFor, setAskedFor] = useState('');
+  const features = useFeatures();
+  const sellFirstDays = features.COUNTER_SELL_FIRST.enabled
+    ? numberSetting(features, 'COUNTER_SELL_FIRST', 'withinDays')
+    : null;
   const searchInput = useRef<HTMLInputElement>(null);
   const qtyInput = useRef<HTMLInputElement>(null);
   const timingInput = useRef<HTMLInputElement>(null);
@@ -89,7 +97,7 @@ export function EntryBar({
   const fresh = trimmed === debounced && !search.isFetching;
   const activeIndex =
     active.query === debounced ? Math.min(active.index, Math.max(results.length - 1, 0)) : 0;
-  const showResults = !staged && trimmed !== '' && debounced !== '';
+  const showResults = !staged && !missing && trimmed !== '' && debounced !== '';
 
   useImperativeHandle(handleRef, () => ({
     focusSearch: () => {
@@ -102,6 +110,7 @@ export function EntryBar({
       setQtyText('');
       setTimingText('');
       setError('');
+      setMissing(null);
     },
   }));
 
@@ -122,9 +131,15 @@ export function EntryBar({
       return;
     }
     if (!isSellable(medicine)) {
-      setError(`${medicine.name} has no sellable stock or price at this branch`);
+      if (features.COUNTER_SUBSTITUTES.enabled || features.CUSTOMER_REQUESTS.enabled) {
+        setError('');
+        setMissing(medicine);
+      } else {
+        setError(`${medicine.name} has no sellable stock or price at this branch`);
+      }
       return;
     }
+    setMissing(null);
     setError('');
     setQuery('');
     setQtyText('');
@@ -230,6 +245,7 @@ export function EntryBar({
             <div className="staged-item">
               <strong>
                 {staged.name} <em>{staged.strength}</em>
+                {staged.dosageForm ? <i className="form-chip">{staged.dosageForm}</i> : null}
               </strong>
               <small>
                 {formatPkrMoney(staged.salePrice)} / unit · {wholeUnits(staged.availableQuantity)}{' '}
@@ -257,6 +273,7 @@ export function EntryBar({
                 setQuery(event.target.value);
                 setActive({ query: '', index: 0 });
                 setError('');
+                setMissing(null);
               }}
               onKeyDown={searchKeyDown}
             />
@@ -327,6 +344,23 @@ export function EntryBar({
           </span>
         ) : null}
       </div>
+      {missing ? (
+        <OutOfStockPanel
+          key={missing.id}
+          medicine={missing}
+          token={token}
+          features={features}
+          onPick={(option) => {
+            setMissing(null);
+            stage(option);
+          }}
+          onClose={() => {
+            setMissing(null);
+            searchInput.current?.focus();
+          }}
+          onNotice={onNotice}
+        />
+      ) : null}
       {staged && (timingFocused || timingText) ? (
         <TimingPresets
           value={timingText}
@@ -347,6 +381,11 @@ export function EntryBar({
           {results.map((medicine, index) => {
             const sellable = isSellable(medicine);
             const expiringSoon = medicine.daysToExpiry !== null && medicine.daysToExpiry <= 90;
+            const sellFirst =
+              sellable &&
+              sellFirstDays !== null &&
+              medicine.daysToExpiry !== null &&
+              medicine.daysToExpiry <= sellFirstDays;
             const classes = ['result-option'];
             if (index === activeIndex) classes.push('active');
             if (!sellable) classes.push('unavailable');
@@ -368,6 +407,10 @@ export function EntryBar({
                 <span className="result-name">
                   <strong>
                     {medicine.name} <em>{medicine.strength}</em>
+                    {medicine.dosageForm ? (
+                      <i className="form-chip">{medicine.dosageForm}</i>
+                    ) : null}
+                    {sellFirst ? <i className="sell-first">Sell first</i> : null}
                   </strong>
                   <small>
                     {[medicine.genericName, medicine.manufacturer].filter(Boolean).join(' · ')}
@@ -387,9 +430,30 @@ export function EntryBar({
             );
           })}
           {fresh && results.length === 0 ? (
-            <p className="empty-results">
-              No medicine matches “{debounced}”. Try the generic name or company.
-            </p>
+            <div className="empty-results">
+              <p>No medicine matches “{debounced}”. Try the generic name or company.</p>
+              {features.CUSTOMER_REQUESTS.enabled && debounced.length >= 2 ? (
+                <button
+                  type="button"
+                  className="secondary-button ask-button"
+                  disabled={askedFor === debounced}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    const name = debounced;
+                    void recordCustomerRequest(token, { requestedName: name })
+                      .then(() => {
+                        setAskedFor(name);
+                        onNotice(`Noted: a customer asked for “${name}”.`);
+                      })
+                      .catch((caught: unknown) =>
+                        onNotice(caught instanceof Error ? caught.message : 'Could not note it'),
+                      );
+                  }}
+                >
+                  {askedFor === debounced ? 'Noted ✓' : `Customer asked for “${debounced}”`}
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  alphabetRanges,
   applyFixtureChanges,
   boxBounds,
   buildWalkMap,
+  compareMedicineNames,
   FIXTURE_DEFAULTS,
   frontClearanceCm,
   levelReachHeightCm,
   pickPoint,
+  placeAlphabetically,
   placeNewFixture,
   planPlacements,
   plannerSlots,
@@ -363,5 +366,79 @@ describe('adding a fixture', () => {
       entrance: { wall: 'SOUTH', offsetCm: 20, widthCm: 120 },
     };
     expect(placeNewFixture(tiny, [], 'ISLAND_RACK')).toBeNull();
+  });
+});
+
+describe('A to Z shelves', () => {
+  const level = (label: string, capacity: number, names: string[]) => ({
+    slot: { fixtureKey: label.split('-')[0]!, level: Number(label.split('-')[1]) },
+    label,
+    capacity,
+    medicines: names.map((name) => ({ id: name, name })),
+  });
+
+  it('labels each level with its first and last name', () => {
+    expect(alphabetRanges([level('A-1', 5, ['Calpol', 'Augmentin', 'Brufen'])])[0]).toMatchObject({
+      first: 'Augmentin',
+      last: 'Calpol',
+      count: 3,
+    });
+  });
+
+  it('puts a new medicine on the level whose names surround it, with its neighbours', () => {
+    const placement = placeAlphabetically(
+      [level('A-1', 4, ['Amoxil', 'Brufen']), level('A-2', 4, ['Calpol', 'Disprin'])],
+      { id: 'new', name: 'Ceftin' },
+    );
+    expect(placement).toMatchObject({
+      targetLabel: 'A-2',
+      after: 'Calpol',
+      before: 'Disprin',
+      moves: [],
+    });
+  });
+
+  it('uses the end of the previous level when the new name sorts before a level and room exists', () => {
+    const placement = placeAlphabetically(
+      [level('A-1', 4, ['Amoxil', 'Brufen']), level('A-2', 2, ['Calpol', 'Disprin'])],
+      { id: 'new', name: 'Bisolvon' },
+    );
+    expect(placement?.targetLabel).toBe('A-1');
+  });
+
+  it('shifts only the overflow along to keep A to Z order', () => {
+    const placement = placeAlphabetically(
+      [
+        level('A-1', 2, ['Amoxil', 'Brufen']),
+        level('A-2', 2, ['Calpol', 'Disprin']),
+        level('A-3', 3, ['Flagyl']),
+      ],
+      { id: 'new', name: 'Augmentin' },
+    );
+    expect(placement?.targetLabel).toBe('A-1');
+    expect(placement?.moves.map((move) => [move.name, move.fromLabel, move.toLabel])).toEqual([
+      ['Brufen', 'A-1', 'A-2'],
+      ['Disprin', 'A-2', 'A-3'],
+    ]);
+  });
+
+  it('starts the next level when the new name is last on a full level, and reports full shelves', () => {
+    expect(
+      placeAlphabetically([level('A-1', 2, ['Amoxil', 'Brufen']), level('A-2', 2, [])], {
+        id: 'new',
+        name: 'Zyrtec',
+      }),
+    ).toMatchObject({ targetLabel: 'A-2', moves: [] });
+    expect(
+      placeAlphabetically([level('A-1', 1, ['Amoxil']), level('A-2', 1, ['Brufen'])], {
+        id: 'new',
+        name: 'Augmentin',
+      }),
+    ).toBeNull();
+  });
+
+  it('sorts names ignoring case and punctuation, with numbers in number order', () => {
+    expect(compareMedicineNames('calpol', 'Calpol')).toBe(0);
+    expect(compareMedicineNames('Vit-B 2', 'Vit B 10')).toBeLessThan(0);
   });
 });

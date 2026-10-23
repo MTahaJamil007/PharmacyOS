@@ -359,3 +359,82 @@ test('super admin switches cash sessions per shop', async ({ page }) => {
   await expect(page.getByRole('status')).toContainText('cash sessions off');
   expect(body).toEqual({ enabled: false });
 });
+
+test('with several cash counters the order desk picks one, and a claimed bill is left alone', async ({
+  page,
+}) => {
+  let body: unknown = null;
+  await page.route('**/api/v1/pos/cash-counters', (route) =>
+    json(route, {
+      data: [
+        { id: '31', code: 'C1', name: 'Counter 1', cashier: 'Ali', waiting: 0 },
+        { id: '32', code: 'C2', name: 'Counter 2', cashier: null, waiting: 2 },
+      ],
+    }),
+  );
+  await page.route('**/api/v1/pos/drafts/20/send-to-cashier', (route) => {
+    body = route.request().postDataJSON();
+    return json(route, { id: '20', total: '300.00' }, 201);
+  });
+  await orderDesk(page, { cashSessionsEnabled: true });
+  const choice = page.getByRole('group', { name: 'Send bills to' });
+  await expect(choice.getByRole('button', { name: 'Any counter' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await choice.getByRole('button', { name: /Counter 2/ }).click();
+  await page.keyboard.press('F8');
+  await expect(page.getByRole('status')).toContainText('Sent to Counter 2 · order #20');
+  expect(body).toEqual({ cashCounterTerminalId: '32' });
+});
+
+test('a cashier sees bills for this counter first and cannot take one being paid elsewhere', async ({
+  page,
+}) => {
+  await signIn(
+    page,
+    ['pos.search', 'sale.finalize_payment', 'cash.open_session', 'cash.close_session'],
+    'Counter 2',
+  );
+  let claimed = '';
+  const bill = (id: string, overrides: Record<string, unknown>) => ({
+    id,
+    total: '300.00',
+    invoiceDiscount: '0.00',
+    queuedAt: new Date().toISOString(),
+    reservedUntil: new Date(Date.now() + 600_000).toISOString(),
+    status: 'RESERVED',
+    orderTaker: 'Ali',
+    counterName: 'Order desk 1',
+    customerName: null,
+    items: [
+      { name: 'Panadol', strength: '500mg', quantity: '20.000', lineTotal: '300.00', dosage: null },
+    ],
+    ...overrides,
+  });
+  await page.route('**/api/v1/pos/counter-settings', (route) =>
+    json(route, { cashSessionsEnabled: true }),
+  );
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, summary({})));
+  await page.route('**/api/v1/pos/cash-counter/queue', (route) =>
+    json(route, {
+      data: [
+        bill('61', { forThisCounter: true, cashCounterName: 'Counter 2', cashCounterId: '32' }),
+        bill('62', { claimedBy: 'Counter 1', claimedHere: false }),
+      ],
+      recent: [],
+    }),
+  );
+  await page.route('**/api/v1/pos/cash-counter/*/claim', (route) => {
+    claimed = route.request().url().split('/').at(-2) ?? '';
+    return json(route, { id: claimed, claimed: true }, 201);
+  });
+  await page.goto('/#/cash');
+  const mine = page.getByRole('article', { name: 'Bill #61' });
+  const elsewhere = page.getByRole('article', { name: 'Bill #62' });
+  await expect(mine).toContainText('For this counter');
+  await expect(elsewhere).toContainText('Being paid at Counter 1');
+  await expect(elsewhere.getByRole('button', { name: 'Payment received ✓' })).toBeDisabled();
+  await mine.getByRole('textbox').focus();
+  await expect.poll(() => claimed).toBe('61');
+});

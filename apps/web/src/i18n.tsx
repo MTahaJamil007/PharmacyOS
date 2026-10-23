@@ -34,7 +34,7 @@ const englishMessages = {
   'pos.takePayment': 'Take payment',
 } as const;
 
-type MessageKey = keyof typeof englishMessages;
+export type MessageKey = keyof typeof englishMessages;
 type Locale = 'en' | 'ur';
 
 const urduMessages: Record<MessageKey, string> = {

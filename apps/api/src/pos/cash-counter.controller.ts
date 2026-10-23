@@ -7,8 +7,9 @@ import {
   sendToCashierSchema,
 } from '@pharmacy/shared';
 
-import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
+import { CurrentUser, RequireAnyPermission, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { CashCounterService } from './cash-counter.service.js';
 
 function parseId(value: string): bigint {
@@ -36,7 +37,12 @@ export class CashCounterController {
   ) {
     const input = sendToCashierSchema.safeParse(body ?? {});
     if (!input.success) throw new BadRequestException(input.error.flatten());
-    return this.counter.sendToCashier(user, parseId(draftId), input.data.customerId ?? null);
+    return this.counter.sendToCashier(
+      user,
+      parseId(draftId),
+      input.data.customerId ?? null,
+      input.data.cashCounterTerminalId ?? null,
+    );
   }
 
   @Post('drafts/:draftId/complete-invoice')
@@ -49,6 +55,19 @@ export class CashCounterController {
     const input = completeInvoiceSchema.safeParse(body);
     if (!input.success) throw new BadRequestException(input.error.flatten());
     return this.counter.completeInvoice(user, parseId(draftId), input.data);
+  }
+
+  @Get('cash-counters')
+  @RequireAnyPermission(PERMISSIONS.POS_SEND_TO_CASHIER, PERMISSIONS.SALE_FINALIZE_PAYMENT)
+  @RequireFeature('MULTI_COUNTER')
+  cashCounters(@CurrentUser() user: AuthenticatedUser) {
+    return this.counter.cashCounters(user);
+  }
+
+  @Post('cash-counter/:draftId/claim')
+  @RequirePermissions(PERMISSIONS.SALE_FINALIZE_PAYMENT)
+  claim(@CurrentUser() user: AuthenticatedUser, @Param('draftId') draftId: string) {
+    return this.counter.claim(user, parseId(draftId));
   }
 
   @Get('cash-counter/queue')

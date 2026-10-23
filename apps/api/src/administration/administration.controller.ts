@@ -27,7 +27,7 @@ import {
   updateTerminalSchema,
 } from '@pharmacy/shared';
 
-import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
+import { CurrentUser, RequireAnyPermission, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AdministrationService } from './administration.service.js';
 import { CatalogImportService } from './catalog-import.service.js';
@@ -75,8 +75,9 @@ export class AdministrationController {
     );
   }
 
+  // People who receive and order stock must be able to pick a supplier.
   @Get('suppliers')
-  @RequirePermissions(PERMISSIONS.SETTINGS_MANAGE_SYSTEM)
+  @RequireAnyPermission(PERMISSIONS.SETTINGS_MANAGE_SYSTEM, PERMISSIONS.INVENTORY_PURCHASE)
   suppliers(@CurrentUser() user: AuthenticatedUser) {
     return this.admin.suppliers(user);
   }

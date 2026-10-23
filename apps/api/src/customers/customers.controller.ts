@@ -20,8 +20,10 @@ import {
 
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { CustomersService } from './customers.service.js';
 
+@RequireFeature('CUSTOMER_CREDIT')
 @Controller('customers')
 export class CustomersController {
   constructor(@Inject(CustomersService) private readonly customersService: CustomersService) {}

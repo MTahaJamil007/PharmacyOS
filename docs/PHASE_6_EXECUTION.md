@@ -541,3 +541,57 @@ confirmed against the local snapshots (`10770616.50000000000` stored, `10770616.
 - "Medicines per level" is the owner's estimate of how many different boxes fit side by side.
 - The 3D view uses CSS 3D transforms and was checked in Chrome only, not in other browsers or on
   low-end counter PCs.
+
+## 11. Post-gate change record — 2026-10-22: stock work, features per shop, several counters
+
+This round's migration is named `020_phase7_features_inventory.sql`. The name refers to this work
+package, not to roadmap Phase 7 ("close the money loop": supplier ledger, purchase returns,
+expenses), which remains open. Nothing here claims a roadmap phase or gate. The full audit, the
+production plan, and the measured computing cost are in `docs/SYSTEM_AUDIT_2026-10-22.md`.
+
+### What changed
+
+- **Features per shop.** `branches.plan_code` (Basic, Standard, Pro; existing shops Pro) and
+  `shop_features` (per-shop on/off overrides and settings). The catalogue and validation live in
+  `packages/shared/src/features.ts`; the auth guard refuses a route whose feature is off
+  (`@RequireFeature`). The super admin sets plan and overrides per shop; the shop owner tunes the
+  settings of features the shop has. The web hides switched-off features from menus and screens.
+- **Scan-and-receive.** `packages/shared/src/gs1.ts` reads GS1 DataMatrix and EAN codes;
+  `GET /stock/scan`, `POST /stock/barcodes`, `POST /quick-receipts` (a direct order and its
+  receipt in one transaction through the existing receipt code, idempotent). The Stock screen
+  receives by scanning, keeps the delivery across reloads, and gives new stock an A to Z place.
+- **Counter search.** Dosage form, 2D codes matched exactly, stock held by other counters
+  subtracted, active shelves only. Exact same-medicine alternatives
+  (`packages/shared/src/formulation.ts`, `GET /catalog/medicines/:id/substitutes`) and "customer
+  asked for it" (`customer_requests`, append-only) when a medicine is missing; "Sell first" badge.
+- **Stock alerts and buying.** Low stock from selling speed, stuck stock, expiring stock, customer
+  request report, and an order list grouped by last supplier that creates purchase orders.
+- **Several cash counters.** Bills may be sent to a chosen cash counter; a cashier claims a bill
+  for two minutes while taking payment and other counters are refused by the server.
+- **Shelves.** Level names (`shelves.label`), A to Z ranges and placement with minimal shifting,
+  a list view and printed shelf labels; the 3D view gained pan, pinch, keyboard control,
+  look-at-rack, view presets and Simple graphics.
+- **Fixes found by the audit:** supplier list readable with `inventory.purchase`; integration
+  fixtures repaired earlier this week now run in Docker with the rest of the suite.
+
+### Evidence
+
+| Command                              | Exit | Notes                                                                     |
+| ------------------------------------ | ---- | ------------------------------------------------------------------------- |
+| `npm run db:migrate` (local cluster) | 0    | Applied `020_phase7_features_inventory.sql`                               |
+| `npm run format:check`               | 0    |                                                                           |
+| `npm run lint`                       | 0    |                                                                           |
+| `npm run typecheck`                  | 0    |                                                                           |
+| `npm run test:unit`                  | 0    | 221 tests; adds GS1, formulation, features, A to Z and receiving tests    |
+| `npm run test:integration`           | 0    | 16 files, 82 tests in Docker; adds stock-work and features-per-shop       |
+| `npm run test:e2e`                   | 0    | 33 tests; adds receiving, alternatives, plans, alerts, counters, 3D, list |
+| `npm run build`                      | 0    |                                                                           |
+
+### Unverified
+
+- No real GS1 scanner was used; codes were typed as scanners send them (with and without the
+  group separator). Confirm with the shop's scanner model before relying on batch capture.
+- The 3D frame rate was measured on the development PC only (60 frames/s, 20 racks); Simple
+  graphics exists for weak PCs but was not timed on one.
+- Alternatives depend on catalogue text (generic, strength, form); `generic_id` is empty for all
+  local medicines, so the rule is deliberately strict and may miss true alternatives.

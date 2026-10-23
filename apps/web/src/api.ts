@@ -16,7 +16,13 @@ import {
   type FiscalInvoiceAttempt,
   type FiscalInvoiceStatus,
   type FiscalInvoiceSummary,
+  type FeatureKey,
+  type FeatureSetting,
   type FiscalOverview,
+  type AlphabetPlacement,
+  type PlanCode,
+  type ResolvedFeatures,
+  type ScannedCode,
   type FixtureChange,
   type FixtureLayout,
   type FloorPlan,
@@ -130,7 +136,11 @@ export function describeApiError(body: ErrorBody | null, status: number): string
   return message.length > 0 ? message.join('; ') : `Request failed (${status})`;
 }
 
-async function request<T>(path: string, init: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit,
+  announceUnauthorized = true,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_URL}${path}`, {
@@ -145,7 +155,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const error = (await response.json().catch(() => null)) as ErrorBody | null;
-    if (response.status === 401 && path !== '/auth/login') {
+    if (response.status === 401 && path !== '/auth/login' && announceUnauthorized) {
       window.dispatchEvent(new CustomEvent('pharmacy:unauthorized'));
     }
     throw new ApiError(describeApiError(error, response.status), response.status);
@@ -386,10 +396,14 @@ export function sendToCashCounter(
   token: string,
   draftId: string,
   customerId?: string,
+  cashCounterTerminalId?: string,
 ): Promise<{ readonly id: string; readonly total: string }> {
   return authenticatedRequest(token, `/pos/drafts/${draftId}/send-to-cashier`, {
     method: 'POST',
-    body: JSON.stringify(customerId ? { customerId } : {}),
+    body: JSON.stringify({
+      ...(customerId ? { customerId } : {}),
+      ...(cashCounterTerminalId ? { cashCounterTerminalId } : {}),
+    }),
   });
 }
 
@@ -416,6 +430,13 @@ export interface CashCounterOrder {
   readonly orderTaker: string;
   readonly counterName: string;
   readonly customerName: string | null;
+  /** The cash counter the order desk chose, or null for any counter. */
+  readonly cashCounterId?: string | null;
+  readonly cashCounterName?: string | null;
+  readonly forThisCounter?: boolean | null;
+  /** Another counter is taking this payment right now. */
+  readonly claimedBy?: string | null;
+  readonly claimedHere?: boolean | null;
   readonly items: ReadonlyArray<{
     readonly name: string;
     readonly strength: string | null;
@@ -896,6 +917,8 @@ export interface PlannerLevel {
   readonly level: number;
   readonly shelfId: string;
   readonly code: string;
+  /** A short name staff use for the level, such as "Antibiotic syrups". */
+  readonly label?: string | null;
   readonly used: number;
 }
 
@@ -1094,4 +1117,370 @@ export function rejectShelfProposal(token: string, proposalId: string): Promise<
       body: JSON.stringify({}),
     },
   );
+}
+
+export interface ShopFeaturesResponse {
+  readonly plan: PlanCode;
+  readonly features: ResolvedFeatures;
+}
+
+/** Quiet on 401: a background check must not open the sign-in prompt by itself. */
+export function getShopFeatures(token: string): Promise<ShopFeaturesResponse> {
+  return request('/features', { headers: { authorization: `Bearer ${token}` } }, false);
+}
+
+export interface FeatureCatalogEntry {
+  readonly key: FeatureKey;
+  readonly group: string;
+  readonly label: string;
+  readonly description: string;
+  readonly plans: readonly PlanCode[];
+  readonly settingFields: readonly FeatureSetting[];
+  readonly enabled: boolean;
+  readonly overridden: boolean;
+  readonly settings: Readonly<Record<string, number | boolean>>;
+}
+
+export interface FeatureCatalog {
+  readonly plan: PlanCode;
+  readonly planLabel: string;
+  readonly features: readonly FeatureCatalogEntry[];
+}
+
+export function getFeatureCatalog(token: string): Promise<FeatureCatalog> {
+  return authenticatedRequest(token, '/features/catalog');
+}
+
+export function updateFeatureSettings(
+  token: string,
+  key: FeatureKey,
+  settings: Readonly<Record<string, number | boolean>>,
+): Promise<FeatureCatalog> {
+  return authenticatedRequest(token, `/features/${key}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify({ settings }),
+  });
+}
+
+export function getShopFeatureCatalog(token: string, shopId: string): Promise<FeatureCatalog> {
+  return authenticatedRequest(token, `/platform/shops/${encodeURIComponent(shopId)}/features`);
+}
+
+export function setShopPlan(
+  token: string,
+  shopId: string,
+  plan: PlanCode,
+): Promise<FeatureCatalog> {
+  return authenticatedRequest(token, `/platform/shops/${encodeURIComponent(shopId)}/plan`, {
+    method: 'PUT',
+    body: JSON.stringify({ plan }),
+  });
+}
+
+export function setShopFeature(
+  token: string,
+  shopId: string,
+  key: FeatureKey,
+  change: {
+    readonly enabled?: boolean | null;
+    readonly settings?: Readonly<Record<string, number | boolean>>;
+  },
+): Promise<FeatureCatalog> {
+  return authenticatedRequest(
+    token,
+    `/platform/shops/${encodeURIComponent(shopId)}/features/${key}`,
+    { method: 'PATCH', body: JSON.stringify(change) },
+  );
+}
+
+export interface SubstituteResponse {
+  readonly formulation: string | null;
+  readonly data: readonly MedicineSearchResult[];
+}
+
+export function getSubstitutes(token: string, medicineId: string): Promise<SubstituteResponse> {
+  return authenticatedRequest(
+    token,
+    `/catalog/medicines/${encodeURIComponent(medicineId)}/substitutes`,
+  );
+}
+
+export function recordCustomerRequest(
+  token: string,
+  input: { readonly medicineId?: string; readonly requestedName: string },
+): Promise<{ readonly id: string; readonly counted: boolean }> {
+  return authenticatedRequest(token, '/stock/customer-requests', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export interface ScannedMedicine {
+  readonly id: string;
+  readonly name: string;
+  readonly genericName: string | null;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly manufacturer: string | null;
+  readonly packSize: string;
+  readonly unitName: string;
+  readonly storageClass: string;
+  readonly requiresSecured: boolean;
+  readonly requiresPrescription: boolean;
+}
+
+export interface ReceivingDefaults {
+  readonly supplierId: string | null;
+  readonly supplierName: string | null;
+  readonly costPerPack: string | null;
+  readonly unitsPerPack: string;
+  readonly salePricePerUnit: string | null;
+  readonly lastReceivedAt: string | null;
+}
+
+export interface ScanResult {
+  readonly scan: ScannedCode;
+  readonly medicine: ScannedMedicine | null;
+  readonly defaults: ReceivingDefaults | null;
+  readonly existingBatch: {
+    readonly quantity: string;
+    readonly expiryDate: string;
+    readonly salePrice: string;
+  } | null;
+  readonly warnings: readonly string[];
+}
+
+export function scanForReceiving(token: string, code: string): Promise<ScanResult> {
+  return authenticatedRequest(token, `/stock/scan?code=${encodeURIComponent(code)}`);
+}
+
+export function getReceivingMedicine(
+  token: string,
+  medicineId: string,
+): Promise<{ readonly medicine: ScannedMedicine; readonly defaults: ReceivingDefaults }> {
+  return authenticatedRequest(
+    token,
+    `/stock/receiving/medicines/${encodeURIComponent(medicineId)}`,
+  );
+}
+
+export function linkBarcode(
+  token: string,
+  medicineId: string,
+  code: string,
+): Promise<{ readonly barcode: string; readonly alreadyLinked: boolean }> {
+  return authenticatedRequest(token, '/stock/barcodes', {
+    method: 'POST',
+    body: JSON.stringify({ medicineId, code }),
+  });
+}
+
+export interface QuickReceiptLine {
+  readonly medicineId: string;
+  readonly quantity: string;
+  readonly bonusQuantity: string;
+  readonly unitsPerPack: string;
+  readonly costPerPack: string;
+  readonly lineDiscount: string;
+  readonly batchNumber: string;
+  readonly expiryDate: string;
+  readonly salePricePerUnit: string;
+  readonly scannedCode?: string;
+}
+
+export function submitQuickReceipt(
+  token: string,
+  input: {
+    readonly clientRequestId: string;
+    readonly supplierId: string;
+    readonly supplierInvoiceNumber?: string;
+    readonly lines: readonly QuickReceiptLine[];
+  },
+): Promise<{
+  readonly receiptId: string;
+  readonly purchaseOrderId: string;
+  readonly orderNumber?: string;
+  readonly totalCost: string;
+  readonly lineCount: number;
+  readonly shelves?: ReadonlyArray<{ readonly medicineId: string; readonly shelf: string | null }>;
+  readonly idempotentReplay: boolean;
+}> {
+  return authenticatedRequest(token, '/quick-receipts', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export interface LowStockRow {
+  readonly id: string;
+  readonly name: string;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly manufacturer: string | null;
+  readonly packSize: string;
+  readonly onHand: string;
+  readonly dailySales: string;
+  readonly daysLeft: number | null;
+  readonly minimumStock: string | null;
+  readonly suggestedPacks: number;
+}
+
+export interface StuckStockRow {
+  readonly id: string;
+  readonly name: string;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly manufacturer: string | null;
+  readonly quantity: string;
+  readonly value: string;
+  readonly nearestExpiry: string;
+  readonly lastSoldAt: string | null;
+  readonly inStockSince: string;
+}
+
+export interface ExpiringRow {
+  readonly batchId: string;
+  readonly medicineId: string;
+  readonly name: string;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly manufacturer: string | null;
+  readonly batchNumber: string;
+  readonly expiryDate: string;
+  readonly daysLeft: number;
+  readonly quantity: string;
+  readonly value: string;
+  readonly shelf: string | null;
+}
+
+export interface CustomerRequestRow {
+  readonly medicineId: string | null;
+  readonly requestedName: string;
+  readonly times: number;
+  readonly lastAsked: string;
+  readonly quantity: string | null;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly manufacturer: string | null;
+  readonly onHand: string;
+}
+
+export function getLowStock(token: string): Promise<{
+  readonly lookbackDays: number;
+  readonly coverDays: number;
+  readonly data: readonly LowStockRow[];
+}> {
+  return authenticatedRequest(token, '/stock/low');
+}
+
+export function getStuckStock(
+  token: string,
+): Promise<{ readonly days: number; readonly data: readonly StuckStockRow[] }> {
+  return authenticatedRequest(token, '/stock/stuck');
+}
+
+export function getExpiringStock(
+  token: string,
+): Promise<{ readonly days: number; readonly data: readonly ExpiringRow[] }> {
+  return authenticatedRequest(token, '/stock/expiring');
+}
+
+export function getCustomerRequests(token: string): Promise<{
+  readonly days: number;
+  readonly minimum: number;
+  readonly data: readonly CustomerRequestRow[];
+}> {
+  return authenticatedRequest(token, '/stock/customer-requests');
+}
+
+export interface OrderListLine {
+  readonly medicineId: string;
+  readonly name: string;
+  readonly strength: string | null;
+  readonly dosageForm: string | null;
+  readonly manufacturer: string | null;
+  readonly onHand: string;
+  readonly daysLeft: number | null;
+  readonly suggestedPacks: number;
+  readonly requestCount: number;
+  readonly reasons: ReadonlyArray<'LOW_STOCK' | 'CUSTOMER_REQUESTS'>;
+  readonly supplierId: string | null;
+  readonly supplierName: string | null;
+  readonly costPerPack: string | null;
+  readonly unitsPerPack: string | null;
+}
+
+export function getOrderList(token: string): Promise<{
+  readonly lines: readonly OrderListLine[];
+  readonly notInCatalog: ReadonlyArray<{ readonly requestedName: string; readonly times: number }>;
+}> {
+  return authenticatedRequest(token, '/stock/order-list');
+}
+
+export interface CashCounterOption {
+  readonly id: string;
+  readonly code: string;
+  readonly name: string;
+  readonly cashier: string | null;
+  readonly waiting: number;
+}
+
+export async function getCashCounters(token: string): Promise<readonly CashCounterOption[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly CashCounterOption[] }>(
+    token,
+    '/pos/cash-counters',
+  );
+  return response.data;
+}
+
+export function claimCashCounterBill(token: string, draftId: string): Promise<unknown> {
+  return authenticatedRequest(token, `/pos/cash-counter/${encodeURIComponent(draftId)}/claim`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function setShelfLabel(
+  token: string,
+  shelfId: string,
+  label: string | null,
+): Promise<unknown> {
+  return authenticatedRequest(
+    token,
+    `/shelf-planner/shelves/${encodeURIComponent(shelfId)}/label`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ label }),
+    },
+  );
+}
+
+export interface AlphabetRangeRow {
+  readonly slot: SlotRef;
+  readonly label: string;
+  readonly first: string | null;
+  readonly last: string | null;
+  readonly count: number;
+  readonly capacity: number;
+  readonly shelfId: string;
+  readonly shelfLabel: string | null;
+}
+
+export async function getAlphabetRanges(token: string): Promise<readonly AlphabetRangeRow[]> {
+  const response = await authenticatedRequest<{ readonly data: readonly AlphabetRangeRow[] }>(
+    token,
+    '/shelf-planner/alphabet',
+  );
+  return response.data;
+}
+
+export function placeInAlphabet(
+  token: string,
+  medicineId: string,
+  apply: boolean,
+): Promise<AlphabetPlacement & { readonly applied: boolean }> {
+  return authenticatedRequest(token, '/shelf-planner/alphabet/place', {
+    method: 'POST',
+    body: JSON.stringify({ medicineId, apply }),
+  });
 }

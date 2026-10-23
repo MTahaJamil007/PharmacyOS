@@ -17,6 +17,9 @@ interface QueuedDraftRow {
   readonly cashier_queued_at: Date | null;
 }
 
+/** A cashier holds a bill this long while taking payment; after that another counter may take it. */
+const CLAIM_SECONDS = 120;
+
 /**
  * The hand-off between the order taker and the cash counter. With cash sessions on, the order
  * taker reserves the order and sends it here; the cashier sees the bill, takes the cash, and clears
@@ -36,7 +39,34 @@ export class CashCounterService {
     return { cashSessionsEnabled: branch?.cash_sessions_enabled ?? true };
   }
 
-  async sendToCashier(user: AuthenticatedUser, draftId: bigint, customerId: bigint | null) {
+  /** Cash counters the order taker can send a bill to, with who is taking money there now. */
+  async cashCounters(user: AuthenticatedUser) {
+    const data = await this.database<
+      Array<{ id: string; code: string; name: string; cashier: string | null; waiting: number }>
+    >`
+      select terminals.id::text, terminals.code, terminals.name,
+        (select users.display_name from cash_sessions
+          join users on users.id = cash_sessions.cashier_user_id
+          where cash_sessions.terminal_id = terminals.id and cash_sessions.status = 'OPEN'
+          order by cash_sessions.opened_at desc limit 1) as cashier,
+        (select count(*)::int from sale_drafts
+          where sale_drafts.cash_counter_terminal_id = terminals.id
+            and sale_drafts.cashier_queued_at is not null
+            and sale_drafts.status in ('SENT_TO_CASHIER', 'RESERVED', 'EXPIRED')) as waiting
+      from terminals
+      where terminals.branch_id = ${user.branchId} and terminals.is_active
+        and terminals.terminal_type = 'CASHIER'
+      order by terminals.name, terminals.id
+    `;
+    return { data };
+  }
+
+  async sendToCashier(
+    user: AuthenticatedUser,
+    draftId: bigint,
+    customerId: bigint | null,
+    cashCounterTerminalId: bigint | null = null,
+  ) {
     return this.database.begin(async (transaction) => {
       const [branch] = await transaction<Array<{ enabled: boolean }>>`
         select cash_sessions_enabled as enabled from branches where id = ${user.branchId}
@@ -75,9 +105,18 @@ export class CashCounterService {
         `;
         if (!customer) throw new NotFoundException('Customer not found');
       }
+      if (cashCounterTerminalId !== null) {
+        const [counter] = await transaction<Array<{ id: string }>>`
+          select id::text from terminals
+          where id = ${cashCounterTerminalId.toString()} and branch_id = ${user.branchId}
+            and is_active and terminal_type = 'CASHIER'
+        `;
+        if (!counter) throw new NotFoundException('Cash counter not found');
+      }
       const [queued] = await transaction<Array<{ cashier_queued_at: Date }>>`
         update sale_drafts set cashier_queued_at = now(), cashier_queued_by = ${user.id},
-          customer_id = ${customerId?.toString() ?? null}
+          customer_id = ${customerId?.toString() ?? null},
+          cash_counter_terminal_id = ${cashCounterTerminalId?.toString() ?? null}
         where id = ${draft.id}
         returning cashier_queued_at
       `;
@@ -86,7 +125,11 @@ export class CashCounterService {
           branch_id, user_id, terminal_id, event_type, entity_type, entity_id, metadata
         ) values (
           ${user.branchId}, ${user.id}, ${user.terminalId}, 'POS.SENT_TO_CASH_COUNTER',
-          'sale_draft', ${draft.id}, ${transaction.json({ total: draft.total })}
+          'sale_draft', ${draft.id},
+          ${transaction.json({
+            total: draft.total,
+            cashCounterTerminalId: cashCounterTerminalId?.toString() ?? null,
+          })}
         )
       `;
       return {
@@ -105,6 +148,14 @@ export class CashCounterService {
         sale_drafts.cashier_queued_at as "queuedAt", sale_drafts.reserved_until as "reservedUntil",
         sale_drafts.status, takers.display_name as "orderTaker",
         terminals.name as "counterName", customers.name as "customerName",
+        sale_drafts.cash_counter_terminal_id::text as "cashCounterId",
+        cash_counters.name as "cashCounterName",
+        (sale_drafts.cash_counter_terminal_id = ${user.terminalId}) as "forThisCounter",
+        case when sale_drafts.payment_claimed_at > now() - make_interval(secs => ${CLAIM_SECONDS})
+          then claimers.name end as "claimedBy",
+        (sale_drafts.payment_claimed_by_terminal_id = ${user.terminalId}
+          and sale_drafts.payment_claimed_at > now() - make_interval(secs => ${CLAIM_SECONDS}))
+          as "claimedHere",
         coalesce((
           select json_agg(json_build_object(
             'name', medicines.name, 'strength', medicines.strength,
@@ -119,10 +170,15 @@ export class CashCounterService {
       join users takers on takers.id = sale_drafts.cashier_queued_by
       join terminals on terminals.id = sale_drafts.terminal_id
       left join customers on customers.id = sale_drafts.customer_id
+      left join terminals cash_counters on cash_counters.id = sale_drafts.cash_counter_terminal_id
+      left join terminals claimers on claimers.id = sale_drafts.payment_claimed_by_terminal_id
       where sale_drafts.branch_id = ${user.branchId}
         and sale_drafts.cashier_queued_at is not null
         and sale_drafts.status in ('SENT_TO_CASHIER', 'RESERVED', 'EXPIRED')
-      order by sale_drafts.cashier_queued_at, sale_drafts.id
+      order by
+        case when sale_drafts.cash_counter_terminal_id = ${user.terminalId} then 0
+          when sale_drafts.cash_counter_terminal_id is null then 1 else 2 end,
+        sale_drafts.cashier_queued_at, sale_drafts.id
       limit 100
     `;
     const recent = await this.database<Array<Record<string, unknown>>>`
@@ -136,6 +192,41 @@ export class CashCounterService {
       order by sales.id desc limit 12
     `;
     return { data, recent };
+  }
+
+  /**
+   * The cashier opens a bill to take payment. Other counters see "being paid at" for a short time,
+   * so two cashiers never take money for the same customer. A stale claim may be taken over.
+   */
+  async claim(user: AuthenticatedUser, draftId: bigint) {
+    const [claimed] = await this.database<Array<{ id: string }>>`
+      update sale_drafts set payment_claimed_by_terminal_id = ${user.terminalId},
+        payment_claimed_at = now()
+      where id = ${draftId.toString()} and branch_id = ${user.branchId}
+        and cashier_queued_at is not null
+        and status in ('SENT_TO_CASHIER', 'RESERVED', 'EXPIRED')
+        and (payment_claimed_by_terminal_id is null
+          or payment_claimed_by_terminal_id = ${user.terminalId}
+          or payment_claimed_at <= now() - make_interval(secs => ${CLAIM_SECONDS}))
+      returning id::text
+    `;
+    if (claimed) return { id: claimed.id, claimed: true };
+    await this.assertNotClaimedElsewhere(user, draftId);
+    throw new NotFoundException('Order not found at the cash counter');
+  }
+
+  private async assertNotClaimedElsewhere(user: AuthenticatedUser, draftId: bigint) {
+    const [elsewhere] = await this.database<Array<{ name: string }>>`
+      select terminals.name from sale_drafts
+      join terminals on terminals.id = sale_drafts.payment_claimed_by_terminal_id
+      where sale_drafts.id = ${draftId.toString()} and sale_drafts.branch_id = ${user.branchId}
+        and sale_drafts.payment_claimed_by_terminal_id <> ${user.terminalId}
+        and sale_drafts.payment_claimed_at > now() - make_interval(secs => ${CLAIM_SECONDS})
+        and sale_drafts.status in ('SENT_TO_CASHIER', 'RESERVED', 'EXPIRED')
+    `;
+    if (elsewhere) {
+      throw new ConflictException(`This bill is being paid at ${elsewhere.name}.`);
+    }
   }
 
   /** The cashier took the cash for this bill. Re-reserves stock first if the hold expired. */
@@ -161,6 +252,7 @@ export class CashCounterService {
       // A retry of this cashier's own clear replays its sale; anyone else is told it is paid.
       return this.replayOrPaid(user, draftId, input.clientRequestId);
     }
+    await this.assertNotClaimedElsewhere(user, draftId);
     let total = draft.total;
     if (
       draft.status !== 'RESERVED' ||

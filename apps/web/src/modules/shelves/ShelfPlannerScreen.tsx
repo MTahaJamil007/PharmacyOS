@@ -31,8 +31,10 @@ import {
   type ShelfPlannerState,
   type ShelfProposal,
 } from '../../api';
+import { useFeatures } from '../../features';
 import { usePharmacyStore } from '../../store';
 import { FloorPlanEditor } from './FloorPlanEditor';
+import { RackList } from './RackList';
 import { Shop3DView } from './Shop3DView';
 import {
   createFixture,
@@ -68,8 +70,10 @@ import {
   type LengthUnit,
 } from './units';
 
+const VIEW_KEY = 'pharmacy-shelf-view';
+
 type Panel = 'shop' | 'suggest' | 'proposal' | 'done';
-type View = 'plan' | '3d';
+type View = 'plan' | '3d' | 'list';
 type ColorMode = 'speed' | 'fill';
 
 interface Done {
@@ -177,7 +181,26 @@ function PlannerWorkspace(props: WorkspaceProps): React.JSX.Element {
   const [future, setFuture] = useState<readonly Draft[]>([]);
   const [selection, setSelection] = useState<Selection>(null);
   const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
-  const [view, setView] = useState<View>('plan');
+  const features = useFeatures();
+  const has3D = features.SHELF_PLANNER_3D.enabled;
+  const [chosenView, setView] = useState<View>(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_KEY);
+      return saved === '3d' || saved === 'list' ? saved : 'plan';
+    } catch {
+      return 'plan';
+    }
+  });
+  // Shops with shelf names but no 3D planner manage everything from the list.
+  const view: View = has3D ? chosenView : 'list';
+  const chooseView = (next: View) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // The view is only a preference.
+    }
+  };
   const [colorMode, setColorMode] = useState<ColorMode>('speed');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -578,11 +601,22 @@ function PlannerWorkspace(props: WorkspaceProps): React.JSX.Element {
         />
         <div className="planner-toggles">
           <div className="segmented" role="group" aria-label="View">
-            <button type="button" aria-pressed={view === 'plan'} onClick={() => setView('plan')}>
-              Plan
-            </button>
-            <button type="button" aria-pressed={view === '3d'} onClick={() => setView('3d')}>
-              3D
+            {has3D ? (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={view === 'plan'}
+                  onClick={() => chooseView('plan')}
+                >
+                  Plan
+                </button>
+                <button type="button" aria-pressed={view === '3d'} onClick={() => chooseView('3d')}>
+                  3D
+                </button>
+              </>
+            ) : null}
+            <button type="button" aria-pressed={view === 'list'} onClick={() => chooseView('list')}>
+              List
             </button>
           </div>
           <div className="segmented" role="group" aria-label="Colour racks by">
@@ -640,7 +674,7 @@ function PlannerWorkspace(props: WorkspaceProps): React.JSX.Element {
             </button>
           </div>
         ) : null}
-        {props.canReview ? (
+        {props.canReview && has3D ? (
           <button
             type="button"
             className="suggest-button"
@@ -670,7 +704,7 @@ function PlannerWorkspace(props: WorkspaceProps): React.JSX.Element {
       ) : null}
 
       <div className={`planner-body${editable ? '' : ' read-only'}`}>
-        {editable ? (
+        {editable && view !== 'list' ? (
           <nav className="planner-palette" aria-label="Add to the shop">
             <p>Add</p>
             {FIXTURE_KINDS.map((kind) => (
@@ -683,8 +717,25 @@ function PlannerWorkspace(props: WorkspaceProps): React.JSX.Element {
           </nav>
         ) : null}
 
-        <section className="planner-canvas" aria-label={view === 'plan' ? 'Floor plan' : '3D view'}>
-          {view === 'plan' && walkMap ? (
+        <section
+          className="planner-canvas"
+          aria-label={view === 'plan' ? 'Floor plan' : view === '3d' ? '3D view' : 'Rack list'}
+        >
+          {view === 'list' ? (
+            <RackList
+              fixtures={shown}
+              levels={levels}
+              token={token}
+              editable={editable}
+              dirty={dirty}
+              selection={selection}
+              selectedLevel={selectedLevel}
+              onBegin={checkpoint}
+              onChange={(key, patch) => updateFixture(key, patch, false)}
+              onAdd={addFixture}
+              onSelect={selectSomething}
+            />
+          ) : view === 'plan' && walkMap ? (
             <FloorPlanEditor
               floor={draft.floor}
               fixtures={shown}
@@ -745,7 +796,7 @@ function PlannerWorkspace(props: WorkspaceProps): React.JSX.Element {
               onSelect={selectSomething}
             />
           )}
-          <Legend colorMode={colorMode} />
+          {view === 'list' ? null : <Legend colorMode={colorMode} />}
         </section>
 
         <aside className="planner-side">

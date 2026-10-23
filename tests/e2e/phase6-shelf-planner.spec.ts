@@ -360,3 +360,75 @@ test('staff with read access can find where a medicine is kept but cannot edit',
   await page.getByRole('button', { name: /Panadol 500 mg\s*C-1/ }).click();
   await expect(page.getByRole('button', { name: /^C-1/ })).toHaveClass(/active/);
 });
+
+test('the 3D shop turns, moves, zooms and looks at a rack from mouse or keyboard', async ({
+  page,
+}) => {
+  await signIn(page, OWNER);
+  await plannerApi(page);
+  await page.goto('/#/shelves');
+  await page.getByRole('button', { name: 'Start with racks on the walls' }).click();
+  await page.getByRole('button', { name: 'Save layout' }).click();
+  await expect(page.getByRole('button', { name: 'Saved ✓' })).toBeVisible();
+  await page.getByRole('group', { name: 'View' }).getByRole('button', { name: '3D' }).click();
+  const shop = page.getByRole('application', { name: /3D view of the shop/ });
+  const stage = page.locator('.shop3d-stage');
+  const transform = () => stage.evaluate((element) => (element as HTMLElement).style.transform);
+  const start = await transform();
+  const box = (await shop.boundingBox())!;
+  await page.mouse.move(box.x + 30, box.y + 30);
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(transform).not.toBe(start);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(box.x + 130, box.y + 80, { steps: 4 });
+  await page.mouse.up({ button: 'right' });
+  await expect.poll(transform).toContain('translate(100px, 50px)');
+  await shop.getByRole('button', { name: 'A', exact: true }).dispatchEvent('dblclick');
+  await expect.poll(transform).not.toContain('translate3d(0px, 0px, 0px)');
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await expect.poll(transform).toContain('translate3d(0px, 0px, 0px)');
+  const simple = page.getByRole('button', { name: 'Simple graphics' });
+  await simple.click();
+  await expect(simple).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.wall3d')).toHaveCount(0);
+});
+
+test('the list view names racks and levels and shows each level A to Z range', async ({ page }) => {
+  await signIn(page, OWNER);
+  await plannerApi(page);
+  let label: unknown = null;
+  await page.route('**/api/v1/shelf-planner/alphabet', (route) =>
+    json(route, {
+      data: [
+        {
+          slot: { fixtureKey: 'f1', level: 1 },
+          label: 'A-1',
+          first: 'Augmentin',
+          last: 'Calpol',
+          count: 2,
+          capacity: 24,
+          shelfId: '101',
+          shelfLabel: null,
+        },
+      ],
+    }),
+  );
+  await page.route('**/api/v1/shelf-planner/shelves/101/label', (route) => {
+    label = route.request().postDataJSON();
+    return json(route, { shelfId: '101', code: 'A-1', label: 'Pain' });
+  });
+  await page.goto('/#/shelves');
+  await page.getByRole('button', { name: 'Start with racks on the walls' }).click();
+  await page.getByRole('button', { name: 'Save layout' }).click();
+  await expect(page.getByRole('button', { name: 'Saved ✓' })).toBeVisible();
+  await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'List' }).click();
+  const list = page.getByRole('region', { name: 'Rack list' });
+  await expect(list.getByRole('textbox', { name: 'Name of rack A' })).toHaveValue('Wall rack');
+  await expect(list.locator('.level-range', { hasText: 'Augmentin → Calpol' })).toBeVisible();
+  const name = list.getByRole('textbox', { name: 'Name of shelf A-1' });
+  await name.fill('Pain');
+  await name.blur();
+  await expect.poll(() => label).toEqual({ label: 'Pain' });
+  await list.getByRole('textbox', { name: 'Name of rack A' }).fill('Painkillers');
+  await expect(page.getByRole('button', { name: 'Save layout' })).toBeEnabled();
+});

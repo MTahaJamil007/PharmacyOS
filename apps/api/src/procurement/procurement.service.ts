@@ -4,6 +4,7 @@ import type {
   CreatePurchaseOrderRequest,
   CreateDraftPurchaseOrderRequest,
   OrderPurchaseOrderRequest,
+  QuickReceiptRequest,
   ReceivePurchaseOrderRequest,
   ReviewReorderSuggestionRequest,
   SupplierQuoteRequest,
@@ -534,160 +535,305 @@ export class ProcurementService {
       if (!['ORDERED', 'PARTIALLY_RECEIVED'].includes(order.status)) {
         throw new ConflictException('Purchase order is not open for receipt');
       }
-      const [clock] = await transaction<
-        Array<{ today: string }>
-      >`select current_date::text as today`;
-      if (!clock) throw new Error('Database date was unavailable');
-      if (sortedLines.some((line) => line.expiryDate <= clock.today)) {
-        throw new ConflictException('Expired stock cannot be received into sellable inventory');
+      const receiptId = await this.receiveIntoOrder(
+        transaction,
+        user,
+        order.id,
+        sortedLines,
+        input.clientRequestId,
+        input.supplierInvoiceNumber ?? null,
+      );
+      return {
+        receiptId,
+        ...(await this.getPurchaseOrderWith(transaction, user.branchId, order.id)),
+        idempotentReplay: false,
+      };
+    });
+  }
+
+  /**
+   * Receives a delivery that arrived without a purchase order, usually scanned pack by pack.
+   * It records an order and its receipt in one transaction, so stock, cost and the audit trail
+   * are exactly what receiving an order would produce. A retried request returns the same receipt.
+   */
+  async quickReceipt(user: AuthenticatedUser, input: QuickReceiptRequest) {
+    const lineTotals = input.lines.map((line) => {
+      const gross = multiplyMoneyByQuantity(line.costPerPack, line.quantity);
+      const discount = moneyToMinorUnits(line.lineDiscount);
+      if (discount > moneyToMinorUnits(gross)) {
+        throw new ConflictException('Line discount cannot exceed the line gross cost');
       }
-      const receiptLines = sortedLines.map((line) => ({
-        purchaseOrderItemId: line.purchaseOrderItemId.toString(),
-        receivedQuantity: line.receivedQuantity,
-        receivedBonusQuantity: line.receivedBonusQuantity,
-        batchNumber: line.batchNumber,
-        expiryDate: line.expiryDate,
-        salePricePerBaseUnit: line.salePricePerBaseUnit,
-      }));
-      const lockedItems = await transaction<Array<{ id: string }>>`
-        select items.id::text
-        from purchase_order_items items
-        join jsonb_to_recordset(${transaction.json(receiptLines)}) as input(
-          "purchaseOrderItemId" text, "receivedQuantity" text,
-          "receivedBonusQuantity" text, "batchNumber" text,
-          "expiryDate" text, "salePricePerBaseUnit" text
-        ) on input."purchaseOrderItemId"::bigint = items.id
-        where items.purchase_order_id = ${order.id}
-        order by items.id
-        for update of items
+      return minorUnitsToMoney(moneyToMinorUnits(gross) - discount);
+    });
+    const totalCost = sumMoney(lineTotals);
+    return this.database.begin(async (transaction) => {
+      await lockIdempotencyKey(
+        transaction,
+        'PROCUREMENT.QUICK_RECEIPT',
+        user.branchId,
+        input.clientRequestId,
+      );
+      const [existing] = await transaction<Array<{ id: string; purchase_order_id: string }>>`
+        select id::text, purchase_order_id::text from goods_receipts
+        where branch_id = ${user.branchId} and client_request_id = ${input.clientRequestId}
       `;
-      if (lockedItems.length !== receiptLines.length) {
-        throw new NotFoundException('One or more purchase-order items were not found');
+      if (existing) {
+        return {
+          receiptId: existing.id,
+          purchaseOrderId: existing.purchase_order_id,
+          totalCost,
+          lineCount: input.lines.length,
+          idempotentReplay: true,
+        };
       }
-      const [receipt] = await transaction<Array<{ id: string }>>`
-        insert into goods_receipts (
-          branch_id, purchase_order_id, received_by_user_id, client_request_id,
-          supplier_invoice_number
+      const [supplier] = await transaction<Array<{ id: string }>>`
+        select id::text from suppliers where id = ${input.supplierId.toString()}
+          and branch_id = ${user.branchId} and is_active = true and deleted_at is null
+      `;
+      if (!supplier) throw new NotFoundException('Active supplier not found');
+      const [order] = await transaction<Array<{ id: string; order_number: string }>>`
+        insert into purchase_orders (
+          branch_id, supplier_id, created_by_user_id, order_number, supplier_invoice_number,
+          status, ordered_at, total_cost, client_request_id, direct_receipt
         ) values (
-          ${user.branchId}, ${order.id}, ${user.id}, ${input.clientRequestId},
-          ${input.supplierInvoiceNumber ?? null}
-        ) returning id::text
+          ${user.branchId}, ${supplier.id}, ${user.id},
+          concat('DR-', to_char(now() at time zone 'Asia/Karachi', 'YYYYMMDD'), '-',
+            upper(substr(encode(digest(${input.clientRequestId}, 'sha256'), 'hex'), 1, 10))),
+          ${input.supplierInvoiceNumber ?? null}, 'ORDERED', now(), ${totalCost},
+          ${input.clientRequestId}, true
+        ) returning id::text, order_number
       `;
-      if (!receipt) throw new Error('Goods receipt creation did not return an identifier');
-      const [batchResult] = await transaction<Array<{ processed_count: number }>>`
-        with input as materialized (
-          select "purchaseOrderItemId"::bigint as purchase_order_item_id,
-            "receivedQuantity"::numeric as received_quantity,
-            "receivedBonusQuantity"::numeric as received_bonus_quantity,
-            "batchNumber" as batch_number, "expiryDate"::date as expiry_date,
-            "salePricePerBaseUnit"::numeric as sale_price
-          from jsonb_to_recordset(${transaction.json(receiptLines)}) as rows(
-            "purchaseOrderItemId" text, "receivedQuantity" text,
-            "receivedBonusQuantity" text, "batchNumber" text,
-            "expiryDate" text, "salePricePerBaseUnit" text
+      if (!order) throw new Error('Direct receipt order was not created');
+      const lines: ReceivePurchaseOrderRequest['lines'] = [];
+      for (const line of input.lines) {
+        const [item] = await transaction<Array<{ id: string }>>`
+          insert into purchase_order_items (
+            purchase_order_id, medicine_id, ordered_qty, unit_cost, line_discount, bonus_qty,
+            base_units_per_order_unit
           )
-        ), updated_items as (
-          update purchase_order_items items set
-            received_qty = items.received_qty + input.received_quantity,
-            received_bonus_qty = items.received_bonus_qty + input.received_bonus_quantity
-          from input
-          where items.id = input.purchase_order_item_id
-            and items.purchase_order_id = ${order.id}
-            and items.received_qty + input.received_quantity <= items.ordered_qty
-            and items.received_bonus_qty + input.received_bonus_quantity <= items.bonus_qty
-          returning items.id, items.medicine_id, items.ordered_qty, items.bonus_qty,
-            items.unit_cost, items.line_discount, items.base_units_per_order_unit,
-            input.received_quantity, input.received_bonus_quantity,
-            input.batch_number, input.expiry_date, input.sale_price
-        ), prepared as (
-          select updated_items.*,
-            (received_quantity + received_bonus_quantity) * base_units_per_order_unit
-              as received_base_quantity,
-            round(greatest(ordered_qty * unit_cost - line_discount, 0)
-              / nullif((ordered_qty + bonus_qty) * base_units_per_order_unit, 0), 8)
-              as effective_cost
-          from updated_items
-        ), upserted_batches as (
-          insert into inventory_batches (
-            branch_id, medicine_id, purchase_order_item_id, batch_number, expiry_date,
-            cost_price, sale_price, current_qty, status
-          )
-          select ${user.branchId}, medicine_id, id, batch_number, expiry_date,
-            effective_cost, sale_price, received_base_quantity, 'SELLABLE'
-          from prepared order by id
-          on conflict on constraint inventory_batches_acquisition_lot_key do update set
-            current_qty = inventory_batches.current_qty + excluded.current_qty,
-            sale_price = excluded.sale_price, status = 'SELLABLE', deleted_at = null
-          returning id, purchase_order_item_id, current_qty
-        ), receipt_items as (
-          insert into goods_receipt_items (
-            goods_receipt_id, purchase_order_item_id, inventory_batch_id, received_order_qty,
-            received_bonus_qty, base_units_per_order_unit, effective_cost_per_base_unit,
-            batch_number, expiry_date
-          )
-          select ${receipt.id}, prepared.id, upserted_batches.id, prepared.received_quantity,
-            prepared.received_bonus_quantity, prepared.base_units_per_order_unit,
-            prepared.effective_cost, prepared.batch_number, prepared.expiry_date
-          from prepared join upserted_batches
-            on upserted_batches.purchase_order_item_id = prepared.id
-          order by prepared.id
-          returning id, inventory_batch_id, purchase_order_item_id, received_base_qty
-        ), movements as (
-          insert into stock_movements (
-            branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
-            purchase_order_item_id, performed_by_user_id, reason, metadata
-          )
-          select ${user.branchId}, receipt_items.inventory_batch_id, 'PURCHASE_RECEIPT',
-            receipt_items.received_base_qty, upserted_batches.current_qty,
-            receipt_items.purchase_order_item_id, ${user.id}, 'Goods receipt',
-            jsonb_build_object('goodsReceiptId', ${receipt.id}::text,
-              'goodsReceiptItemId', receipt_items.id::text)
-          from receipt_items join upserted_batches
-            on upserted_batches.id = receipt_items.inventory_batch_id
-          order by receipt_items.purchase_order_item_id
-          returning id
-        )
-        select count(*)::int as processed_count from movements
-      `;
-      if ((batchResult?.processed_count ?? 0) !== receiptLines.length) {
-        throw new ConflictException('Receipt quantity exceeds the outstanding ordered quantity');
-      }
-      const [completion] = await transaction<Array<{ complete: boolean }>>`
-        select not exists (
-          select 1 from purchase_order_items where purchase_order_id = ${order.id}
-            and (received_qty < ordered_qty or received_bonus_qty < bonus_qty)
-        ) as complete
-      `;
-      if (!completion) throw new Error('Purchase order completion could not be determined');
-      const status = completion.complete ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
-      await transaction`
-        update purchase_orders set status = ${status},
-          received_at = case when ${completion.complete} then now() else received_at end,
-          supplier_invoice_number = coalesce(${input.supplierInvoiceNumber ?? null}, supplier_invoice_number)
-        where id = ${order.id}
-      `;
-      if (completion.complete) {
-        await transaction`
-          update reorder_suggestions set status = 'RECEIVED'
-          where draft_purchase_order_id = ${order.id} and status = 'ORDERED'
+          select ${order.id}, medicines.id, ${line.quantity}, ${line.costPerPack},
+            ${line.lineDiscount}, ${line.bonusQuantity}, ${line.unitsPerPack}
+          from medicines where medicines.id = ${line.medicineId.toString()}
+            and medicines.is_active = true and medicines.deleted_at is null
+          returning id::text
         `;
+        if (!item) throw new NotFoundException('One or more active medicines were not found');
+        lines.push({
+          purchaseOrderItemId: BigInt(item.id),
+          receivedQuantity: line.quantity,
+          receivedBonusQuantity: line.bonusQuantity,
+          batchNumber: line.batchNumber,
+          expiryDate: line.expiryDate,
+          salePricePerBaseUnit: line.salePricePerUnit,
+        });
       }
+      const receiptId = await this.receiveIntoOrder(
+        transaction,
+        user,
+        order.id,
+        lines,
+        input.clientRequestId,
+        input.supplierInvoiceNumber ?? null,
+      );
       await transaction`
         insert into audit_events (
           branch_id, user_id, terminal_id, event_type, entity_type, entity_id, request_id,
           metadata
         ) values (
-          ${user.branchId}, ${user.id}, ${user.terminalId}, 'GOODS_RECEIPT.COMPLETED',
-          'goods_receipt', ${receipt.id}, ${input.clientRequestId},
-          ${transaction.json({ purchaseOrderId: order.id, lineCount: sortedLines.length, purchaseOrderStatus: status })}
+          ${user.branchId}, ${user.id}, ${user.terminalId}, 'GOODS_RECEIPT.DIRECT',
+          'goods_receipt', ${receiptId}, ${input.clientRequestId},
+          ${transaction.json({
+            purchaseOrderId: order.id,
+            lineCount: input.lines.length,
+            scannedLines: input.lines.filter((line) => line.scannedCode).length,
+            totalCost,
+          })}
         )
       `;
+      // Where each received medicine lives, so staff know where to put the new stock.
+      const shelves = await transaction<Array<{ medicineId: string; shelf: string | null }>>`
+        select medicines.id::text as "medicineId", location.code as shelf
+        from medicines
+        left join lateral (
+          select shelves.code from medicine_shelf_locations locations
+          join shelves on shelves.id = locations.shelf_id
+          where locations.medicine_id = medicines.id and locations.is_primary
+            and shelves.branch_id = ${user.branchId} and shelves.is_active
+          limit 1
+        ) location on true
+        where medicines.id in ${transaction([...new Set(input.lines.map((line) => line.medicineId.toString()))])}
+      `;
       return {
-        receiptId: receipt.id,
-        ...(await this.getPurchaseOrderWith(transaction, user.branchId, order.id)),
+        receiptId,
+        purchaseOrderId: order.id,
+        orderNumber: order.order_number,
+        totalCost,
+        lineCount: input.lines.length,
+        shelves,
         idempotentReplay: false,
       };
     });
+  }
+
+  /**
+   * Posts a goods receipt against an open order: batches, stock ledger, order status, audit.
+   * Shared by receiving an order and by scan-and-receive, so both obey the same rules.
+   */
+  private async receiveIntoOrder(
+    transaction: DatabaseTransaction,
+    user: AuthenticatedUser,
+    orderId: string,
+    lines: ReceivePurchaseOrderRequest['lines'],
+    clientRequestId: string,
+    supplierInvoiceNumber: string | null,
+  ): Promise<string> {
+    const [clock] = await transaction<Array<{ today: string }>>`select current_date::text as today`;
+    if (!clock) throw new Error('Database date was unavailable');
+    if (lines.some((line) => line.expiryDate <= clock.today)) {
+      throw new ConflictException('Expired stock cannot be received into sellable inventory');
+    }
+    const receiptLines = lines.map((line) => ({
+      purchaseOrderItemId: line.purchaseOrderItemId.toString(),
+      receivedQuantity: line.receivedQuantity,
+      receivedBonusQuantity: line.receivedBonusQuantity,
+      batchNumber: line.batchNumber,
+      expiryDate: line.expiryDate,
+      salePricePerBaseUnit: line.salePricePerBaseUnit,
+    }));
+    const lockedItems = await transaction<Array<{ id: string }>>`
+      select items.id::text
+      from purchase_order_items items
+      join jsonb_to_recordset(${transaction.json(receiptLines)}) as input(
+        "purchaseOrderItemId" text, "receivedQuantity" text,
+        "receivedBonusQuantity" text, "batchNumber" text,
+        "expiryDate" text, "salePricePerBaseUnit" text
+      ) on input."purchaseOrderItemId"::bigint = items.id
+      where items.purchase_order_id = ${orderId}
+      order by items.id
+      for update of items
+    `;
+    if (lockedItems.length !== receiptLines.length) {
+      throw new NotFoundException('One or more purchase-order items were not found');
+    }
+    const [receipt] = await transaction<Array<{ id: string }>>`
+      insert into goods_receipts (
+        branch_id, purchase_order_id, received_by_user_id, client_request_id,
+        supplier_invoice_number
+      ) values (
+        ${user.branchId}, ${orderId}, ${user.id}, ${clientRequestId},
+        ${supplierInvoiceNumber}
+      ) returning id::text
+    `;
+    if (!receipt) throw new Error('Goods receipt creation did not return an identifier');
+    const [batchResult] = await transaction<Array<{ processed_count: number }>>`
+      with input as materialized (
+        select "purchaseOrderItemId"::bigint as purchase_order_item_id,
+          "receivedQuantity"::numeric as received_quantity,
+          "receivedBonusQuantity"::numeric as received_bonus_quantity,
+          "batchNumber" as batch_number, "expiryDate"::date as expiry_date,
+          "salePricePerBaseUnit"::numeric as sale_price
+        from jsonb_to_recordset(${transaction.json(receiptLines)}) as rows(
+          "purchaseOrderItemId" text, "receivedQuantity" text,
+          "receivedBonusQuantity" text, "batchNumber" text,
+          "expiryDate" text, "salePricePerBaseUnit" text
+        )
+      ), updated_items as (
+        update purchase_order_items items set
+          received_qty = items.received_qty + input.received_quantity,
+          received_bonus_qty = items.received_bonus_qty + input.received_bonus_quantity
+        from input
+        where items.id = input.purchase_order_item_id
+          and items.purchase_order_id = ${orderId}
+          and items.received_qty + input.received_quantity <= items.ordered_qty
+          and items.received_bonus_qty + input.received_bonus_quantity <= items.bonus_qty
+        returning items.id, items.medicine_id, items.ordered_qty, items.bonus_qty,
+          items.unit_cost, items.line_discount, items.base_units_per_order_unit,
+          input.received_quantity, input.received_bonus_quantity,
+          input.batch_number, input.expiry_date, input.sale_price
+      ), prepared as (
+        select updated_items.*,
+          (received_quantity + received_bonus_quantity) * base_units_per_order_unit
+            as received_base_quantity,
+          round(greatest(ordered_qty * unit_cost - line_discount, 0)
+            / nullif((ordered_qty + bonus_qty) * base_units_per_order_unit, 0), 8)
+            as effective_cost
+        from updated_items
+      ), upserted_batches as (
+        insert into inventory_batches (
+          branch_id, medicine_id, purchase_order_item_id, batch_number, expiry_date,
+          cost_price, sale_price, current_qty, status
+        )
+        select ${user.branchId}, medicine_id, id, batch_number, expiry_date,
+          effective_cost, sale_price, received_base_quantity, 'SELLABLE'
+        from prepared order by id
+        on conflict on constraint inventory_batches_acquisition_lot_key do update set
+          current_qty = inventory_batches.current_qty + excluded.current_qty,
+          sale_price = excluded.sale_price, status = 'SELLABLE', deleted_at = null
+        returning id, purchase_order_item_id, current_qty
+      ), receipt_items as (
+        insert into goods_receipt_items (
+          goods_receipt_id, purchase_order_item_id, inventory_batch_id, received_order_qty,
+          received_bonus_qty, base_units_per_order_unit, effective_cost_per_base_unit,
+          batch_number, expiry_date
+        )
+        select ${receipt.id}, prepared.id, upserted_batches.id, prepared.received_quantity,
+          prepared.received_bonus_quantity, prepared.base_units_per_order_unit,
+          prepared.effective_cost, prepared.batch_number, prepared.expiry_date
+        from prepared join upserted_batches
+          on upserted_batches.purchase_order_item_id = prepared.id
+        order by prepared.id
+        returning id, inventory_batch_id, purchase_order_item_id, received_base_qty
+      ), movements as (
+        insert into stock_movements (
+          branch_id, inventory_batch_id, movement_type, quantity_delta, quantity_after,
+          purchase_order_item_id, performed_by_user_id, reason, metadata
+        )
+        select ${user.branchId}, receipt_items.inventory_batch_id, 'PURCHASE_RECEIPT',
+          receipt_items.received_base_qty, upserted_batches.current_qty,
+          receipt_items.purchase_order_item_id, ${user.id}, 'Goods receipt',
+          jsonb_build_object('goodsReceiptId', ${receipt.id}::text,
+            'goodsReceiptItemId', receipt_items.id::text)
+        from receipt_items join upserted_batches
+          on upserted_batches.id = receipt_items.inventory_batch_id
+        order by receipt_items.purchase_order_item_id
+        returning id
+      )
+      select count(*)::int as processed_count from movements
+    `;
+    if ((batchResult?.processed_count ?? 0) !== receiptLines.length) {
+      throw new ConflictException('Receipt quantity exceeds the outstanding ordered quantity');
+    }
+    const [completion] = await transaction<Array<{ complete: boolean }>>`
+      select not exists (
+        select 1 from purchase_order_items where purchase_order_id = ${orderId}
+          and (received_qty < ordered_qty or received_bonus_qty < bonus_qty)
+      ) as complete
+    `;
+    if (!completion) throw new Error('Purchase order completion could not be determined');
+    const status = completion.complete ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
+    await transaction`
+      update purchase_orders set status = ${status},
+        received_at = case when ${completion.complete} then now() else received_at end,
+        supplier_invoice_number = coalesce(${supplierInvoiceNumber}, supplier_invoice_number)
+      where id = ${orderId}
+    `;
+    if (completion.complete) {
+      await transaction`
+        update reorder_suggestions set status = 'RECEIVED'
+        where draft_purchase_order_id = ${orderId} and status = 'ORDERED'
+      `;
+    }
+    await transaction`
+      insert into audit_events (
+        branch_id, user_id, terminal_id, event_type, entity_type, entity_id, request_id,
+        metadata
+      ) values (
+        ${user.branchId}, ${user.id}, ${user.terminalId}, 'GOODS_RECEIPT.COMPLETED',
+        'goods_receipt', ${receipt.id}, ${clientRequestId},
+        ${transaction.json({ purchaseOrderId: orderId, lineCount: lines.length, purchaseOrderStatus: status })}
+      )
+    `;
+    return receipt.id;
   }
 
   private async lockPurchaseOrder(

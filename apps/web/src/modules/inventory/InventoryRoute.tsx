@@ -1,12 +1,10 @@
 import { AppShell } from '../../components/AppShell';
-import { InventoryIntelligence } from './InventoryIntelligence';
-import { InventoryOperations } from './InventoryOperations';
+import { InventoryHub } from './InventoryHub';
 
 export default function InventoryRoute(): React.JSX.Element {
   return (
     <AppShell>
-      <InventoryIntelligence />
-      <InventoryOperations />
+      <InventoryHub />
     </AppShell>
   );
 }

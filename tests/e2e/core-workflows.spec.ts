@@ -356,6 +356,10 @@ test('operator reviews safe shelf and reorder recommendations', async ({ page })
     return json(route, { id: '2', status: 'REVIEWED' }, 201);
   });
   await page.goto('/#/inventory');
+  await page
+    .getByRole('navigation', { name: 'Stock sections' })
+    .getByRole('button', { name: 'Reviews and batches' })
+    .click();
   await expect(page.getByText('Fast Picker')).toBeVisible();
   await page.getByRole('button', { name: 'Apply' }).click();
   await expect(page.getByText('Fast Picker')).toBeHidden();

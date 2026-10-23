@@ -3,8 +3,10 @@ import { dashboardQuerySchema, PERMISSIONS } from '@pharmacy/shared';
 
 import { CurrentUser, RequireAnyPermission } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { DashboardService } from './dashboard.service.js';
 
+@RequireFeature('OWNER_DASHBOARD')
 @Controller('dashboard')
 export class DashboardController {
   constructor(@Inject(DashboardService) private readonly dashboard: DashboardService) {}

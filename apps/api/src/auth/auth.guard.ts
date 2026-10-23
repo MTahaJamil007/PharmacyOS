@@ -11,7 +11,10 @@ import { createHash } from 'node:crypto';
 
 import type { Environment } from '@pharmacy/config';
 import type { Database } from '@pharmacy/database';
+import type { FeatureKey } from '@pharmacy/shared';
 import { DATABASE, ENVIRONMENT } from '../database.module.js';
+import { FEATURE_METADATA_KEY } from '../features/features.decorator.js';
+import { FeaturesService } from '../features/features.service.js';
 import { ANY_PERMISSION_METADATA_KEY, PERMISSION_METADATA_KEY } from './auth.decorators.js';
 import type { AuthenticatedRequest, AuthenticatedUser } from './auth.types.js';
 
@@ -21,6 +24,7 @@ export class AuthGuard implements CanActivate {
     @Inject(DATABASE) private readonly database: Database,
     @Inject(ENVIRONMENT) private readonly environment: Environment,
     @Inject(Reflector) private readonly reflector: Reflector,
+    @Inject(FeaturesService) private readonly features: FeaturesService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -107,6 +111,17 @@ export class AuthGuard implements CanActivate {
       !requiredAny.some((permission) => user.permissions.includes(permission))
     ) {
       throw new ForbiddenException('This account lacks the required permission');
+    }
+    const features = this.reflector.getAllAndOverride<FeatureKey[]>(FEATURE_METADATA_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (features && features.length > 0) {
+      if (!(await this.features.isEnabled(user.branchId, features))) {
+        throw new ForbiddenException(
+          'This feature is not switched on for your shop. Ask your software provider.',
+        );
+      }
     }
     return true;
   }

@@ -3,8 +3,10 @@ import { aiAuditQuerySchema, ownerAiChatSchema, PERMISSIONS } from '@pharmacy/sh
 
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { OwnerAiService } from './owner-ai.service.js';
 
+@RequireFeature('OWNER_AI')
 @Controller('owner-ai')
 export class OwnerAiController {
   constructor(@Inject(OwnerAiService) private readonly ownerAiService: OwnerAiService) {}

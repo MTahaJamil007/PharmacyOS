@@ -4,6 +4,7 @@ import { decimalToScaledInteger } from './decimal.js';
 import { PAYMENT_METHODS } from './domain.js';
 import { normalizeDosage } from './dosage.js';
 import { moneyToMinorUnits, sumMoney } from './money.js';
+import { PLAN_CODES } from './features.js';
 import {
   ENTRANCE_WALLS,
   FIXTURE_KINDS,
@@ -843,7 +844,9 @@ export const platformAuditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
-export const sendToCashierSchema = z.object({ customerId: idSchema.optional() }).strict();
+export const sendToCashierSchema = z
+  .object({ customerId: idSchema.optional(), cashCounterTerminalId: idSchema.optional() })
+  .strict();
 
 export const clearCounterPaymentSchema = z
   .object({
@@ -919,6 +922,12 @@ export const saveShelfLayoutSchema = z
 export const shelfPlacementSchema = z.object({ medicineId: idSchema, shelfId: idSchema }).strict();
 export const shelfPlacementRemoveSchema = z.object({ medicineId: idSchema }).strict();
 export const shelfMedicineSearchSchema = z.object({ query: z.string().trim().min(1).max(80) });
+export const shelfLabelSchema = z
+  .object({ label: z.string().trim().min(1).max(60).nullable() })
+  .strict();
+export const alphabetPlaceSchema = z
+  .object({ medicineId: idSchema, apply: z.boolean().default(false) })
+  .strict();
 
 export const generateShelfProposalSchema = z
   .object({ mode: z.enum(PLAN_MODES), grouping: z.enum(PLACEMENT_GROUPINGS) })
@@ -947,3 +956,57 @@ export type SaveShelfLayoutRequest = z.infer<typeof saveShelfLayoutSchema>;
 export type ShelfPlacementRequest = z.infer<typeof shelfPlacementSchema>;
 export type GenerateShelfProposalRequest = z.infer<typeof generateShelfProposalSchema>;
 export type ApplyShelfProposalRequest = z.infer<typeof applyShelfProposalSchema>;
+
+const featureSettingValues = z.record(z.string().max(40), z.union([z.number(), z.boolean()]));
+export const featureSettingsSchema = z.object({ settings: featureSettingValues }).strict();
+export const featureOverrideSchema = z
+  .object({ enabled: z.boolean().nullable().optional(), settings: featureSettingValues.optional() })
+  .strict();
+export const shopPlanSchema = z.object({ plan: z.enum(PLAN_CODES) }).strict();
+
+/** One scanned or typed line of a delivery received without a prior purchase order. */
+export const quickReceiptLineSchema = z
+  .object({
+    medicineId: idSchema,
+    /** Packs (order units) received and paid for. */
+    quantity: positiveQuantitySchema,
+    bonusQuantity: quantitySchema.default('0'),
+    unitsPerPack: positiveQuantitySchema,
+    costPerPack: moneySchema,
+    lineDiscount: moneySchema.default('0'),
+    batchNumber: z.string().trim().min(1).max(120),
+    expiryDate: z.iso.date(),
+    salePricePerUnit: moneySchema,
+    scannedCode: z.string().trim().max(200).optional(),
+  })
+  .strict();
+
+export const quickReceiptSchema = z
+  .object({
+    clientRequestId: clientRequestIdSchema,
+    supplierId: idSchema,
+    supplierInvoiceNumber: z.string().trim().min(1).max(120).optional(),
+    lines: z.array(quickReceiptLineSchema).min(1).max(300),
+  })
+  .strict();
+
+export const scanLookupSchema = z.object({ code: z.string().min(1).max(300) });
+
+export const linkBarcodeSchema = z
+  .object({ medicineId: idSchema, code: z.string().trim().min(4).max(300) })
+  .strict();
+
+export const customerRequestSchema = z
+  .object({
+    medicineId: idSchema.optional(),
+    requestedName: z.string().trim().min(2).max(120),
+    quantity: positiveQuantitySchema.optional(),
+  })
+  .strict();
+
+export const stockAlertQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(730).optional(),
+});
+
+export type QuickReceiptRequest = z.infer<typeof quickReceiptSchema>;
+export type CustomerRequestInput = z.infer<typeof customerRequestSchema>;

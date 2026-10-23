@@ -31,6 +31,13 @@ export interface MedicineSearchResult {
   readonly nearestExpiry: string | null;
   readonly daysToExpiry: number | null;
   readonly salePrice: string | null;
+  /** Tablet, syrup, injection: shown beside every name so look-alike products are not confused. */
+  readonly dosageForm?: string | null;
+  readonly unitName?: string | null;
+  readonly requiresPrescription?: boolean;
+  /** How the medicine was found; BARCODE means an exact scan, never a guess. */
+  readonly matchedBy?:
+    'BARCODE' | 'EXACT_NAME' | 'PREFIX' | 'WORDS' | 'SIMILAR' | 'SAME_FORMULATION';
 }
 
 export interface FailedJobsResponse {

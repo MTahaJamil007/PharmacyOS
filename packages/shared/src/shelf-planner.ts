@@ -1422,3 +1422,129 @@ export function placeNewFixture(
   }
   return best?.spot ?? null;
 }
+
+/** Name order staff can follow on a shelf: case and punctuation are ignored, digits sort as numbers. */
+export function compareMedicineNames(left: string, right: string): number {
+  const key = (name: string) =>
+    name
+      .normalize('NFKC')
+      .replace(/[^\p{L}\p{N} ]+/gu, ' ')
+      .trim();
+  return key(left).localeCompare(key(right), 'en', { sensitivity: 'base', numeric: true });
+}
+
+export interface AlphabetLevel {
+  readonly slot: SlotRef;
+  readonly label: string;
+  readonly capacity: number;
+  /** Medicines on the level now; their order does not matter. */
+  readonly medicines: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+}
+
+export interface AlphabetRange {
+  readonly slot: SlotRef;
+  readonly label: string;
+  readonly first: string | null;
+  readonly last: string | null;
+  readonly count: number;
+  readonly capacity: number;
+}
+
+/** The first and last name on each level, for shelf labels like "A-3: Abocal to Amlodac". */
+export function alphabetRanges(levels: readonly AlphabetLevel[]): AlphabetRange[] {
+  return levels.map((level) => {
+    const sorted = [...level.medicines].sort((a, b) => compareMedicineNames(a.name, b.name));
+    return {
+      slot: level.slot,
+      label: level.label,
+      first: sorted[0]?.name ?? null,
+      last: sorted.at(-1)?.name ?? null,
+      count: sorted.length,
+      capacity: level.capacity,
+    };
+  });
+}
+
+export interface AlphabetPlacement {
+  readonly target: SlotRef;
+  readonly targetLabel: string;
+  /** Neighbours on the target level, so staff know exactly where in the row it goes. */
+  readonly after: string | null;
+  readonly before: string | null;
+  /** Medicines that shift one level along to make room, in the order to move them. */
+  readonly moves: ReadonlyArray<{
+    readonly medicineId: string;
+    readonly name: string;
+    readonly from: SlotRef;
+    readonly fromLabel: string;
+    readonly to: SlotRef;
+    readonly toLabel: string;
+  }>;
+}
+
+/**
+ * Where a new medicine goes on shelves kept in A to Z order (levels in reading order). It joins
+ * the level whose names surround it; when that level is full, the last medicine on it shifts to
+ * the start of the next level, and so on until a level has room. That is the fewest moves that
+ * keep the whole shop in order. Returns null when every level from the target onward is full.
+ */
+export function placeAlphabetically(
+  levels: readonly AlphabetLevel[],
+  medicine: { readonly id: string; readonly name: string },
+): AlphabetPlacement | null {
+  if (levels.length === 0) return null;
+  const rows = levels.map((level) =>
+    [...level.medicines].sort((a, b) => compareMedicineNames(a.name, b.name)),
+  );
+  let target = rows.findIndex(
+    (row) => row.length > 0 && compareMedicineNames(medicine.name, row.at(-1)!.name) <= 0,
+  );
+  if (target === -1) {
+    // Sorts after everything: the level after the last used one, or the last used one itself.
+    const lastUsed = rows.reduce((found, row, index) => (row.length > 0 ? index : found), -1);
+    target = lastUsed === -1 ? 0 : lastUsed;
+    if (rows[target]!.length >= levels[target]!.capacity && target + 1 < levels.length) {
+      target += 1;
+    }
+  } else if (target > 0 && compareMedicineNames(medicine.name, rows[target]![0]!.name) < 0) {
+    // It sorts before this level's first name: the previous level's end is just as right if it has room.
+    const previous = target - 1;
+    if (rows[previous]!.length < levels[previous]!.capacity) target = previous;
+  }
+  const moves: Array<AlphabetPlacement['moves'][number]> = [];
+  const inserted = [...rows[target]!, medicine].sort((a, b) =>
+    compareMedicineNames(a.name, b.name),
+  );
+  const position = inserted.findIndex((item) => item.id === medicine.id);
+  let overflow = inserted.length > levels[target]!.capacity ? inserted.at(-1)! : null;
+  let level = target;
+  while (overflow) {
+    const next = level + 1;
+    if (next >= levels.length) return null;
+    if (overflow.id === medicine.id) {
+      // The new medicine itself is last on a full level: it starts the next level instead.
+      return placeAlphabetically(levels.slice(next), medicine);
+    }
+    moves.push({
+      medicineId: overflow.id,
+      name: overflow.name,
+      from: levels[level]!.slot,
+      fromLabel: levels[level]!.label,
+      to: levels[next]!.slot,
+      toLabel: levels[next]!.label,
+    });
+    const nextRow = [...rows[next]!, overflow];
+    overflow =
+      nextRow.length > levels[next]!.capacity
+        ? [...nextRow].sort((a, b) => compareMedicineNames(a.name, b.name)).at(-1)!
+        : null;
+    level = next;
+  }
+  return {
+    target: levels[target]!.slot,
+    targetLabel: levels[target]!.label,
+    after: inserted[position - 1]?.name ?? null,
+    before: inserted[position + 1]?.name ?? null,
+    moves,
+  };
+}

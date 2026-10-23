@@ -3,8 +3,10 @@ import { budgetRegimenSchema, PERMISSIONS } from '@pharmacy/shared';
 
 import { CurrentUser, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { BudgetRegimenService } from './budget-regimen.service.js';
 
+@RequireFeature('COUNTER_BUDGET_PLAN')
 @Controller('budget-regimen')
 export class BudgetRegimenController {
   constructor(

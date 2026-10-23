@@ -13,6 +13,7 @@ import {
   addCashMovement,
   approveCashVariance,
   cancelCashCounterOrder,
+  claimCashCounterBill,
   clearCashCounterPayment,
   closeCashSession,
   getCashCounterQueue,
@@ -55,20 +56,39 @@ function OrderCard({
   busy,
   onClear,
   onCancel,
+  onClaim,
 }: {
   readonly order: CashCounterOrder;
   readonly busy: boolean;
   readonly onClear: (tendered: string | null) => void;
   readonly onCancel: () => void;
+  readonly onClaim: () => void;
 }): React.JSX.Element {
+  const elsewhere = order.claimedBy && !order.claimedHere ? order.claimedBy : null;
   const [received, setReceived] = useState('');
   const change = changeFor(received, order.total);
   const short = received.trim() !== '' && MONEY.test(received.trim()) && change === null;
   const clear = (): void => onClear(received.trim() && change !== null ? received.trim() : null);
   return (
-    <article className="bill-card" aria-label={`Bill #${order.id}`}>
+    <article
+      className={[
+        'bill-card',
+        order.forThisCounter ? 'for-here' : '',
+        elsewhere ? 'paid-elsewhere' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-label={`Bill #${order.id}`}
+    >
       <header>
         <strong className="bill-number">#{order.id}</strong>
+        <em className="bill-route">
+          {order.forThisCounter
+            ? 'For this counter'
+            : order.cashCounterName
+              ? `For ${order.cashCounterName}`
+              : 'Any counter'}
+        </em>
         <span>
           {order.orderTaker} · {order.counterName} · {minutesAgo(order.queuedAt)}
           {order.customerName ? ` · ${order.customerName}` : ''}
@@ -88,6 +108,11 @@ function OrderCard({
         <span>Bill</span>
         <strong>{formatPkrMoney(order.total)}</strong>
       </div>
+      {elsewhere ? (
+        <p className="bill-elsewhere" role="status">
+          Being paid at {elsewhere}
+        </p>
+      ) : null}
       <div className="bill-pay">
         <label>
           Cash received (optional)
@@ -95,6 +120,8 @@ function OrderCard({
             inputMode="decimal"
             value={received}
             placeholder="e.g. 2000"
+            disabled={Boolean(elsewhere)}
+            onFocus={onClaim}
             onChange={(event) => setReceived(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !short) {
@@ -116,7 +143,7 @@ function OrderCard({
         <button
           type="button"
           className="primary-button bill-clear"
-          disabled={busy || short}
+          disabled={busy || short || Boolean(elsewhere)}
           onClick={clear}
         >
           {busy ? 'Clearing…' : 'Payment received ✓'}
@@ -238,7 +265,18 @@ export function CashCounterScreen(): React.JSX.Element {
     }
   };
 
-  const orders = queue.data?.data ?? [];
+  const [findText, setFindText] = useState('');
+  const allOrders = queue.data?.data ?? [];
+  const wanted = findText.replace(/\D/g, '');
+  const orders = wanted ? allOrders.filter((order) => order.id.includes(wanted)) : allOrders;
+  // Tell other counters this bill is being paid here; the server also checks on clearing.
+  const claim = (order: CashCounterOrder): void => {
+    if (order.claimedHere) return;
+    void claimCashCounterBill(token, order.id).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : 'This bill is being paid elsewhere');
+      void refresh();
+    });
+  };
   const recent = queue.data?.recent ?? [];
   const closingCheck = day ? difference(counted, day.expectedCash) : null;
   const sessionsOff = settings.data?.cashSessionsEnabled === false;
@@ -356,8 +394,29 @@ export function CashCounterScreen(): React.JSX.Element {
         <section className="cash-counter-grid">
           <div className="bill-queue">
             <h2>
-              Waiting for payment <span>{orders.length}</span>
+              Waiting for payment <span>{allOrders.length}</span>
             </h2>
+            {allOrders.length > 3 ? (
+              <label className="find-bill">
+                <span>Find bill #</span>
+                <input
+                  inputMode="numeric"
+                  value={findText}
+                  placeholder="Type the number on the slip"
+                  onChange={(event) => setFindText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      document
+                        .querySelector<HTMLInputElement>(
+                          '.bill-card .bill-pay input:not(:disabled)',
+                        )
+                        ?.focus();
+                    }
+                  }}
+                />
+              </label>
+            ) : null}
             {!canClear ? (
               <p className="inline-error">This account cannot take payments.</p>
             ) : orders.length === 0 ? (
@@ -371,6 +430,7 @@ export function CashCounterScreen(): React.JSX.Element {
                   order={order}
                   busy={busyOrder === order.id}
                   onClear={(tendered) => void clearOrder(order, tendered)}
+                  onClaim={() => claim(order)}
                   onCancel={() =>
                     void act(
                       () => cancelCashCounterOrder(token, order.id),

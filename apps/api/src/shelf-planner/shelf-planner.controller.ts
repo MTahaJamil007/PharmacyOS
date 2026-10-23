@@ -6,10 +6,12 @@ import {
   Inject,
   Param,
   Post,
+  Patch,
   Put,
   Query,
 } from '@nestjs/common';
 import {
+  alphabetPlaceSchema,
   applyShelfProposalSchema,
   generateShelfProposalSchema,
   idSchema,
@@ -17,10 +19,12 @@ import {
   saveShelfLayoutSchema,
   shelfMedicineSearchSchema,
   shelfPlacementRemoveSchema,
+  shelfLabelSchema,
   shelfPlacementSchema,
 } from '@pharmacy/shared';
 import { CurrentUser, RequireAnyPermission, RequirePermissions } from '../auth/auth.decorators.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
+import { RequireFeature } from '../features/features.decorator.js';
 import { ShelfPlannerService } from './shelf-planner.service.js';
 
 interface Parser<T> {
@@ -35,6 +39,7 @@ function parse<T>(schema: Parser<T>, value: unknown): T {
   return parsed.data;
 }
 
+@RequireFeature('SHELF_PLANNER_3D', 'SHELF_LOCATIONS')
 @Controller('shelf-planner')
 export class ShelfPlannerController {
   constructor(@Inject(ShelfPlannerService) private readonly planner: ShelfPlannerService) {}
@@ -73,6 +78,29 @@ export class ShelfPlannerController {
   @RequirePermissions(PERMISSIONS.INVENTORY_SHELF_MANAGE)
   remove(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
     return this.planner.remove(user, parse(shelfPlacementRemoveSchema, body).medicineId);
+  }
+
+  @Patch('shelves/:id/label')
+  @RequirePermissions(PERMISSIONS.INVENTORY_SHELF_MANAGE)
+  label(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: unknown) {
+    return this.planner.setShelfLabel(
+      user,
+      parse(idSchema, id),
+      parse(shelfLabelSchema, body).label,
+    );
+  }
+
+  @Get('alphabet')
+  @RequireAnyPermission(PERMISSIONS.INVENTORY_SHELF_READ, PERMISSIONS.INVENTORY_SHELF_MANAGE)
+  alphabet(@CurrentUser() user: AuthenticatedUser) {
+    return this.planner.alphabet(user);
+  }
+
+  @Post('alphabet/place')
+  @RequirePermissions(PERMISSIONS.INVENTORY_SHELF_MANAGE)
+  alphabetPlace(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
+    const input = parse(alphabetPlaceSchema, body);
+    return this.planner.alphabetPlace(user, input.medicineId, input.apply);
   }
 
   @Get('proposals/current')

@@ -23,6 +23,7 @@ import {
   searchCustomers,
   searchMedicines,
   sendToCashCounter,
+  getCashCounters,
   type FinalizedSale,
   type MedicineSearchResult,
 } from './api';
@@ -53,6 +54,7 @@ import { PaymentDialog } from './modules/pos/PaymentDialog';
 import { ReceiptDialog } from './modules/pos/ReceiptDialog';
 import { ReprintDialog } from './modules/pos/ReprintDialog';
 import { WedgeScannerBuffer } from './modules/pos/scanner';
+import { useFeatures } from './features';
 import { BudgetBox, DiscountBox, type SupervisorApproval } from './modules/pos/SidePanel';
 import { TicketGrid, type TicketGridActions } from './modules/pos/TicketGrid';
 import { useBudgetPlan } from './modules/pos/useBudgetPlan';
@@ -82,6 +84,8 @@ function CounterClock({ timeZone }: { readonly timeZone: string | undefined }): 
     </span>
   );
 }
+
+const TARGET_COUNTER_KEY = 'pharmacy-target-cash-counter';
 
 export function PosWorkspace(): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
@@ -149,6 +153,33 @@ export function PosWorkspace(): React.JSX.Element {
   });
   const sessionsOn = counterSettings.data?.cashSessionsEnabled ?? true;
   const tillOpen = till.data?.status === 'OPEN';
+  const features = useFeatures();
+  const routing = features.MULTI_COUNTER.enabled && sessionsOn && canSend && !tillOpen;
+  const cashCounters = useQuery({
+    queryKey: ['cash-counters'],
+    queryFn: () => getCashCounters(token),
+    enabled: !previewMode && token !== '' && routing,
+    staleTime: 30_000,
+    retry: false,
+  });
+  // Which cash counter this desk sends bills to; empty means any counter may take them.
+  const [targetCounter, setTargetCounter] = useState<string>(() => {
+    try {
+      return localStorage.getItem(TARGET_COUNTER_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const counterOptions = routing ? (cashCounters.data ?? []) : [];
+  const chosenCounter = counterOptions.find((counter) => counter.id === targetCounter);
+  const chooseCounter = (id: string) => {
+    setTargetCounter(id);
+    try {
+      localStorage.setItem(TARGET_COUNTER_KEY, id);
+    } catch {
+      // Without storage the desk simply asks again after a reload.
+    }
+  };
   const checkoutLabel = !sessionsOn
     ? 'Print invoice'
     : tillOpen || !canSend
@@ -243,7 +274,10 @@ export function PosWorkspace(): React.JSX.Element {
         const matches = previewMode
           ? previewMedicines.filter((medicine) => medicine.barcode === barcode)
           : await searchMedicines(token, barcode);
-        const exact = matches.find((medicine) => medicine.barcode === barcode);
+        // The server matched a pack code (including 2D codes) only by an exact barcode key.
+        const exact =
+          matches.find((medicine) => medicine.matchedBy === 'BARCODE') ??
+          matches.find((medicine) => medicine.barcode === barcode);
         if (!exact) throw new Error(`Barcode ${barcode} has no exact medicine match`);
         if (!isSellable(exact)) {
           throw new Error(`${exact.name} has no sellable stock or price at this branch`);
@@ -453,7 +487,12 @@ export function PosWorkspace(): React.JSX.Element {
       const draftId = current.draftId;
       if (!draftId) throw new Error('Sale draft could not be resumed');
       if (mode === 'SEND') {
-        await sendToCashCounter(session.accessToken, draftId, current.customerId);
+        await sendToCashCounter(
+          session.accessToken,
+          draftId,
+          current.customerId,
+          chosenCounter?.id,
+        );
         clearCheckoutAttempt(session.user.terminalId);
         setAttempt(null);
         clearCart();
@@ -461,7 +500,7 @@ export function PosWorkspace(): React.JSX.Element {
         setSelectedCustomer(null);
         setCustomerQuery('');
         setCounterNotice(
-          `Sent to the cash counter · order #${draftId} · ${formatPkrMoney(current.reservedTotal)}`,
+          `Sent to ${chosenCounter?.name ?? 'the cash counter'} · order #${draftId} · ${formatPkrMoney(current.reservedTotal)}`,
         );
         entry.current?.focusSearch();
       } else if (mode === 'INVOICE') {
@@ -492,6 +531,7 @@ export function PosWorkspace(): React.JSX.Element {
     canSend,
     canUseTill,
     cart,
+    chosenCounter,
     checkoutPending,
     clearCart,
     counterSettings.data,
@@ -943,6 +983,32 @@ export function PosWorkspace(): React.JSX.Element {
                 </button>
               )}
             </div>
+            {checkoutLabel === 'Send to cash counter' && counterOptions.length > 1 ? (
+              <div className="counter-choice" role="group" aria-label="Send bills to">
+                <span>Send to</span>
+                <button
+                  type="button"
+                  aria-pressed={!chosenCounter}
+                  onClick={() => chooseCounter('')}
+                >
+                  Any counter
+                </button>
+                {counterOptions.map((counter) => (
+                  <button
+                    key={counter.id}
+                    type="button"
+                    aria-pressed={chosenCounter?.id === counter.id}
+                    title={
+                      counter.cashier ? `${counter.cashier} is taking money here` : 'Not started'
+                    }
+                    onClick={() => chooseCounter(counter.id)}
+                  >
+                    {counter.name}
+                    {counter.waiting > 0 ? <small>{counter.waiting} waiting</small> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <button
               type="button"
               className="primary-button pay-button"
