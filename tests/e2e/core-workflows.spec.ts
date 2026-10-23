@@ -269,6 +269,51 @@ test('cart survives reload and keyboard controls remain complete', async ({ page
   await expect(page.getByRole('heading', { name: 'No items yet' })).toBeVisible();
 });
 
+test('three held bills stay visible across new sales and reload, with selective reopen and delete', async ({
+  page,
+}) => {
+  await authenticated(page);
+  await page.route('**/api/v1/catalog/medicines/search**', (route) =>
+    json(route, { data: [panadol] }),
+  );
+  await page.goto('/#/pos');
+  const add = async (count: string) => {
+    const search = page.getByPlaceholder('Brand, generic, barcode or company');
+    await search.fill('Panadol');
+    await expect(page.getByRole('option', { name: /Panadol 500 mg/ })).toBeVisible();
+    await search.press('Enter');
+    const quantity = page.getByLabel('Quantity', { exact: true });
+    await quantity.fill(count);
+    await quantity.press('Enter');
+    await expect(page.getByLabel('Panadol quantity')).toHaveValue(count);
+  };
+  const held = page.getByRole('region', { name: 'Held bills' });
+  for (const count of ['1', '2', '3']) {
+    await add(count);
+    await page.keyboard.press('F4');
+    await expect(held).toContainText(`Held bills ${count}/3`);
+  }
+  await add('4');
+  await expect(held.getByRole('button', { name: /Reopen bill/ })).toHaveCount(3);
+  await page.keyboard.press('F4');
+  await expect(page.getByRole('status')).toContainText('All 3 hold slots are full');
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('4');
+  await page.reload();
+  await expect(held.getByRole('button', { name: /Reopen bill/ })).toHaveCount(3);
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('4');
+  await held.getByRole('button', { name: 'Reopen bill 2' }).click();
+  await expect(page.getByRole('status')).toContainText('Hold or clear the current bill');
+  await page.keyboard.press('F2');
+  await held.getByRole('button', { name: 'Reopen bill 2' }).click();
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('2');
+  await expect(held).toContainText('Held bills 2/3');
+  page.once('dialog', (dialog) => dialog.accept());
+  await held.getByRole('button', { name: 'Delete bill 1' }).click();
+  await page.reload();
+  await expect(held).toContainText('Held bills 1/3');
+  await expect(page.getByLabel('Panadol quantity')).toHaveValue('2');
+});
+
 test('an expired API session can re-authenticate without losing the counter', async ({ page }) => {
   await authenticated(page);
   await page.route('**/api/v1/catalog/medicines/search**', (route) =>

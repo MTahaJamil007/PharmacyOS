@@ -1,4 +1,4 @@
-import { normalizeDosage } from '@pharmacy/shared';
+import { createClientRequestId, normalizeDosage, type CustomerSummary } from '@pharmacy/shared';
 import { create } from 'zustand';
 
 import type { LoginResponse, MedicineSearchResult } from './api';
@@ -20,7 +20,11 @@ export interface CartLine {
   readonly dosage?: string;
 }
 
+export const MAX_HELD_CARTS = 3;
+
 export interface HeldCart {
+  readonly id: string;
+  readonly customer?: CustomerSummary;
   readonly heldAt: string;
   readonly lines: readonly CartLine[];
   readonly discounts: CartDiscounts;
@@ -29,7 +33,7 @@ export interface HeldCart {
 interface PersistedCartState {
   readonly cart: readonly CartLine[];
   readonly discounts: CartDiscounts;
-  readonly heldCart: HeldCart | null;
+  readonly heldCarts: readonly HeldCart[];
 }
 
 interface PharmacyState extends PersistedCartState {
@@ -44,7 +48,9 @@ interface PharmacyState extends PersistedCartState {
   removeMedicines: (medicineIds: readonly string[]) => void;
   setDiscounts: (discounts: CartDiscounts) => void;
   clearCart: () => void;
-  holdOrResumeCart: () => 'HELD' | 'RESUMED' | 'UNCHANGED';
+  holdOrResumeCart: (customer?: CustomerSummary) => 'HELD' | 'RESUMED' | 'UNCHANGED' | 'FULL';
+  resumeHeldCart: (id: string) => boolean;
+  deleteHeldCart: (id: string) => void;
 }
 
 function readJson(key: string): unknown {
@@ -111,25 +117,33 @@ function withoutLineDiscounts(
 function readCartState(): PersistedCartState {
   const value = readJson(CART_KEY);
   if (typeof value !== 'object' || value === null) {
-    return { cart: [], discounts: EMPTY_DISCOUNTS, heldCart: null };
+    return { cart: [], discounts: EMPTY_DISCOUNTS, heldCarts: [] };
   }
   const candidate = value as Partial<PersistedCartState>;
   const cart = Array.isArray(candidate.cart) ? candidate.cart.filter(isCartLine) : [];
-  let heldCart: HeldCart | null = null;
-  if (
-    typeof candidate.heldCart === 'object' &&
-    candidate.heldCart !== null &&
-    typeof candidate.heldCart.heldAt === 'string' &&
-    Array.isArray(candidate.heldCart.lines)
-  ) {
-    const lines = candidate.heldCart.lines.filter(isCartLine);
-    heldCart = {
-      heldAt: candidate.heldCart.heldAt,
+  // Upgrade the previous single held ticket without losing existing counter work.
+  const legacy = value as { heldCart?: unknown };
+  const candidates = Array.isArray(candidate.heldCarts)
+    ? candidate.heldCarts
+    : legacy.heldCart
+      ? [legacy.heldCart]
+      : [];
+  const heldCarts: HeldCart[] = [];
+  for (const value of candidates) {
+    if (typeof value !== 'object' || value === null) continue;
+    const held = value as Partial<HeldCart>;
+    if (typeof held.heldAt !== 'string' || !Array.isArray(held.lines)) continue;
+    const lines = held.lines.filter(isCartLine);
+    if (lines.length === 0) continue;
+    heldCarts.push({
+      id: typeof held.id === 'string' ? held.id : createClientRequestId(),
+      heldAt: held.heldAt,
       lines,
-      discounts: readDiscounts(candidate.heldCart.discounts, lines),
-    };
+      discounts: readDiscounts(held.discounts, lines),
+      ...(held.customer ? { customer: held.customer } : {}),
+    });
   }
-  return { cart, discounts: readDiscounts(candidate.discounts, cart), heldCart };
+  return { cart, discounts: readDiscounts(candidate.discounts, cart), heldCarts };
 }
 
 function persistCartState(state: PersistedCartState): void {
@@ -161,7 +175,7 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
             return dosage === undefined ? next : withDosage(next, dosage);
           })
         : [...state.cart, withDosage({ medicine, quantity }, dosage ?? null)];
-      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts: state.discounts, heldCarts: state.heldCarts });
       return { cart };
     }),
   setDosage: (medicineIds, dosage) =>
@@ -170,7 +184,7 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
       const cart = state.cart.map((line) =>
         targets.has(line.medicine.id) ? withDosage(line, dosage) : line,
       );
-      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts: state.discounts, heldCarts: state.heldCarts });
       return { cart };
     }),
   changeQuantity: (medicineId, delta) =>
@@ -185,7 +199,7 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
       const discounts = cart.some((line) => line.medicine.id === medicineId)
         ? state.discounts
         : withoutLineDiscounts(state.discounts, [medicineId]);
-      persistCartState({ cart, discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts, heldCarts: state.heldCarts });
       return { cart, discounts };
     }),
   setQuantity: (medicineId, quantity) =>
@@ -194,7 +208,7 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
       const cart = state.cart.map((line) =>
         line.medicine.id === medicineId ? { ...line, quantity } : line,
       );
-      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts: state.discounts, heldCarts: state.heldCarts });
       return { cart };
     }),
   applyQuantities: (quantities) =>
@@ -207,14 +221,14 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
         const quantity = quantities[line.medicine.id];
         return quantity === undefined ? line : { ...line, quantity };
       });
-      persistCartState({ cart, discounts: state.discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts: state.discounts, heldCarts: state.heldCarts });
       return { cart };
     }),
   removeMedicine: (medicineId) =>
     set((state) => {
       const cart = state.cart.filter((line) => line.medicine.id !== medicineId);
       const discounts = withoutLineDiscounts(state.discounts, [medicineId]);
-      persistCartState({ cart, discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts, heldCarts: state.heldCarts });
       return { cart, discounts };
     }),
   removeMedicines: (medicineIds) =>
@@ -222,42 +236,79 @@ export const usePharmacyStore = create<PharmacyState>((set) => ({
       const removed = new Set(medicineIds);
       const cart = state.cart.filter((line) => !removed.has(line.medicine.id));
       const discounts = withoutLineDiscounts(state.discounts, medicineIds);
-      persistCartState({ cart, discounts, heldCart: state.heldCart });
+      persistCartState({ cart, discounts, heldCarts: state.heldCarts });
       return { cart, discounts };
     }),
   setDiscounts: (next) =>
     set((state) => {
       const discounts = readDiscounts(next, state.cart);
-      persistCartState({ cart: state.cart, discounts, heldCart: state.heldCart });
+      persistCartState({ cart: state.cart, discounts, heldCarts: state.heldCarts });
       return { discounts };
     }),
   clearCart: () =>
     set((state) => {
-      persistCartState({ cart: [], discounts: EMPTY_DISCOUNTS, heldCart: state.heldCart });
+      persistCartState({ cart: [], discounts: EMPTY_DISCOUNTS, heldCarts: state.heldCarts });
       return { cart: [], discounts: EMPTY_DISCOUNTS };
     }),
-  holdOrResumeCart: () => {
-    let outcome: 'HELD' | 'RESUMED' | 'UNCHANGED' = 'UNCHANGED';
+  holdOrResumeCart: (customer) => {
+    let outcome: 'HELD' | 'RESUMED' | 'UNCHANGED' | 'FULL' = 'UNCHANGED';
     set((state) => {
-      if (state.cart.length > 0 && state.heldCart === null) {
-        const heldCart = {
+      if (state.cart.length > 0) {
+        if (state.heldCarts.length >= MAX_HELD_CARTS) {
+          outcome = 'FULL';
+          return state;
+        }
+        const held: HeldCart = {
+          id: createClientRequestId(),
           heldAt: new Date().toISOString(),
           lines: state.cart,
           discounts: state.discounts,
+          ...(customer ? { customer } : {}),
         };
-        persistCartState({ cart: [], discounts: EMPTY_DISCOUNTS, heldCart });
+        const next = {
+          cart: [],
+          discounts: EMPTY_DISCOUNTS,
+          heldCarts: [...state.heldCarts, held],
+        };
+        persistCartState(next);
         outcome = 'HELD';
-        return { cart: [], discounts: EMPTY_DISCOUNTS, heldCart };
+        return next;
       }
-      if (state.cart.length === 0 && state.heldCart?.lines.length) {
-        const cart = state.heldCart.lines;
-        const discounts = state.heldCart.discounts;
-        persistCartState({ cart, discounts, heldCart: null });
+      const held = state.heldCarts[0];
+      if (held) {
+        const next = {
+          cart: held.lines,
+          discounts: held.discounts,
+          heldCarts: state.heldCarts.slice(1),
+        };
+        persistCartState(next);
         outcome = 'RESUMED';
-        return { cart, discounts, heldCart: null };
+        return next;
       }
       return state;
     });
     return outcome;
   },
+  resumeHeldCart: (id) => {
+    let resumed = false;
+    set((state) => {
+      const held = state.heldCarts.find((ticket) => ticket.id === id);
+      if (!held || state.cart.length > 0) return state;
+      const next = {
+        cart: held.lines,
+        discounts: held.discounts,
+        heldCarts: state.heldCarts.filter((ticket) => ticket.id !== id),
+      };
+      persistCartState(next);
+      resumed = true;
+      return next;
+    });
+    return resumed;
+  },
+  deleteHeldCart: (id) =>
+    set((state) => {
+      const heldCarts = state.heldCarts.filter((ticket) => ticket.id !== id);
+      persistCartState({ cart: state.cart, discounts: state.discounts, heldCarts });
+      return { heldCarts };
+    }),
 }));

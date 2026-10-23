@@ -245,6 +245,53 @@ test('cashier starts the day, clears a bill from the order desk, and ends the da
   await expect(page.getByRole('heading', { name: 'Start the day' })).toBeVisible();
 });
 
+test('drawer variance requires another manager and can then be approved', async ({ page }) => {
+  await signIn(page, ['cash.open_session', 'cash.approve_variance'], 'Cash counter');
+  const own = summary({ status: 'CLOSING', countedCash: '200.00', variance: '-2800.00' });
+  const other = summary({
+    id: '11',
+    cashierUserId: '6',
+    cashierName: 'Other cashier',
+    status: 'CLOSING',
+    countedCash: '200.00',
+    variance: '-2800.00',
+  });
+  let approved = false;
+  const approvalRequests: string[] = [];
+  await page.route('**/api/v1/pos/counter-settings', (route) =>
+    json(route, { cashSessionsEnabled: true }),
+  );
+  await page.route('**/api/v1/cash-sessions/current', (route) => json(route, own));
+  await page.route('**/api/v1/cash-sessions/pending-variance', (route) =>
+    json(route, { data: approved ? [own] : [own, other] }),
+  );
+  await page.route('**/api/v1/cash-sessions/11/approve-variance', (route) => {
+    const body = route.request().postDataJSON() as { notes: string; clientRequestId: string };
+    expect(body).toMatchObject({ notes: 'Reviewed count and shortage' });
+    approvalRequests.push(body.clientRequestId);
+    if (approvalRequests.length === 1) return route.abort('connectionfailed');
+    approved = true;
+    return json(route, { ...other, status: 'VARIANCE_APPROVED' });
+  });
+  await page.goto('/#/cash');
+  await expect(
+    page.getByText('This day is waiting for variance approval.', { exact: false }),
+  ).toBeVisible();
+  const ownRow = page.locator('.variance-row').filter({ hasText: 'Counter Staff' });
+  await ownRow.getByRole('textbox').fill('Count reviewed');
+  await expect(ownRow.getByRole('button', { name: 'Approve' })).toBeDisabled();
+  await expect(ownRow).toContainText('Another authorized manager');
+  const otherRow = page.locator('.variance-row').filter({ hasText: 'Other cashier' });
+  await otherRow.getByRole('textbox').fill('Reviewed count and shortage');
+  await otherRow.getByRole('button', { name: 'Approve' }).click();
+  await expect(page.getByRole('alert')).toContainText('Cannot reach the pharmacy service');
+  await otherRow.getByRole('button', { name: 'Approve' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Difference approved' })).toBeVisible();
+  expect(approved).toBe(true);
+  expect(approvalRequests).toHaveLength(2);
+  expect(approvalRequests[0]).toBe(approvalRequests[1]);
+});
+
 async function orderDesk(page: Page, settings: { cashSessionsEnabled: boolean }) {
   await signIn(page, ['pos.search', 'pos.create_draft', 'pos.send_to_cashier'], 'Order desk 1');
   await page.route('**/api/v1/pos/counter-settings', (route) => json(route, settings));
@@ -254,13 +301,24 @@ async function orderDesk(page: Page, settings: { cashSessionsEnabled: boolean })
   await page.route('**/api/v1/pos/drafts', (route) =>
     json(route, { id: '20', status: 'DRAFT', total: '300.00' }, 201),
   );
-  await page.route('**/api/v1/pos/drafts/20/reserve', (route) =>
-    json(
+  await page.route('**/api/v1/pos/drafts/20/reserve', (route) => {
+    // Match Fastify's parser: declaring JSON on an empty POST rejects the reservation.
+    if (
+      route.request().headers()['content-type']?.includes('application/json') &&
+      !route.request().postData()
+    ) {
+      return json(
+        route,
+        { message: 'Body cannot be empty when content-type is set to application/json' },
+        400,
+      );
+    }
+    return json(
       route,
       { id: '20', reservedUntil: '2099-01-01T00:00:00.000Z', status: 'RESERVED', total: '300.00' },
       201,
-    ),
-  );
+    );
+  });
   await page.goto('/#/pos');
   const search = page.getByPlaceholder('Brand, generic, barcode or company');
   await search.fill('Panadol');

@@ -104,6 +104,23 @@ describe('API request validation boundary', () => {
     expect(identifier.statusCode).toBe(400);
   });
 
+  it('accepts bodyless reservation requests without declaring a JSON body', async () => {
+    const response = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      url: '/api/v1/pos/drafts/9223372036854775807/reserve',
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ message: 'Draft not found' });
+    const invalid = await api.app.inject({
+      headers: { ...AUTHORIZATION, 'content-type': 'application/json' },
+      method: 'POST',
+      url: '/api/v1/pos/drafts/9223372036854775807/reserve',
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json<{ message: string }>().message).toContain('Body cannot be empty');
+  });
+
   it('rejects prototype-pollution keys at the global pipe', async () => {
     const response = await api.app.inject({
       headers: { 'content-type': 'application/json' },

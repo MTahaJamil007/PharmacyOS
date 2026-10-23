@@ -143,9 +143,13 @@ async function request<T>(
 ): Promise<T> {
   let response: Response;
   try {
+    const headers = new Headers(init.headers);
+    if (init.body !== undefined && init.body !== null && !headers.has('content-type')) {
+      headers.set('content-type', 'application/json');
+    }
     response = await fetch(`${API_URL}${path}`, {
       ...init,
-      headers: { 'content-type': 'application/json', ...init.headers },
+      headers,
     });
   } catch {
     throw new ApiError(
@@ -376,10 +380,11 @@ export function approveCashVariance(
   token: string,
   sessionId: string,
   notes: string,
+  clientRequestId = createClientRequestId(),
 ): Promise<CashSessionSummary> {
   return authenticatedRequest(token, `/cash-sessions/${sessionId}/approve-variance`, {
     method: 'POST',
-    body: JSON.stringify({ notes, clientRequestId: createClientRequestId() }),
+    body: JSON.stringify({ notes, clientRequestId }),
   });
 }
 

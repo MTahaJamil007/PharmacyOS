@@ -595,3 +595,67 @@ production plan, and the measured computing cost are in `docs/SYSTEM_AUDIT_2026-
   graphics exists for weak PCs but was not timed on one.
 - Alternatives depend on catalogue text (generic, strength, form); `generic_id` is empty for all
   local medicines, so the rule is deliberately strict and may miss true alternatives.
+
+## 12. Counter regression repairs — 2026-10-23
+
+This repairs existing Phase 6 workflows; it does not open another roadmap phase or certify the
+outstanding physical and pilot exit gates.
+
+### Findings and changes
+
+- The web request helper declared `application/json` even for bodyless POSTs. Fastify rejects
+  those before the reservation controller runs. JSON content type is now added only when a body
+  is present; authorization headers are preserved. The integration regression demonstrates both
+  the old parser rejection and the corrected request reaching the domain service. The order-desk
+  browser fixture also enforces this parser rule so routing tests cannot conceal the defect.
+- The old hold implementation stored only one ticket and rendered it only when the active cart
+  was empty. There are now three separately identified, persistent hold slots, visible during
+  subsequent sales. Operators can reopen a selected bill or delete it with confirmation. A full
+  hold list refuses a fourth bill without changing the active bill. New-sale/clear and checkout
+  retain the hold list. Existing single held tickets migrate on load without an expiry cutoff.
+  Quantities, dosage, discounts and the attached customer are retained in the held snapshot;
+  supervisor credentials are cleared when switching tickets.
+- Storage writes precede state changes. A failed hold/reopen/delete reports an error and keeps
+  the prior ticket data. Reopening refuses to overwrite an active or processing/reserved bill.
+  Prices and stock availability are revalidated by the existing server checkout path.
+- A cashier still cannot approve their own drawer variance. The cash screen now explains the
+  requirement for another authorized manager and disables self-approval. Approval retries reuse
+  the same request ID while this screen remains mounted. The browser regression covers a dropped
+  connection followed by a successful retry with the same ID. Pending-variance query errors are
+  also displayed.
+
+### Execution evidence
+
+- Runtime: `node --version` → `v24.21.0`; `npm --version` → `11.19.0` (exit 0).
+- Local readiness probe of `http://127.0.0.1:3001/api/v1/health/ready` returned HTTP 200 with
+  `status=ready`, `database=connected`; web port 5173 returned HTTP 200. CORS OPTIONS probes for
+  both configured development origins (`localhost:5173`, `127.0.0.1:5173`) returned 204 with the
+  corresponding allowed origin for GET and POST (exit 0).
+- Initial sandboxed web tests exited 1 before executing tests because Vitest cache renames were
+  denied with EPERM. The same web command outside the sandbox exited 0: 16 files, 75 tests.
+- Intermediate `npm run verify` attempts exited 1 on lint errors in newly added tests; these
+  were corrected without weakening gates. The first focused browser run exited 1 (14 passed,
+  one keyboard regression caused by moving focus into search after holding). Removing that
+  focus change restored Delete behavior; the focused keyboard rerun exited 0 (one passed).
+
+| Command                                                     | Exit | Result                                                                                                                         |
+| ----------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run verify` (outside sandbox)                          | 0    | Format, lint, typecheck, 226 unit tests, 83 integration tests in 16 files, 35 browser workflows, and production builds passed. |
+| `npx eslint apps/web/src/PosWorkspace.tsx --max-warnings 0` | 0    | Rechecked final ticket-switching and keyboard edits made during regression testing.                                            |
+| `git diff --check`                                          | 0    | No whitespace errors.                                                                                                          |
+
+### Limits and follow-up
+
+- Held bills remain in this browser's local storage with no automatic expiry, including across
+  reloads and browser restarts. They are not server backups or cross-device records. Clearing
+  browser/site data, changing browser profiles/origins, or losing the device loses these drafts.
+  Held bills do not reserve stock indefinitely; stock is reserved at checkout.
+- The reported service-unreachable incident did not recur during the live readiness/CORS probes.
+  Its original cause is not established. Connectivity recovery is covered by the approval browser
+  test, but that does not prove an unavailable API process or a LAN fault has been repaired.
+- Browser workflows use controlled HTTP fixtures; database integration tests use isolated,
+  migrated PostgreSQL in Docker. No live customer sale, cash count or approval was changed.
+- The full browser run logged two undefined-query warnings for fixture responses (`cash-counters`
+  and `suppliers`) in the existing stock/features specs; all assertions passed. Follow up by
+  completing those unrelated fixtures rather than treating the run as browser-console-clean.
+- Physical printer/drawer, second LAN terminal, power-loss and pilot gates remain unchanged.

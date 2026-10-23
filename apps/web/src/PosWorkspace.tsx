@@ -33,7 +33,7 @@ import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { useI18n } from './i18n';
 import { formatPkrMoney } from './money';
 import { previewMedicines } from './preview-data';
-import { usePharmacyStore } from './store';
+import { MAX_HELD_CARTS, usePharmacyStore } from './store';
 import {
   cartSignature,
   clearCheckoutAttempt,
@@ -91,7 +91,9 @@ export function PosWorkspace(): React.JSX.Element {
   const session = usePharmacyStore((state) => state.session);
   const cart = usePharmacyStore((state) => state.cart);
   const discounts = usePharmacyStore((state) => state.discounts);
-  const heldCart = usePharmacyStore((state) => state.heldCart);
+  const heldCarts = usePharmacyStore((state) => state.heldCarts);
+  const resumeHeldCart = usePharmacyStore((state) => state.resumeHeldCart);
+  const deleteHeldCart = usePharmacyStore((state) => state.deleteHeldCart);
   const addMedicine = usePharmacyStore((state) => state.addMedicine);
   const changeQuantity = usePharmacyStore((state) => state.changeQuantity);
   const setQuantity = usePharmacyStore((state) => state.setQuantity);
@@ -319,24 +321,90 @@ export function PosWorkspace(): React.JSX.Element {
     entry.current?.focusSearch();
   }, [abandonDraft, attempt, budget, clearCart, lockedCart, session]);
 
+  const restoreHeldCart = useCallback(
+    (id: string): void => {
+      if (lockedCart || checkoutPending) return;
+      const held = heldCarts.find((ticket) => ticket.id === id);
+      try {
+        if (!held || !resumeHeldCart(id)) {
+          setCounterNotice('Hold or clear the current bill before reopening a held bill');
+          return;
+        }
+        if (attempt?.draftId) abandonDraft(attempt.draftId);
+        if (session) clearCheckoutAttempt(session.user.terminalId);
+        setAttempt(null);
+        setSelectedCustomer(held.customer ?? null);
+        setSelectedMedicineId(held.lines.at(-1)?.medicine.id ?? null);
+        setCustomerQuery('');
+        budget.clear();
+        setTickedIds(new Set());
+        setApproval(NO_APPROVAL);
+        setApprovalRequired(false);
+        setCheckoutError('');
+        setCounterNotice('Held cart resumed');
+      } catch {
+        setCheckoutError(
+          'Could not save the counter. Free browser storage and try again; the held bill has been kept.',
+        );
+      }
+    },
+    [
+      abandonDraft,
+      attempt,
+      budget,
+      checkoutPending,
+      heldCarts,
+      lockedCart,
+      resumeHeldCart,
+      session,
+    ],
+  );
+
   const toggleHeldCart = useCallback((): void => {
-    if (lockedCart) {
-      setCounterNotice('A reserved sale cannot be held');
+    if (lockedCart || checkoutPending) {
+      setCounterNotice('A reserved or processing sale cannot be held');
       return;
     }
-    if (attempt?.draftId) abandonDraft(attempt.draftId);
-    if (session) clearCheckoutAttempt(session.user.terminalId);
-    setAttempt(null);
-    const outcome = holdOrResumeCart();
-    if (outcome !== 'UNCHANGED') setTickedIds(new Set());
-    setCounterNotice(
-      outcome === 'HELD'
-        ? 'Cart held on this terminal'
-        : outcome === 'RESUMED'
-          ? 'Held cart resumed'
-          : 'Finish or clear the current cart first',
-    );
-  }, [abandonDraft, attempt, holdOrResumeCart, lockedCart, session]);
+    if (cart.length === 0) {
+      const first = heldCarts[0];
+      if (first) restoreHeldCart(first.id);
+      return;
+    }
+    try {
+      const outcome = holdOrResumeCart(selectedCustomer ?? undefined);
+      if (outcome === 'FULL') {
+        setCounterNotice('All 3 hold slots are full. Reopen or delete a held bill first.');
+        return;
+      }
+      if (attempt?.draftId) abandonDraft(attempt.draftId);
+      if (session) clearCheckoutAttempt(session.user.terminalId);
+      setAttempt(null);
+      setSelectedCustomer(null);
+      setCustomerQuery('');
+      budget.clear();
+      setTickedIds(new Set());
+      setApproval(NO_APPROVAL);
+      setApprovalRequired(false);
+      setCheckoutError('');
+      setCounterNotice('Cart held on this terminal');
+    } catch {
+      setCheckoutError(
+        'Could not save this bill. Free browser storage and try again; the current bill has been kept.',
+      );
+    }
+  }, [
+    abandonDraft,
+    attempt,
+    budget,
+    cart.length,
+    checkoutPending,
+    heldCarts,
+    holdOrResumeCart,
+    lockedCart,
+    restoreHeldCart,
+    selectedCustomer,
+    session,
+  ]);
 
   const releaseReservation = useCallback(async (): Promise<void> => {
     if (!session || !attempt?.draftId || attempt.finalizedSaleId || checkoutPending) return;
@@ -754,23 +822,53 @@ export function PosWorkspace(): React.JSX.Element {
             budgetPreview={budget.preview}
             actions={gridActions}
           />
-          {heldCart && cart.length === 0 ? (
-            <div className="held-card">
-              <div>
-                <p className="eyebrow">Held ticket</p>
-                <strong>
-                  {heldCart.lines.length} line{heldCart.lines.length === 1 ? '' : 's'} ·{' '}
-                  {heldCart.lines
-                    .slice(0, 3)
-                    .map((line) => line.medicine.name)
-                    .join(', ')}
-                  {heldCart.lines.length > 3 ? '…' : ''}
-                </strong>
-              </div>
-              <button type="button" className="secondary-button" onClick={toggleHeldCart}>
-                Resume <kbd>F4</kbd>
-              </button>
-            </div>
+          {heldCarts.length > 0 ? (
+            <section className="held-bills" aria-label="Held bills">
+              <p className="eyebrow">
+                Held bills {heldCarts.length}/{MAX_HELD_CARTS}
+              </p>
+              <small>
+                Saved on this browser until reopened or deleted. Stock and prices are checked at
+                checkout.
+              </small>
+              {heldCarts.map((held, index) => (
+                <div className="held-card" key={held.id}>
+                  <div>
+                    <strong>
+                      Held bill {index + 1} ·{' '}
+                      {held.lines.map((line) => line.medicine.name).join(', ')}
+                    </strong>
+                    <small>
+                      {held.lines.length} lines · {new Date(held.heldAt).toLocaleString()}
+                      {held.customer ? ` · ${held.customer.name}` : ''}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={lockedCart || checkoutPending}
+                    onClick={() => restoreHeldCart(held.id)}
+                  >
+                    Reopen bill {index + 1}
+                  </button>
+                  <button
+                    type="button"
+                    className="link-button danger"
+                    onClick={() => {
+                      if (!window.confirm(`Delete held bill ${index + 1}? This cannot be undone.`))
+                        return;
+                      try {
+                        deleteHeldCart(held.id);
+                      } catch {
+                        setCheckoutError('Could not delete the held bill. Try again.');
+                      }
+                    }}
+                  >
+                    Delete bill {index + 1}
+                  </button>
+                </div>
+              ))}
+            </section>
           ) : null}
           <footer className="shortcut-rail">
             <span>
@@ -783,7 +881,8 @@ export function PosWorkspace(): React.JSX.Element {
               <kbd>F3</kbd> Budget
             </span>
             <span>
-              <kbd>F4</kbd> {t('pos.holdCart')} {heldCart ? '•' : ''}
+              <kbd>F4</kbd> {t('pos.holdCart')}{' '}
+              {heldCarts.length > 0 ? `(${heldCarts.length})` : ''}
             </span>
             <span>
               <kbd>F6</kbd> {t('pos.reprint')}
@@ -958,10 +1057,12 @@ export function PosWorkspace(): React.JSX.Element {
               <button
                 type="button"
                 className="secondary-button"
-                disabled={lockedCart || (cart.length === 0 && !heldCart)}
+                disabled={
+                  lockedCart || checkoutPending || (cart.length === 0 && heldCarts.length === 0)
+                }
                 onClick={toggleHeldCart}
               >
-                {cart.length === 0 && heldCart ? 'Resume held' : 'Hold'} <kbd>F4</kbd>
+                {cart.length === 0 && heldCarts.length > 0 ? 'Resume held' : 'Hold'} <kbd>F4</kbd>
               </button>
               {lockedCart && !attempt?.finalizedSaleId ? (
                 <button

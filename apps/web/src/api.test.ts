@@ -1,6 +1,40 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { describeApiError } from './api';
+import {
+  describeApiError,
+  getCurrentCashSession,
+  reserveSaleDraft,
+  sendToCashCounter,
+  approveCashVariance,
+} from './api';
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('HTTP request bodies', () => {
+  it('omits the JSON content type for a bodyless reservation and GET', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    await reserveSaleDraft('token', '20');
+    await getCurrentCashSession('token');
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(new Headers(init.headers).get('content-type')).toBeNull();
+      expect(new Headers(init.headers).get('authorization')).toBe('Bearer token');
+      expect(init.body).toBeUndefined();
+    }
+  });
+
+  it('sends JSON and authentication for routing and variance approval', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    await sendToCashCounter('token', '20');
+    await approveCashVariance('token', '10', 'Count reviewed by manager');
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+      expect(new Headers(init.headers).get('authorization')).toBe('Bearer token');
+      expect(typeof init.body).toBe('string');
+    }
+  });
+});
 
 describe('describeApiError', () => {
   it('reports the field rules a validated endpoint rejected', () => {

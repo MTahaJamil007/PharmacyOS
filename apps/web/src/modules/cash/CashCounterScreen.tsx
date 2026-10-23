@@ -319,6 +319,17 @@ export function CashCounterScreen(): React.JSX.Element {
         </p>
       ) : null}
       {current.error ? <p className="inline-error">{current.error.message}</p> : null}
+      {pending.error ? (
+        <p className="inline-error" role="alert">
+          {pending.error.message}
+        </p>
+      ) : null}
+      {current.data?.status === 'CLOSING' ? (
+        <p className="counter-notice" role="status">
+          This day is waiting for variance approval. Another authorized manager must review and
+          approve the difference before you can start a new day.
+        </p>
+      ) : null}
 
       {sessionsOff ? (
         <section className="work-panel cash-explainer">
@@ -631,6 +642,9 @@ export function CashCounterScreen(): React.JSX.Element {
                     {formatPkrMoney(item.countedCash)}
                   </small>
                   <p>Difference: {formatPkrMoney(item.variance)}</p>
+                  {item.cashierUserId === session?.user.id ? (
+                    <small>Another authorized manager must approve your drawer difference.</small>
+                  ) : null}
                 </div>
                 <label>
                   Approval note
@@ -644,13 +658,28 @@ export function CashCounterScreen(): React.JSX.Element {
                 <button
                   type="button"
                   className="primary-button"
-                  disabled={working || (approvalNotes[item.id] ?? '').trim().length < 3}
-                  onClick={() =>
-                    void act(
-                      () => approveCashVariance(token, item.id, approvalNotes[item.id] ?? ''),
-                      'Difference approved',
-                    )
+                  disabled={
+                    working ||
+                    item.cashierUserId === session?.user.id ||
+                    (approvalNotes[item.id] ?? '').trim().length < 3
                   }
+                  onClick={() => {
+                    const key = `variance:${item.id}`;
+                    const requestId = requestIds.current.get(key) ?? createClientRequestId();
+                    requestIds.current.set(key, requestId);
+                    void act(
+                      () =>
+                        approveCashVariance(
+                          token,
+                          item.id,
+                          approvalNotes[item.id] ?? '',
+                          requestId,
+                        ),
+                      'Difference approved',
+                    ).then((ok) => {
+                      if (ok) requestIds.current.delete(key);
+                    });
+                  }}
                 >
                   Approve
                 </button>

@@ -3486,6 +3486,23 @@ kbd {
 .counter-main .held-card {
   margin-top: 8px;
 }
+.held-bills {
+  max-height: 32vh;
+  padding: 8px 0;
+  overflow: auto;
+}
+.held-bills .held-card {
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+.held-bills .held-card > div {
+  min-width: 0;
+  flex: 1 1 220px;
+  overflow-wrap: anywhere;
+}
+.held-bills button {
+  flex-shrink: 0;
+}
 
 .cart-pane .side-scroll {
   display: grid;
