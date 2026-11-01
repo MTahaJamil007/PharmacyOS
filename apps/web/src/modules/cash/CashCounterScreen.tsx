@@ -28,6 +28,7 @@ import {
 import { formatPkrMoney } from '../../money';
 import { usePharmacyStore } from '../../store';
 import { ReceiptDialog } from '../pos/ReceiptDialog';
+import { DISCOUNT_REASONS, parseDiscountSpec, resolveDiscountMinor } from '../pos/discount';
 
 const MONEY = /^\d{1,10}(?:\.\d{1,2})?$/;
 
@@ -60,6 +61,7 @@ function OrderCard({
   onClaim,
   canDiscount,
   requiresManagerApproval,
+  reasonRequired,
   onDiscount,
 }: {
   readonly order: CashCounterOrder;
@@ -69,8 +71,10 @@ function OrderCard({
   readonly onClaim: () => void;
   readonly canDiscount: boolean;
   readonly requiresManagerApproval: boolean;
+  readonly reasonRequired: boolean;
   readonly onDiscount: (input: {
     amount: string;
+    mode: 'PERCENT' | 'AMOUNT';
     reason: string;
     username: string;
     password: string;
@@ -80,10 +84,19 @@ function OrderCard({
   const [received, setReceived] = useState('');
   const [discountOpen, setDiscountOpen] = useState(false);
   const [discount, setDiscount] = useState('');
-  const [discountReason, setDiscountReason] = useState('');
+  const [discountMode, setDiscountMode] = useState<'PERCENT' | 'AMOUNT'>('PERCENT');
+  const [reasonChoice, setReasonChoice] = useState<string>(DISCOUNT_REASONS[0]);
+  const [customReason, setCustomReason] = useState('');
   const [approverUsername, setApproverUsername] = useState('');
   const [approverPassword, setApproverPassword] = useState('');
   const change = changeFor(received, order.total);
+  const parsedDiscount = parseDiscountSpec(discountMode, discount);
+  const discountBase =
+    moneyToMinorUnits(order.total) + moneyToMinorUnits(order.invoiceDiscount || '0.00');
+  const discountMinor = parsedDiscount.spec
+    ? resolveDiscountMinor(parsedDiscount.spec, discountBase)
+    : 0n;
+  const discountReason = reasonChoice === 'Other' ? customReason.trim() : reasonChoice;
   const short = received.trim() !== '' && MONEY.test(received.trim()) && change === null;
   const clear = (): void => onClear(received.trim() && change !== null ? received.trim() : null);
   return (
@@ -139,22 +152,50 @@ function OrderCard({
           ) : (
             <div className="movement-form">
               <label>
-                Invoice discount total (PKR)
+                Invoice discount
+                <select
+                  aria-label="Cashier discount type"
+                  value={discountMode}
+                  onChange={(event) => setDiscountMode(event.target.value as 'PERCENT' | 'AMOUNT')}
+                >
+                  <option value="PERCENT">Percentage (default)</option>
+                  <option value="AMOUNT">Fixed PKR amount</option>
+                </select>
                 <input
+                  aria-label="Invoice discount value"
                   inputMode="decimal"
                   value={discount}
                   onChange={(event) => setDiscount(event.target.value)}
-                  placeholder="0.00"
+                  placeholder={discountMode === 'PERCENT' ? 'e.g. 10' : 'e.g. 50.00'}
                 />
               </label>
-              <label>
-                Reason
-                <input
-                  value={discountReason}
-                  onChange={(event) => setDiscountReason(event.target.value)}
-                  placeholder="Customer discount approved"
-                />
-              </label>
+              {discountMinor > 0n ? (
+                <small>Invoice discount: {formatPkrMoney(minorUnitsToMoney(discountMinor))}</small>
+              ) : null}
+              {reasonRequired ? (
+                <label>
+                  Discount reason
+                  <select
+                    aria-label="Cashier discount reason"
+                    value={reasonChoice}
+                    onChange={(event) => setReasonChoice(event.target.value)}
+                  >
+                    {[...DISCOUNT_REASONS, 'Other'].map((reason) => (
+                      <option key={reason} value={reason}>
+                        {reason}
+                      </option>
+                    ))}
+                  </select>
+                  {reasonChoice === 'Other' ? (
+                    <input
+                      value={customReason}
+                      onChange={(event) => setCustomReason(event.target.value)}
+                      placeholder="Enter a custom reason"
+                      maxLength={500}
+                    />
+                  ) : null}
+                </label>
+              ) : null}
               {requiresManagerApproval ? (
                 <>
                   <label>
@@ -183,15 +224,16 @@ function OrderCard({
                   className="primary-button"
                   disabled={
                     busy ||
-                    !MONEY.test(discount.trim()) ||
-                    discountReason.trim().length < 3 ||
+                    !parsedDiscount.spec ||
+                    (reasonRequired && discountReason.length < 3) ||
                     (requiresManagerApproval &&
                       (!approverUsername.trim() || approverPassword.length < 8))
                   }
                   onClick={() =>
                     onDiscount({
                       amount: discount.trim(),
-                      reason: discountReason.trim(),
+                      mode: discountMode,
+                      reason: reasonRequired ? discountReason : '',
                       username: approverUsername.trim(),
                       password: approverPassword,
                     })
@@ -372,7 +414,13 @@ export function CashCounterScreen(): React.JSX.Element {
 
   const discountOrder = async (
     order: CashCounterOrder,
-    input: { amount: string; reason: string; username: string; password: string },
+    input: {
+      amount: string;
+      mode: 'PERCENT' | 'AMOUNT';
+      reason: string;
+      username: string;
+      password: string;
+    },
   ): Promise<void> => {
     const requestId = discountRequestIds.current.get(order.id) ?? createClientRequestId();
     discountRequestIds.current.set(order.id, requestId);
@@ -385,6 +433,7 @@ export function CashCounterScreen(): React.JSX.Element {
           .filter((item) => item.discountAmount !== '0.00')
           .map((item) => ({ medicineId: item.medicineId, amount: item.discountAmount })),
         invoiceDiscount: input.amount,
+        invoiceDiscountMode: input.mode,
         reason: input.reason,
         clientRequestId: requestId,
         ...(input.username && input.password
@@ -590,6 +639,7 @@ export function CashCounterScreen(): React.JSX.Element {
                   onClaim={() => claim(order)}
                   canDiscount={canOfferDiscount}
                   requiresManagerApproval={requiresManagerApproval}
+                  reasonRequired={settings.data?.discountReasonRequired ?? true}
                   onDiscount={(input) => void discountOrder(order, input)}
                   onCancel={() =>
                     void act(

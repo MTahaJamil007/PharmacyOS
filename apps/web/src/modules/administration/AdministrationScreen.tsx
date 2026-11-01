@@ -34,6 +34,7 @@ interface OperationalPolicies {
   readonly cashVarianceApprovalThreshold: string;
   readonly orderTakerDiscountEnabled: boolean;
   readonly cashierDiscountEnabled: boolean;
+  readonly discountReasonRequired: boolean;
   readonly allowInvoiceLessReturns: boolean;
 }
 
@@ -169,6 +170,9 @@ export function AdministrationScreen(): React.JSX.Element {
         ...(form.cashierDiscountEnabled === undefined
           ? {}
           : { cashierDiscountEnabled: form.cashierDiscountEnabled === 'true' }),
+        ...(form.discountReasonRequired === undefined
+          ? {}
+          : { discountReasonRequired: form.discountReasonRequired === 'true' }),
         ...(form.allowInvoiceLessReturns === undefined
           ? {}
           : { allowInvoiceLessReturns: form.allowInvoiceLessReturns === 'true' }),
@@ -396,6 +400,23 @@ export function AdministrationScreen(): React.JSX.Element {
                       }
                     />
                     Allow cashiers to apply discounts within the limit above
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={
+                        form.discountReasonRequired === 'true' ||
+                        (form.discountReasonRequired === undefined &&
+                          policies.data?.discountReasonRequired !== false)
+                      }
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          discountReasonRequired: String(event.target.checked),
+                        }))
+                      }
+                    />
+                    Require a reason when a discount is applied at either counter
                   </label>
                   <label className="check-row">
                     <input

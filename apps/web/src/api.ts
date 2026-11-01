@@ -433,6 +433,7 @@ export interface CounterSettings {
   readonly cashSessionsEnabled: boolean;
   readonly orderTakerDiscountEnabled?: boolean;
   readonly cashierDiscountEnabled?: boolean;
+  readonly discountReasonRequired?: boolean;
 }
 
 export function getCounterSettings(token: string): Promise<CounterSettings> {
@@ -586,6 +587,7 @@ export function applySaleDiscount(
   input: {
     readonly lineDiscounts: ReadonlyArray<{ readonly medicineId: string; readonly amount: string }>;
     readonly invoiceDiscount: string;
+    readonly invoiceDiscountMode?: 'PERCENT' | 'AMOUNT';
     readonly reason: string;
     readonly clientRequestId: string;
     readonly approverUsername?: string;

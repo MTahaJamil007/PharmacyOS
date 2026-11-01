@@ -444,10 +444,24 @@ export class PosService {
         moneyToMinorUnits(grossAmount) -
           lineDiscounts.reduce((total, amount) => total + moneyToMinorUnits(amount), 0n),
       );
-      if (moneyToMinorUnits(input.invoiceDiscount) > moneyToMinorUnits(discountedSubtotal)) {
+      const subtotalMinor = moneyToMinorUnits(discountedSubtotal);
+      const enteredInvoiceDiscountMinor = moneyToMinorUnits(input.invoiceDiscount);
+      const invoiceDiscount =
+        input.invoiceDiscountMode === 'PERCENT'
+          ? minorUnitsToMoney((subtotalMinor * enteredInvoiceDiscountMinor + 5_000n) / 10_000n)
+          : input.invoiceDiscount;
+      if (moneyToMinorUnits(invoiceDiscount) > subtotalMinor) {
         throw new ConflictException('Invoice discount exceeds discounted subtotal');
       }
-      const totalDiscount = sumMoney([...lineDiscounts, input.invoiceDiscount]);
+      const reason = input.reason.trim();
+      const [reasonPolicy] = await transaction<Array<{ required: boolean }>>`
+        select discount_reason_required as required
+        from operational_intelligence_policies where branch_id = ${user.branchId}
+      `;
+      if (reasonPolicy?.required !== false && reason.length < 3) {
+        throw new ConflictException('Choose a discount reason before applying the discount');
+      }
+      const totalDiscount = sumMoney([...lineDiscounts, invoiceDiscount]);
       const grossMinor = moneyToMinorUnits(grossAmount);
       const discountMinor = moneyToMinorUnits(totalDiscount);
       if (discountMinor >= grossMinor) {
@@ -500,12 +514,12 @@ export class PosService {
         ) values (
           ${user.branchId}, ${draft.id}, ${user.id}, ${approverId},
           ${needsOverride ? 'OVERRIDE' : 'BASIC'}, ${grossAmount}, ${totalDiscount},
-          ${discountPercent}, ${input.reason}, ${input.clientRequestId}
+          ${discountPercent}, ${reason}, ${input.clientRequestId}
         ) returning id::text
       `;
       if (!approval) throw new Error('Discount approval did not return an identifier');
       const total = minorUnitsToMoney(
-        moneyToMinorUnits(discountedSubtotal) - moneyToMinorUnits(input.invoiceDiscount),
+        moneyToMinorUnits(discountedSubtotal) - moneyToMinorUnits(invoiceDiscount),
       );
       await transaction`
         update stock_reservations set status = 'RELEASED', released_at = now()
@@ -515,7 +529,7 @@ export class PosService {
       `;
       await transaction`
         update sale_drafts set status = 'DRAFT', subtotal = ${discountedSubtotal},
-          discount_total = ${input.invoiceDiscount}, total = ${total},
+          discount_total = ${invoiceDiscount}, total = ${total},
           discount_approval_id = ${approval.id}, reserved_until = null
         where id = ${draft.id}
       `;
@@ -526,14 +540,14 @@ export class PosService {
         ) values (
           ${user.branchId}, ${user.id}, ${user.terminalId}, 'SALE.DISCOUNT_APPROVED',
           'discount_approval', ${approval.id}, ${input.clientRequestId},
-          ${transaction.json({ draftId: draft.id, approverId, approvalLevel: needsOverride ? 'OVERRIDE' : 'BASIC', grossAmount, totalDiscount, discountPercent, reason: input.reason })}
+          ${transaction.json({ draftId: draft.id, approverId, approvalLevel: needsOverride ? 'OVERRIDE' : 'BASIC', grossAmount, totalDiscount, discountPercent, reason })}
         )
       `;
       return {
         approvalId: approval.id,
         approvalLevel: needsOverride ? 'OVERRIDE' : 'BASIC',
         subtotal: discountedSubtotal,
-        invoiceDiscount: input.invoiceDiscount,
+        invoiceDiscount,
         total,
         idempotentReplay: false,
       };

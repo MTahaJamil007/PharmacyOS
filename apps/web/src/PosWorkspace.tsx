@@ -208,7 +208,10 @@ export function PosWorkspace(): React.JSX.Element {
       permissions.includes(PERMISSIONS.CUSTOMER_READ),
   });
 
-  const plan = useMemo(() => buildDiscountPlan(cart, discounts), [cart, discounts]);
+  const plan = useMemo(
+    () => buildDiscountPlan(cart, discounts, counterSettings.data?.discountReasonRequired ?? true),
+    [cart, discounts, counterSettings.data?.discountReasonRequired],
+  );
   const lineAmounts = useMemo(
     () => new Map(plan.lines.map((line) => [line.medicineId, line])),
     [plan.lines],
@@ -1029,6 +1032,7 @@ export function PosWorkspace(): React.JSX.Element {
                 inputRef={discountInput}
                 approval={approval}
                 approvalRequired={approvalRequired}
+                reasonRequired={counterSettings.data?.discountReasonRequired ?? true}
                 onApprovalChange={setApproval}
                 onChange={(next) => {
                   setDiscounts(next);

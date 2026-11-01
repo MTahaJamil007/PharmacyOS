@@ -38,10 +38,11 @@ export class CashCounterService {
         cash_sessions_enabled: boolean;
         order_taker_discount_enabled: boolean;
         cashier_discount_enabled: boolean;
+        discount_reason_required: boolean;
       }>
     >`
       select branches.cash_sessions_enabled, policies.order_taker_discount_enabled,
-        policies.cashier_discount_enabled
+        policies.cashier_discount_enabled, policies.discount_reason_required
       from branches left join operational_intelligence_policies policies
         on policies.branch_id = branches.id where branches.id = ${user.branchId}
     `;
@@ -49,6 +50,7 @@ export class CashCounterService {
       cashSessionsEnabled: branch?.cash_sessions_enabled ?? true,
       orderTakerDiscountEnabled: branch?.order_taker_discount_enabled ?? false,
       cashierDiscountEnabled: branch?.cashier_discount_enabled ?? false,
+      discountReasonRequired: branch?.discount_reason_required ?? true,
     };
   }
 

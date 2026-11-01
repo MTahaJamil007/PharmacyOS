@@ -102,6 +102,7 @@ export interface DiscountPlan {
 export function buildDiscountPlan(
   cart: readonly CartLine[],
   discounts: CartDiscounts,
+  reasonRequired = true,
 ): DiscountPlan {
   const errors: string[] = [];
   let grossMinor = 0n;
@@ -136,7 +137,7 @@ export function buildDiscountPlan(
   if (hasDiscount && discountMinor >= grossMinor) {
     errors.push('Discount must leave something to pay');
   }
-  if (hasDiscount && discounts.reason.trim().length < 3) {
+  if (hasDiscount && reasonRequired && discounts.reason.trim().length < 3) {
     errors.push('Choose or type a discount reason');
   }
   const percentHundredths =

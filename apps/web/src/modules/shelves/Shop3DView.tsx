@@ -158,6 +158,7 @@ export function Shop3DView(props: Props): React.JSX.Element {
   const container = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 900, height: 560 });
   const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
+  const [dragMode, setDragMode] = useState<'orbit' | 'pan'>('orbit');
   const [animated, setAnimated] = useState(true);
   const [simple, setSimple] = useState(() => {
     try {
@@ -257,7 +258,7 @@ export function Shop3DView(props: Props): React.JSX.Element {
       return;
     }
     gesture.current = {
-      kind: button === 2 || button === 1 || shiftKey ? 'pan' : 'orbit',
+      kind: button === 2 || button === 1 || shiftKey || dragMode === 'pan' ? 'pan' : 'orbit',
       camera: cameraRef.current,
       x: first.x,
       y: first.y,
@@ -473,10 +474,18 @@ export function Shop3DView(props: Props): React.JSX.Element {
           })}
         </div>
         <p className="shop3d-hint" aria-hidden="true">
-          Drag: turn · Right-drag: move · Wheel: zoom · Double-click a rack: look at it
+          Drag: {dragMode === 'orbit' ? 'turn' : 'move'} · Right-drag: move · Wheel: zoom ·
+          Double-click a rack: look at it
         </p>
       </div>
       <div className="shop3d-controls" aria-label="Camera">
+        <button
+          type="button"
+          aria-pressed={dragMode === 'pan'}
+          onClick={() => setDragMode((current) => (current === 'orbit' ? 'pan' : 'orbit'))}
+        >
+          {dragMode === 'orbit' ? 'Drag to turn' : 'Drag to move'}
+        </button>
         <button
           type="button"
           onClick={() => nudge({ spin: camera.spin + 45 })}
@@ -505,6 +514,45 @@ export function Shop3DView(props: Props): React.JSX.Element {
         >
           −
         </button>
+        <button
+          type="button"
+          onClick={() => nudge({ panY: camera.panY - 40 })}
+          aria-label="Move view up"
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          onClick={() => nudge({ panX: camera.panX - 40 })}
+          aria-label="Move view left"
+        >
+          ←
+        </button>
+        <button
+          type="button"
+          onClick={() => nudge({ panY: camera.panY + 40 })}
+          aria-label="Move view down"
+        >
+          ↓
+        </button>
+        <button
+          type="button"
+          onClick={() => nudge({ panX: camera.panX + 40 })}
+          aria-label="Move view right"
+        >
+          →
+        </button>
+        <label className="shop3d-slider">
+          Tilt
+          <input
+            aria-label="Camera tilt"
+            type="range"
+            min="0"
+            max="85"
+            value={camera.tilt}
+            onChange={(event) => nudge({ tilt: Number(event.target.value) })}
+          />
+        </label>
         {VIEWS.map(([label, change]) => (
           <button key={label} type="button" onClick={() => nudge(change)}>
             {label}

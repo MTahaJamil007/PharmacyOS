@@ -112,6 +112,31 @@ describe('discount plan', () => {
     ).toContain('Choose or type a discount reason');
   });
 
+  it('allows the owner policy to make discount reasons optional', () => {
+    expect(
+      buildDiscountPlan(
+        cart,
+        {
+          lines: {},
+          invoice: { mode: 'PERCENT', value: '10' },
+          reason: '',
+        },
+        false,
+      ).errors,
+    ).toEqual([]);
+    expect(
+      buildDiscountPlan(
+        cart,
+        {
+          lines: {},
+          invoice: { mode: 'PERCENT', value: '10' },
+          reason: '',
+        },
+        true,
+      ).errors,
+    ).toContain('Choose or type a discount reason');
+  });
+
   it('signs only the money that reaches the server', () => {
     const none = buildDiscountPlan(cart, EMPTY_DISCOUNTS);
     expect(none.hasDiscount).toBe(false);

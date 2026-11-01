@@ -701,3 +701,28 @@ that the service evaluates. The database test harness applies migration 021 to i
 databases. Deployments must apply `packages/database/migrations/021_return_search_and_discount_controls.sql`
 before running the updated API. The original service-unreachable screenshot was not reproduced; its
 cause at the time of the screenshot remains undetermined.
+
+## Follow-up — discount mode and reason policy (2026-10-24)
+
+Discounts on the order desk and cash counter now accept percentage and fixed PKR amounts. The
+cashier defaults to percentage; the API calculates the rupee amount using exact minor units and
+returns that monetary amount for the invoice. The owner can turn off the reason requirement for
+both roles; when required, the cashier selects a standard reason or enters a custom “Other” reason.
+Migration 022 relaxes the audit record constraint only enough to store an empty reason when the
+owner disables the requirement. The shop-planning 3D preview now has a turn/move drag toggle, tilt
+slider, and direct pan buttons. The multi-counter station layout, terminal links, and hardware
+benchmarks are documented as a design plan in `docs/MULTI_COUNTER_SHOP_PLAN.md`; workstation
+footprints are not yet stored in the live shelf-plan model.
+
+| Command                                                                                           | Exit | Result                                                                                                                 |
+| ------------------------------------------------------------------------------------------------- | ---: | ---------------------------------------------------------------------------------------------------------------------- |
+| `npm run verify`                                                                                  |    0 | Format, lint, typecheck, 230 unit tests, 83 integration tests, all 38 browser workflows, and production builds passed. |
+| `npx vitest run --config vitest.config.ts tests/integration/phase4-owner-day.integration.test.ts` |    0 | Two PostgreSQL scenarios passed; verifies percent discount arithmetic and the owner-controlled optional-reason policy. |
+| `npm run test:e2e -- --grep "cashier requests manager approval"`                                  |    0 | Cashier percentage, custom reason, manager credentials, and existing line-discount preservation passed.                |
+| `git diff --check`                                                                                |    0 | No whitespace errors.                                                                                                  |
+
+The initial two full browser runs each had one 30-second timeout in a different pre-existing
+workflow before the page control appeared; each failed workflow passed on an isolated rerun. The
+third full `npm run verify` completed successfully. Physical printer/drawer testing and performance
+measurements on the pharmacy's actual PCs remain pilot checks. Deployments must apply migration
+022 after migration 021 before using the new reason policy.

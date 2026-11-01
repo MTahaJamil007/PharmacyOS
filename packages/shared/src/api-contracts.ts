@@ -137,6 +137,7 @@ export interface OperationalPolicies {
   readonly basicDiscountLimitPercent: string;
   readonly orderTakerDiscountEnabled: boolean;
   readonly cashierDiscountEnabled: boolean;
+  readonly discountReasonRequired: boolean;
   readonly allowInvoiceLessReturns: boolean;
   readonly cashVarianceApprovalThreshold: string;
 }

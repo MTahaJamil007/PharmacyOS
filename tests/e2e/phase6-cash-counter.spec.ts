@@ -339,7 +339,11 @@ test('cashier requests manager approval and preserves existing line discounts', 
     'Cash counter',
   );
   await page.route('**/api/v1/pos/counter-settings', (route) =>
-    json(route, { cashSessionsEnabled: true, cashierDiscountEnabled: false }),
+    json(route, {
+      cashSessionsEnabled: true,
+      cashierDiscountEnabled: false,
+      discountReasonRequired: true,
+    }),
   );
   await page.route('**/api/v1/cash-sessions/current', (route) => json(route, summary({})));
   await page.route('**/api/v1/pos/cash-counter/queue', (route) =>
@@ -374,19 +378,21 @@ test('cashier requests manager approval and preserves existing line discounts', 
   let discountBody: Record<string, unknown> | null = null;
   await page.route('**/api/v1/pos/drafts/55/discount', (route) => {
     discountBody = route.request().postDataJSON() as Record<string, unknown>;
-    return json(route, { total: '1250.00', approvalLevel: 'BASIC' }, 201);
+    return json(route, { total: '1170.00', approvalLevel: 'BASIC' }, 201);
   });
   await page.goto('/#/cash');
   await page.getByRole('button', { name: 'Apply discount / manager approval' }).click();
-  await page.getByLabel('Invoice discount total (PKR)').fill('50.00');
-  await page.getByPlaceholder('Customer discount approved').fill('Owner approved at counter');
+  await page.getByLabel('Invoice discount value').fill('10');
+  await page.getByLabel('Cashier discount reason').selectOption('Other');
+  await page.getByPlaceholder('Enter a custom reason').fill('Owner approved at counter');
   await page.getByLabel('Manager username').fill('owner');
   await page.getByLabel('Manager password').fill('owner-password');
   await page.getByRole('button', { name: 'Apply before payment' }).click();
-  await expect(page.getByRole('status')).toContainText('new total PKR 1,250.00');
+  await expect(page.getByRole('status')).toContainText('new total PKR 1,170.00');
   const recorded = discountBody as unknown as Record<string, unknown> | null;
   expect(recorded).toMatchObject({
-    invoiceDiscount: '50.00',
+    invoiceDiscount: '10',
+    invoiceDiscountMode: 'PERCENT',
     lineDiscounts: [{ medicineId: '101', amount: '40.00' }],
     reason: 'Owner approved at counter',
     approverUsername: 'owner',
