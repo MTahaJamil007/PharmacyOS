@@ -129,6 +129,7 @@ export function DiscountBox({
   inputRef,
   approval,
   approvalRequired,
+  reasonRequired,
   onApprovalChange,
   onChange,
 }: {
@@ -138,6 +139,7 @@ export function DiscountBox({
   readonly inputRef: React.Ref<HTMLInputElement>;
   readonly approval: SupervisorApproval;
   readonly approvalRequired: boolean;
+  readonly reasonRequired: boolean;
   readonly onApprovalChange: (approval: SupervisorApproval) => void;
   readonly onChange: (discounts: CartDiscounts) => void;
 }): React.JSX.Element {
@@ -191,33 +193,37 @@ export function DiscountBox({
       {parsed && 'error' in parsed ? <p className="side-error">{parsed.error}</p> : null}
       {plan.hasDiscount ? (
         <>
-          <div className="reason-chips" role="radiogroup" aria-label="Discount reason">
-            {[...DISCOUNT_REASONS, OTHER_REASON].map((option) => {
-              const checked =
-                option === OTHER_REASON ? otherActive : !otherActive && discounts.reason === option;
-              return (
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={checked}
-                  key={option}
-                  disabled={locked}
-                  onClick={() => {
-                    if (option === OTHER_REASON) {
-                      setOtherChosen(true);
-                      if (presetReason) onChange({ ...discounts, reason: '' });
-                    } else {
-                      setOtherChosen(false);
-                      onChange({ ...discounts, reason: option });
-                    }
-                  }}
-                >
-                  {option}
-                </button>
-              );
-            })}
-          </div>
-          {otherActive ? (
+          {reasonRequired ? (
+            <div className="reason-chips" role="radiogroup" aria-label="Discount reason">
+              {[...DISCOUNT_REASONS, OTHER_REASON].map((option) => {
+                const checked =
+                  option === OTHER_REASON
+                    ? otherActive
+                    : !otherActive && discounts.reason === option;
+                return (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={checked}
+                    key={option}
+                    disabled={locked}
+                    onClick={() => {
+                      if (option === OTHER_REASON) {
+                        setOtherChosen(true);
+                        if (presetReason) onChange({ ...discounts, reason: '' });
+                      } else {
+                        setOtherChosen(false);
+                        onChange({ ...discounts, reason: option });
+                      }
+                    }}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {reasonRequired && otherActive ? (
             <input
               className="reason-other"
               aria-label="Other discount reason"

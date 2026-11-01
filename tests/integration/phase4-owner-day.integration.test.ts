@@ -147,12 +147,26 @@ describe('Phase 4 owner-day exit scenario', () => {
     expect(draftResponse.statusCode).toBe(201);
     const draftId = stringField(body(draftResponse), 'id');
 
+    const missingReasonDiscount = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: {
+        clientRequestId: 'phase4-discount-missing-reason',
+        invoiceDiscount: '10',
+        invoiceDiscountMode: 'PERCENT',
+        lineDiscounts: [],
+      },
+      url: `/api/v1/pos/drafts/${draftId}/discount`,
+    });
+    expect(missingReasonDiscount.statusCode).toBe(409);
+
     const discountResponse = await api.app.inject({
       headers: AUTHORIZATION,
       method: 'POST',
       payload: {
         clientRequestId: 'phase4-discount-request',
-        invoiceDiscount: '10.00',
+        invoiceDiscount: '10',
+        invoiceDiscountMode: 'PERCENT',
         lineDiscounts: [],
         reason: 'Owner loyalty discount',
       },
@@ -160,6 +174,34 @@ describe('Phase 4 owner-day exit scenario', () => {
     });
     expect(discountResponse.statusCode).toBe(201);
     expect(body(discountResponse)).toMatchObject({ approvalLevel: 'OVERRIDE', total: '90.00' });
+
+    const optionalReasonDraftResponse = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: { items: [{ medicineId, quantity: '1' }], terminalId },
+      url: '/api/v1/pos/drafts',
+    });
+    expect(optionalReasonDraftResponse.statusCode).toBe(201);
+    const optionalReasonDraftId = stringField(body(optionalReasonDraftResponse), 'id');
+    const policyUpdate = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'PATCH',
+      payload: { discountReasonRequired: false },
+      url: '/api/v1/admin/policies',
+    });
+    expect(policyUpdate.statusCode).toBe(200);
+    const optionalReasonDiscount = await api.app.inject({
+      headers: AUTHORIZATION,
+      method: 'POST',
+      payload: {
+        clientRequestId: 'phase4-discount-no-reason',
+        invoiceDiscount: '5.00',
+        lineDiscounts: [],
+      },
+      url: `/api/v1/pos/drafts/${optionalReasonDraftId}/discount`,
+    });
+    expect(optionalReasonDiscount.statusCode).toBe(201);
+    expect(body(optionalReasonDiscount)).toMatchObject({ total: '95.00' });
 
     const reserveResponse = await api.app.inject({
       headers: AUTHORIZATION,
@@ -319,7 +361,7 @@ describe('Phase 4 owner-day exit scenario', () => {
     expect(evidence).toEqual({
       customer_entries: '3',
       dashboard_rows: '1',
-      discount_approvals: '1',
+      discount_approvals: '2',
       price_changes: '1',
       stock_adjustments: '1',
     });

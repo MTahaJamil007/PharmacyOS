@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createDraftSchema,
+  applySaleDiscountSchema,
   finalizeSaleSchema,
   idSchema,
   moneySchema,
@@ -12,6 +13,26 @@ import {
 } from './schemas.js';
 
 describe('shared request magnitude boundaries', () => {
+  it('accepts cashier percentage and fixed amount discounts with an optional reason', () => {
+    const base = {
+      lineDiscounts: [],
+      invoiceDiscount: '12.5',
+      clientRequestId: 'cashier-discount-req-0001',
+    };
+    expect(
+      applySaleDiscountSchema.safeParse({ ...base, invoiceDiscountMode: 'PERCENT' }).success,
+    ).toBe(true);
+    expect(
+      applySaleDiscountSchema.safeParse({ ...base, invoiceDiscountMode: 'AMOUNT' }).success,
+    ).toBe(true);
+    expect(
+      applySaleDiscountSchema.safeParse({
+        ...base,
+        invoiceDiscount: '100.01',
+        invoiceDiscountMode: 'PERCENT',
+      }).success,
+    ).toBe(false);
+  });
   it('requires valid, ordered shop-date return searches with a usable search term', () => {
     const valid = {
       from: '2026-02-10',
